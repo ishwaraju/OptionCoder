@@ -1,0 +1,392 @@
+(.venv) ishwar@Ishwars-MacBook-Air OptionCoder % python3 main.py
+====================================
+      OPTION TRADING BOT STARTED
+      Time (IST): 12:06:10.667016
+====================================
+Fetching Option Chain...
+ATM Strike: 22950
+CE Security ID: 54496
+PE Security ID: 54497
+Fetching NIFTY Futures Security ID...
+Loaded FUT ID from file
+FUT Security ID: 51701
+Starting WebSocket...
+WebSocket Connected: 12:06:17.175843
+Subscribed INDEX (Ticker) + FUT/CE/PE (Full)
+
+===== LIVE MARKET =====
+Price: 22933.55 | Fut Vol: 0 | Fut OI: 0 | CE OI: 0 | PE OI: 0
+=======================
+
+Event Engine Started...
+Current IST Time: 12:06:20.700444
+
+Bot Running | Time: 12:06:20.700642
+New 1-min Candle: {'datetime': '1900-01-01 12:06:20', 'open': 22935.2, 'high': 22935.2, 'low': 22935.2, 'close': 22935.2, 'volume': 626220}
+
+===== LIVE MARKET =====
+Price: 22934.55 | Fut Vol: 626340 | Fut OI: 1281300 | CE OI: 2478840 | PE OI: 3112070
+=======================
+
+
+Bot Running | Time: 12:06:50.782520
+New 1-min Candle: {'datetime': '1900-01-01 12:07:00', 'open': 22937.85, 'high': 22937.85, 'low': 22937.85, 'close': 22937.85, 'volume': 626370}
+
+===== LIVE MARKET =====
+Price: 22937.05 | Fut Vol: 626820 | Fut OI: 1281300 | CE OI: 2478840 | PE OI: 3112070
+=======================
+
+
+Bot Running | Time: 12:07:20.915360
+
+===== LIVE MARKET =====
+Price: 22935.25 | Fut Vol: 627180 | Fut OI: 1281300 | CE OI: 2478840 | PE OI: 3112070
+=======================
+
+
+Bot Running | Time: 12:07:51.161591
+New 1-min Candle: {'datetime': '1900-01-01 12:08:00', 'open': 22944.75, 'high': 22944.75, 'low': 22944.75, 'close': 22944.75, 'volume': 628140}
+
+===== LIVE MARKET =====
+Price: 22947.5 | Fut Vol: 628620 | Fut OI: 1281420 | CE OI: 2534610 | PE OI: 3245125
+=======================
+
+
+Bot Running | Time: 12:08:21.270975
+
+===== LIVE MARKET =====
+Price: 22947.4 | Fut Vol: 629220 | Fut OI: 1281420 | CE OI: 2534610 | PE OI: 3245125
+=======================
+
+
+Bot Running | Time: 12:08:51.376280
+New 1-min Candle: {'datetime': '1900-01-01 12:09:00', 'open': 22944.15, 'high': 22944.15, 'low': 22944.15, 'close': 22944.15, 'volume': 629520}
+
+===== LIVE MARKET =====
+Price: 22939.85 | Fut Vol: 629940 | Fut OI: 1281420 | CE OI: 2534610 | PE OI: 3245125
+=======================
+
+
+Bot Running | Time: 12:09:21.473230
+
+===== LIVE MARKET =====
+Price: 22939.8 | Fut Vol: 630180 | Fut OI: 1281420 | CE OI: 2534610 | PE OI: 3245125
+=======================
+
+
+Bot Running | Time: 12:09:51.578526
+New 1-min Candle: {'datetime': '1900-01-01 12:10:00', 'open': 22939.35, 'high': 22939.35, 'low': 22939.35, 'close': 22939.35, 'volume': 630330}
+
+========== New 5-min Candle ==========
+{'time': datetime.time(12, 5), 'open': 22935.2, 'high': 22944.75, 'low': 22935.2, 'close': 22944.15, 'volume': 2510250}
+
+Fetching Option Chain Data...
+Option Data Updated | PCR: 1.04 | CE IV: 25.59713481352595 | PE IV: 27.10704731161876
+Using fallback ORB candle
+Price: 22939.35
+VWAP: 22941.36666666667
+ATR: None
+Volume Signal: WEAK
+OI Signal: NO_CLEAR_SIGNAL
+OI Bias: NEUTRAL
+ORB High: None
+ORB Low: None
+PCR: 1.04
+
+===== LIVE MARKET =====
+Price: 22934.55 | Fut Vol: 630720 | Fut OI: 1281420 | CE OI: 2534610 | PE OI: 3245125
+=======================
+
+
+Bot Running | Time: 12:10:21.608005
+
+===== LIVE MARKET =====
+Price: 22932.5 | Fut Vol: 630990 | Fut OI: 1281420 | CE OI: 2534610 | PE OI: 3245125
+=======================
+
+
+Bot Running | Time: 12:10:51.723719
+New 1-min Candle: {'datetime': '1900-01-01 12:11:00', 'open': 22934.55, 'high': 22934.55, 'low': 22934.55, 'close': 22934.55, 'volume': 631050}
+
+===== LIVE MARKET =====
+Price: 22928.9 | Fut Vol: 631320 | Fut OI: 1279260 | CE OI: 2582450 | PE OI: 3323905
+=======================
+
+
+Bot Running | Time: 12:11:21.827343
+
+===== LIVE MARKET =====
+Price: 22926.85 | Fut Vol: 631740 | Fut OI: 1279260 | CE OI: 2582450 | PE OI: 3323905
+=======================
+
+
+Bot Running | Time: 12:11:51.926719
+New 1-min Candle: {'datetime': '1900-01-01 12:12:00', 'open': 22927.1, 'high': 22927.1, 'low': 22927.1, 'close': 22927.1, 'volume': 632220}
+
+===== LIVE MARKET =====
+Price: 22935.1 | Fut Vol: 632490 | Fut OI: 1279260 | CE OI: 2582450 | PE OI: 3323905
+=======================
+
+
+Bot Running | Time: 12:12:22.020103
+
+===== LIVE MARKET =====
+Price: 22937.2 | Fut Vol: 633030 | Fut OI: 1279260 | CE OI: 2582450 | PE OI: 3323905
+=======================
+
+
+Bot Running | Time: 12:12:52.134478
+New 1-min Candle: {'datetime': '1900-01-01 12:13:00', 'open': 22937.45, 'high': 22937.45, 'low': 22937.45, 'close': 22937.45, 'volume': 633090}
+
+===== LIVE MARKET =====
+Price: 22937.1 | Fut Vol: 633540 | Fut OI: 1279260 | CE OI: 2582450 | PE OI: 3323905
+=======================
+
+
+Bot Running | Time: 12:13:22.229743
+
+===== LIVE MARKET =====
+Price: 22934.4 | Fut Vol: 633840 | Fut OI: 1279260 | CE OI: 2582450 | PE OI: 3323905
+=======================
+
+
+Bot Running | Time: 12:13:52.333275
+New 1-min Candle: {'datetime': '1900-01-01 12:14:00', 'open': 22936.1, 'high': 22936.1, 'low': 22936.1, 'close': 22936.1, 'volume': 634050}
+
+===== LIVE MARKET =====
+Price: 22934.45 | Fut Vol: 634770 | Fut OI: 1279920 | CE OI: 2745730 | PE OI: 3310580
+=======================
+
+
+Bot Running | Time: 12:14:22.444775
+
+===== LIVE MARKET =====
+Price: 22934.45 | Fut Vol: 635220 | Fut OI: 1279920 | CE OI: 2745730 | PE OI: 3310580
+=======================
+
+
+Bot Running | Time: 12:14:52.559862
+New 1-min Candle: {'datetime': '1900-01-01 12:15:00', 'open': 22934.35, 'high': 22934.35, 'low': 22934.35, 'close': 22934.35, 'volume': 635370}
+
+========== New 5-min Candle ==========
+{'time': datetime.time(12, 10), 'open': 22939.35, 'high': 22939.35, 'low': 22927.1, 'close': 22936.1, 'volume': 3160740}
+
+Fetching Option Chain Data...
+Option Data Updated | PCR: 1.04 | CE IV: 25.248750670768487 | PE IV: 27.132770378353534
+Using fallback ORB candle
+Price: 22934.35
+VWAP: 22937.36301845004
+ATR: None
+Volume Signal: NORMAL
+OI Signal: SHORT_BUILDUP
+OI Bias: BEARISH
+ORB High: None
+ORB Low: None
+PCR: 1.04
+
+===== LIVE MARKET =====
+Price: 22930.65 | Fut Vol: 635820 | Fut OI: 1279920 | CE OI: 2745730 | PE OI: 3310580
+=======================
+
+
+Bot Running | Time: 12:15:22.696724
+
+===== LIVE MARKET =====
+Price: 22933.5 | Fut Vol: 637200 | Fut OI: 1279920 | CE OI: 2745730 | PE OI: 3310580
+=======================
+
+
+Bot Running | Time: 12:15:52.808346
+New 1-min Candle: {'datetime': '1900-01-01 12:16:00', 'open': 22932.85, 'high': 22932.85, 'low': 22932.85, 'close': 22932.85, 'volume': 637440}
+
+===== LIVE MARKET =====
+Price: 22927.7 | Fut Vol: 637680 | Fut OI: 1279920 | CE OI: 2745730 | PE OI: 3310580
+=======================
+
+
+Bot Running | Time: 12:16:22.910990
+
+===== LIVE MARKET =====
+Price: 22927.7 | Fut Vol: 638370 | Fut OI: 1279920 | CE OI: 2745730 | PE OI: 3310580
+=======================
+
+
+Bot Running | Time: 12:16:53.000843
+New 1-min Candle: {'datetime': '1900-01-01 12:17:00', 'open': 22924.1, 'high': 22924.1, 'low': 22924.1, 'close': 22924.1, 'volume': 638550}
+
+===== LIVE MARKET =====
+Price: 22922.1 | Fut Vol: 639000 | Fut OI: 1279650 | CE OI: 2841670 | PE OI: 3355820
+=======================
+
+
+Bot Running | Time: 12:17:23.116675
+
+===== LIVE MARKET =====
+Price: 22920.25 | Fut Vol: 639810 | Fut OI: 1279650 | CE OI: 2841670 | PE OI: 3355820
+=======================
+
+
+Bot Running | Time: 12:17:53.212650
+New 1-min Candle: {'datetime': '1900-01-01 12:18:00', 'open': 22922.55, 'high': 22922.55, 'low': 22922.55, 'close': 22922.55, 'volume': 639870}
+
+===== LIVE MARKET =====
+Price: 22920.3 | Fut Vol: 640230 | Fut OI: 1279650 | CE OI: 2841670 | PE OI: 3355820
+=======================
+
+
+Bot Running | Time: 12:18:23.309767
+
+===== LIVE MARKET =====
+Price: 22908.65 | Fut Vol: 642750 | Fut OI: 1279650 | CE OI: 2841670 | PE OI: 3355820
+=======================
+
+
+Bot Running | Time: 12:18:53.405461
+New 1-min Candle: {'datetime': '1900-01-01 12:19:00', 'open': 22911.4, 'high': 22911.4, 'low': 22911.4, 'close': 22911.4, 'volume': 645780}
+
+===== LIVE MARKET =====
+Price: 22909.45 | Fut Vol: 647340 | Fut OI: 1279650 | CE OI: 2841670 | PE OI: 3355820
+=======================
+
+
+Bot Running | Time: 12:19:23.502475
+
+===== LIVE MARKET =====
+Price: 22907.75 | Fut Vol: 647790 | Fut OI: 1279650 | CE OI: 2841670 | PE OI: 3355820
+=======================
+
+
+Bot Running | Time: 12:19:53.596995
+New 1-min Candle: {'datetime': '1900-01-01 12:20:00', 'open': 22909.2, 'high': 22909.2, 'low': 22909.2, 'close': 22909.2, 'volume': 648300}
+
+========== New 5-min Candle ==========
+{'time': datetime.time(12, 15), 'open': 22934.35, 'high': 22934.35, 'low': 22911.4, 'close': 22911.4, 'volume': 3197010}
+
+Fetching Option Chain Data...
+Option Data Updated | PCR: 1.18 | CE IV: 25.80018861901695 | PE IV: 27.265864685296986
+Using fallback ORB candle
+ORB Calculated → High: 22944.75 Low: 22911.4
+Price: 22909.2
+VWAP: 22930.760977052323
+ATR: None
+Volume Signal: NORMAL
+OI Signal: SHORT_BUILDUP
+OI Bias: BEARISH
+ORB High: 22944.75
+ORB Low: 22911.4
+PCR: 1.18
+
+===== LIVE MARKET =====
+Price: 22909.75 | Fut Vol: 648480 | Fut OI: 1279560 | CE OI: 2903745 | PE OI: 3036930
+=======================
+
+
+Bot Running | Time: 12:20:23.690412
+
+===== LIVE MARKET =====
+Price: 22909.35 | Fut Vol: 649950 | Fut OI: 1279560 | CE OI: 2903745 | PE OI: 3036930
+=======================
+
+
+Bot Running | Time: 12:20:53.779249
+New 1-min Candle: {'datetime': '1900-01-01 12:21:00', 'open': 22908.0, 'high': 22908.0, 'low': 22908.0, 'close': 22908.0, 'volume': 649980}
+
+===== LIVE MARKET =====
+Price: 22914.25 | Fut Vol: 650580 | Fut OI: 1279560 | CE OI: 2903745 | PE OI: 3036930
+=======================
+
+
+Bot Running | Time: 12:21:23.880993
+
+===== LIVE MARKET =====
+Price: 22922.35 | Fut Vol: 654540 | Fut OI: 1279560 | CE OI: 2903745 | PE OI: 3036930
+=======================
+
+
+Bot Running | Time: 12:21:53.960049
+New 1-min Candle: {'datetime': '1900-01-01 12:22:00', 'open': 22931.85, 'high': 22931.85, 'low': 22931.85, 'close': 22931.85, 'volume': 655020}
+
+===== LIVE MARKET =====
+Price: 22925.2 | Fut Vol: 655290 | Fut OI: 1279560 | CE OI: 2903745 | PE OI: 3036930
+=======================
+
+
+Bot Running | Time: 12:22:24.068771
+
+===== LIVE MARKET =====
+Price: 22928.95 | Fut Vol: 656520 | Fut OI: 1279560 | CE OI: 2903745 | PE OI: 3036930
+=======================
+
+
+Bot Running | Time: 12:22:54.167958
+New 1-min Candle: {'datetime': '1900-01-01 12:23:00', 'open': 22929.65, 'high': 22929.65, 'low': 22929.65, 'close': 22929.65, 'volume': 656970}
+
+===== LIVE MARKET =====
+Price: 22931.1 | Fut Vol: 657510 | Fut OI: 1278660 | CE OI: 2981745 | PE OI: 2946515
+=======================
+
+
+Bot Running | Time: 12:23:24.269089
+
+===== LIVE MARKET =====
+Price: 22928.5 | Fut Vol: 659490 | Fut OI: 1278660 | CE OI: 2981745 | PE OI: 2946515
+=======================
+
+
+Bot Running | Time: 12:23:54.371373
+New 1-min Candle: {'datetime': '1900-01-01 12:24:00', 'open': 22927.4, 'high': 22927.4, 'low': 22927.4, 'close': 22927.4, 'volume': 660330}
+
+===== LIVE MARKET =====
+Price: 22931.5 | Fut Vol: 663750 | Fut OI: 1278660 | CE OI: 2981745 | PE OI: 2946515
+=======================
+
+
+Bot Running | Time: 12:24:24.478372
+
+===== LIVE MARKET =====
+Price: 22931.55 | Fut Vol: 664230 | Fut OI: 1278660 | CE OI: 2981745 | PE OI: 2946515
+=======================
+
+
+Bot Running | Time: 12:24:54.572337
+New 1-min Candle: {'datetime': '1900-01-01 12:25:00', 'open': 22932.3, 'high': 22932.3, 'low': 22932.3, 'close': 22932.3, 'volume': 664440}
+
+========== New 5-min Candle ==========
+{'time': datetime.time(12, 20), 'open': 22909.2, 'high': 22931.85, 'low': 22908.0, 'close': 22927.4, 'volume': 3270600}
+
+Fetching Option Chain Data...
+Option Data Updated | PCR: 0.98 | CE IV: 25.273677195860568 | PE IV: 26.76710133308942
+Price: 22932.3
+VWAP: 22928.51270282405
+ATR: None
+Volume Signal: NORMAL
+OI Signal: SHORT_COVERING
+OI Bias: BULLISH
+ORB High: 22944.75
+ORB Low: 22911.4
+PCR: 0.98
+
+===== LIVE MARKET =====
+Price: 22925.85 | Fut Vol: 664980 | Fut OI: 1278660 | CE OI: 2981745 | PE OI: 2946515
+=======================
+
+
+Bot Running | Time: 12:25:24.788161
+
+===== LIVE MARKET =====
+Price: 22932.65 | Fut Vol: 665430 | Fut OI: 1278660 | CE OI: 2981745 | PE OI: 2946515
+=======================
+
+
+Bot Running | Time: 12:25:54.878903
+^CTraceback (most recent call last):
+  File "/Users/ishwar/Documents/OptionCoder/main.py", line 117, in <module>
+    main()
+    ~~~~^^
+  File "/Users/ishwar/Documents/OptionCoder/main.py", line 113, in main
+    engine.run()
+    ~~~~~~~~~~^^
+  File "/Users/ishwar/Documents/OptionCoder/engine/event_engine.py", line 177, in run
+    time.sleep(1)
+    ~~~~~~~~~~^^^
+KeyboardInterrupt
