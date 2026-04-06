@@ -11,6 +11,7 @@ from core.option_chain import OptionChain
 from core.oi_ladder import OILadder
 from strategy.breakout_strategy import BreakoutStrategy
 from strategy.strike_selector import StrikeSelector
+from db.writer import DBWriter
 
 
 class EventEngine:
@@ -30,6 +31,10 @@ class EventEngine:
         self.strategy = BreakoutStrategy()
         self.strike_selector = StrikeSelector()
 
+        # DB
+        self.instrument = Config.SYMBOL
+        self.db = DBWriter()
+
         # Timers
         self.last_option_fetch = 0
         self.last_heartbeat = 0
@@ -39,6 +44,72 @@ class EventEngine:
         self.prev_total_oi = None
 
         self.option_data = None
+
+    # =========================
+    # DB Save Helpers
+    # =========================
+    def _safe_save_1m_candle(self, candle_1m):
+        try:
+            row = (
+                candle_1m["datetime"],     # ts
+                self.instrument,           # instrument
+                float(candle_1m["open"]),
+                float(candle_1m["high"]),
+                float(candle_1m["low"]),
+                float(candle_1m["close"]),
+                int(candle_1m["volume"]),
+            )
+            self.db.insert_candle_1m(row)
+        except Exception as e:
+            print("DB save error (1m candle):", e)
+
+    def _safe_save_5m_candle(self, candle_5m):
+        try:
+            row = (
+                candle_5m["time"],         # ts (5m slot time)
+                self.instrument,           # instrument
+                float(candle_5m["open"]),
+                float(candle_5m["high"]),
+                float(candle_5m["low"]),
+                float(candle_5m["close"]),
+                int(candle_5m["volume"]),
+            )
+            self.db.insert_candle_5m(row)
+        except Exception as e:
+            print("DB save error (5m candle):", e)
+
+    def _safe_save_oi_snapshot(self, ts, price):
+        """
+        Save minute-level OI snapshot.
+        """
+        try:
+            if not self.option_data:
+                print("Skipping OI snapshot: option_data unavailable")
+                return
+
+            row = (
+                ts,
+                self.instrument,
+                float(price) if price is not None else None,
+                int(self.option_data.get("ce_oi")) if self.option_data.get("ce_oi") is not None else None,
+                int(self.option_data.get("pe_oi")) if self.option_data.get("pe_oi") is not None else None,
+                int(self.option_data.get("ce_volume")) if self.option_data.get("ce_volume") is not None else None,
+                int(self.option_data.get("pe_volume")) if self.option_data.get("pe_volume") is not None else None,
+                int(self.option_data.get("ce_volume_band")) if self.option_data.get("ce_volume_band") is not None else None,
+                int(self.option_data.get("pe_volume_band")) if self.option_data.get("pe_volume_band") is not None else None,
+                float(self.option_data.get("pcr")) if self.option_data.get("pcr") is not None else None,
+            )
+            print(
+                "Saving OI snapshot:",
+                ts,
+                "CE_OI=", self.option_data.get("ce_oi"),
+                "PE_OI=", self.option_data.get("pe_oi"),
+                "CE_VOL=", self.option_data.get("ce_volume"),
+                "PE_VOL=", self.option_data.get("pe_volume"),
+            )
+            self.db.insert_oi_1m(row)
+        except Exception as e:
+            print("DB save error (OI snapshot):", e)
 
     def run(self):
         print("Event Engine Started...")
@@ -72,6 +143,15 @@ class EventEngine:
                 time.sleep(1)
                 continue
 
+            # Keep option chain fresh independently of 5m candle formation so
+            # 1m OI snapshots can be saved with the latest CE/PE data.
+            if time.time() - self.last_option_fetch > 5:
+                latest_option_data = self.option_chain.fetch_option_chain()
+                self.last_option_fetch = time.time()
+
+                if latest_option_data:
+                    self.option_data = latest_option_data
+
             # =========================
             # Tick → 1-min candle
             # =========================
@@ -79,6 +159,12 @@ class EventEngine:
 
             if new_minute:
                 print("New 1-min Candle:", candle_1m)
+
+                # Save 1m candle
+                self._safe_save_1m_candle(candle_1m)
+
+                # Save 1m OI snapshot (aligned with minute timestamp)
+                self._safe_save_oi_snapshot(candle_1m["datetime"], price)
 
                 # =========================
                 # 1-min → 5-min candle
@@ -89,6 +175,9 @@ class EventEngine:
                     print("\n========== New 5-min Candle ==========")
                     print(candle_5m)
 
+                    # Save 5m candle
+                    self._safe_save_5m_candle(candle_5m)
+
                     # ===== Indicators =====
                     vwap_value = self.vwap.update(candle_5m)
                     atr_value = self.atr.update(candle_5m)
@@ -97,26 +186,12 @@ class EventEngine:
                     self.volume.update(candle_5m)
                     volume_signal = self.volume.get_volume_signal(candle_5m["volume"])
 
-                    # ===== Option Chain =====
-                    if time.time() - self.last_option_fetch > 5:
-                        print("\nFetching Option Chain Data...")
-                        self.option_data = self.option_chain.fetch_option_chain()
-                        self.last_option_fetch = time.time()
-
-                        if self.option_data:
-                            print("Option Data Updated | PCR:",
-                                  self.option_data["pcr"],
-                                  "| CE IV:", self.option_data["ce_iv"],
-                                  "| PE IV:", self.option_data["pe_iv"])
-                        else:
-                            print("Option Chain fetch failed")
-
                     # ===== OI Analyzer =====
                     if self.option_data:
                         self.oi.update(
                             price,
-                            self.option_data["ce_oi"],
-                            self.option_data["pe_oi"]
+                            self.option_data.get("ce_oi", 0),
+                            self.option_data.get("pe_oi", 0)
                         )
 
                     oi_signal = self.oi.get_oi_signal()
@@ -180,7 +255,13 @@ class EventEngine:
                     print("ORB Low:", orb_low)
 
                     if self.option_data:
-                        print("PCR:", self.option_data["pcr"])
+                        print(
+                            "Option Data Updated | PCR:",
+                            self.option_data.get("pcr"),
+                            "| CE IV:", self.option_data.get("ce_iv"),
+                            "| PE IV:", self.option_data.get("pe_iv")
+                        )
+                        print("PCR:", self.option_data.get("pcr"))
 
                     # ===== Strategy =====
                     signal, reason = self.strategy.generate_signal(
@@ -212,7 +293,7 @@ class EventEngine:
                         print("VWAP:", vwap_value)
                         print("ORB High:", orb_high)
                         print("ORB Low:", orb_low)
-                        print("PCR:", self.option_data["pcr"])
+                        print("PCR:", self.option_data.get("pcr"))
                         print("OI Signal:", oi_signal)
                         print("OI Trend:", oi_ladder_data["trend"] if oi_ladder_data else None)
                         print("Build-up:", oi_ladder_data["build_up"] if oi_ladder_data else None)

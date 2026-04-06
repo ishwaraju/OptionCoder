@@ -18,28 +18,51 @@ FUTURE_ID_FILE = "data/nifty_future_id.txt"
 # Get Nearest NIFTY Future ID
 # ===============================
 def get_nifty_future_security_id():
-    if os.path.exists(FUTURE_ID_FILE):
-        with open(FUTURE_ID_FILE, "r") as f:
-            print("Loaded FUT ID from file")
-            return int(f.read().strip())
+    def _fetch_nearest_future_id(dhan_client):
+        raw = dhan_client.fetch_security_list("compact")
 
-    print("Fetching FUT ID from Dhan...")
+        # Support both direct DataFrame response and dict-style response
+        if isinstance(raw, pd.DataFrame):
+            df = raw
+        elif isinstance(raw, dict) and "data" in raw:
+            df = pd.DataFrame(raw["data"])
+        else:
+            raise ValueError("Unexpected response format from fetch_security_list")
+
+        fut = df[df["SEM_INSTRUMENT_NAME"] == "FUTIDX"]
+        fut = fut[fut["SEM_TRADING_SYMBOL"].astype(str).str.contains("NIFTY", na=False)]
+        fut = fut.sort_values("SEM_EXPIRY_DATE")
+
+        if fut.empty:
+            raise ValueError("No NIFTY FUTIDX instruments found")
+
+        nearest = fut.iloc[0]
+        return int(nearest["SEM_SMST_SECURITY_ID"])
+
+    print("Fetching/Validating FUT ID from Dhan...")
     dhan = dhanhq(Config.DHAN_CLIENT_ID, Config.DHAN_ACCESS_TOKEN)
-    df = dhan.fetch_security_list("compact")
+    latest_fut_id = _fetch_nearest_future_id(dhan)
 
-    fut = df[df["SEM_INSTRUMENT_NAME"] == "FUTIDX"]
-    fut = fut[fut["SEM_TRADING_SYMBOL"].str.contains("NIFTY")]
-    fut = fut.sort_values("SEM_EXPIRY_DATE")
+    # Use cached ID only if it matches latest nearest futures ID
+    if os.path.exists(FUTURE_ID_FILE):
+        try:
+            with open(FUTURE_ID_FILE, "r") as f:
+                cached_id = int(f.read().strip())
 
-    nearest = fut.iloc[0]
-    fut_id = int(nearest["SEM_SMST_SECURITY_ID"])
+            if cached_id == latest_fut_id:
+                print("Loaded FUT ID from file (validated):", cached_id)
+                return cached_id
+
+            print(f"Cached FUT ID {cached_id} is stale. Updating to {latest_fut_id}.")
+        except Exception:
+            print("FUT ID cache invalid/corrupt. Rebuilding cache.")
 
     os.makedirs("data", exist_ok=True)
     with open(FUTURE_ID_FILE, "w") as f:
-        f.write(str(fut_id))
+        f.write(str(latest_fut_id))
 
-    print("Saved FUT ID:", fut_id)
-    return fut_id
+    print("Saved FUT ID:", latest_fut_id)
+    return latest_fut_id
 
 
 # ===============================
@@ -64,30 +87,39 @@ def main():
 
     print("Fetching Option Chain...")
     option_data = None
+    max_option_chain_attempts = 5
 
-    while option_data is None:
+    for attempt in range(1, max_option_chain_attempts + 1):
         option_data = option_chain.fetch_option_chain()
+        if option_data is not None:
+            break
+
+        print(f"Option Chain fetch failed (attempt {attempt}/{max_option_chain_attempts})")
         time.sleep(2)
 
-    atm = option_data["atm"]
-    print("ATM Strike:", atm)
-
-    # Generate ATM ± 5 strikes
-    strike_list = generate_strikes(atm)
-    print("Subscribing Strikes:", strike_list)
-
+    strike_list = []
     ce_ids = []
     pe_ids = []
 
-    for strike in strike_list:
-        data = option_chain.get_security_id_by_strike(strike)
-        if data:
-            if data["ce"]:
-                ce_ids.append(data["ce"])
-            if data["pe"]:
-                pe_ids.append(data["pe"])
-        else:
-            print("Security ID not found for strike:", strike)
+    if option_data is not None:
+        atm = option_data["atm"]
+        print("ATM Strike:", atm)
+
+        # Generate ATM ± 5 strikes
+        strike_list = generate_strikes(atm)
+        print("Subscribing Strikes:", strike_list)
+
+        for strike in strike_list:
+            data = option_chain.get_security_id_by_strike(strike)
+            if data:
+                if data["ce"]:
+                    ce_ids.append(data["ce"])
+                if data["pe"]:
+                    pe_ids.append(data["pe"])
+            else:
+                print("Security ID not found for strike:", strike)
+    else:
+        print("Starting without option subscriptions; candles/DB should still run.")
 
     print("Total CE Instruments:", len(ce_ids))
     print("Total PE Instruments:", len(pe_ids))
@@ -140,7 +172,9 @@ def main():
     time.sleep(5)
 
     # Step 4 - Start Event Engine
+    print("Initializing Event Engine...")
     engine = EventEngine(live_feed)
+    print("Running Event Engine...")
     engine.run()
 
 

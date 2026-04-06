@@ -112,6 +112,8 @@ class OptionChain:
 
             total_call_oi = 0
             total_put_oi = 0
+            total_call_volume = 0
+            total_put_volume = 0
 
             max_call_oi = 0
             max_put_oi = 0
@@ -135,6 +137,8 @@ class OptionChain:
 
                 total_call_oi += ce["oi"]
                 total_put_oi += pe["oi"]
+                total_call_volume += ce.get("volume", 0)
+                total_put_volume += pe.get("volume", 0)
 
                 if ce["oi"] > max_call_oi:
                     max_call_oi = ce["oi"]
@@ -168,14 +172,18 @@ class OptionChain:
                 "atm_ce_security_id": atm_ce["security_id"] if atm_ce else None,
                 "atm_pe_security_id": atm_pe["security_id"] if atm_pe else None,
 
-                "ce_ltp": atm_ce["last_price"] if atm_ce else 0,
-                "pe_ltp": atm_pe["last_price"] if atm_pe else 0,
+                "ce_ltp": atm_ce.get("last_price", 0) if atm_ce else 0,
+                "pe_ltp": atm_pe.get("last_price", 0) if atm_pe else 0,
 
-                "ce_oi": atm_ce["oi"] if atm_ce else 0,
-                "pe_oi": atm_pe["oi"] if atm_pe else 0,
+                "ce_oi": atm_ce.get("oi", 0) if atm_ce else 0,
+                "pe_oi": atm_pe.get("oi", 0) if atm_pe else 0,
+                "ce_volume": atm_ce.get("volume", 0) if atm_ce else 0,
+                "pe_volume": atm_pe.get("volume", 0) if atm_pe else 0,
+                "ce_volume_band": total_call_volume,
+                "pe_volume_band": total_put_volume,
 
-                "ce_iv": atm_ce["implied_volatility"] if atm_ce else 0,
-                "pe_iv": atm_pe["implied_volatility"] if atm_pe else 0,
+                "ce_iv": atm_ce.get("implied_volatility", 0) if atm_ce else 0,
+                "pe_iv": atm_pe.get("implied_volatility", 0) if atm_pe else 0,
             }
 
             self.cached_data = result
