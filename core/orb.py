@@ -14,22 +14,17 @@ class ORB:
         """
         Add 5-min candle to ORB calculation
         Normal ORB: 9:15–9:30 IST
-        Fallback ORB: First 3 candles if bot started late
         """
 
         if self.orb_ready:
             return
 
-        # Candle time IST me convert
-        current_time = self.time_utils.current_time()
+        candle_time = candle.get("time")
+        if candle_time is None:
+            return
 
-        # Normal ORB time (IST)
-        if time(9, 15) <= current_time <= time(9, 30):
-            self.orb_candles.append(candle)
-
-        # Fallback ORB (if bot started after 9:30 IST)
-        elif current_time > time(9, 30) and len(self.orb_candles) < 3:
-            print("Using fallback ORB candle")
+        candle_clock = candle_time.time()
+        if time(9, 15) <= candle_clock < time(9, 30):
             self.orb_candles.append(candle)
 
     def calculate_orb(self):
@@ -53,3 +48,17 @@ class ORB:
 
     def is_orb_ready(self):
         return self.orb_ready
+
+    def get_fallback_levels(self, recent_candles):
+        """
+        Use last 3 completed 5-min candles as fallback ORB when official
+        9:15-9:30 ORB is unavailable (for example, bot started late).
+        """
+        if not recent_candles or len(recent_candles) < 3:
+            return None, None
+
+        fallback_window = recent_candles[-3:]
+        highs = [candle["high"] for candle in fallback_window]
+        lows = [candle["low"] for candle in fallback_window]
+
+        return max(highs), min(lows)

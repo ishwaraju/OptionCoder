@@ -1,6 +1,3 @@
-from config import Config
-
-
 class OIAnalyzer:
     def __init__(self):
         self.prev_call_oi = None
@@ -34,20 +31,25 @@ class OIAnalyzer:
         """
         Determine OI based market direction
         """
+        candidates = []
 
         # Price up
         if self.price_change > 0:
             if self.put_oi_change > 0:
-                return "LONG_BUILDUP"  # Bullish
-            elif self.call_oi_change < 0:
-                return "SHORT_COVERING"  # Bullish
+                candidates.append(("LONG_BUILDUP", abs(self.put_oi_change)))
+            if self.call_oi_change < 0:
+                candidates.append(("SHORT_COVERING", abs(self.call_oi_change)))
 
         # Price down
         elif self.price_change < 0:
             if self.call_oi_change > 0:
-                return "SHORT_BUILDUP"  # Bearish
-            elif self.put_oi_change < 0:
-                return "LONG_UNWINDING"  # Bearish
+                candidates.append(("SHORT_BUILDUP", abs(self.call_oi_change)))
+            if self.put_oi_change < 0:
+                candidates.append(("LONG_UNWINDING", abs(self.put_oi_change)))
+
+        if candidates:
+            candidates.sort(key=lambda item: item[1], reverse=True)
+            return candidates[0][0]
 
         return "NO_CLEAR_SIGNAL"
 

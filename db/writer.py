@@ -38,6 +38,16 @@ class DBWriter:
         except Exception as e:
             print("DB execute error:", e)
 
+    def _execute_many(self, query, rows):
+        if not self.enabled or not self.conn or not rows:
+            return
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.executemany(query, rows)
+        except Exception as e:
+            print("DB bulk execute error:", e)
+
     def insert_candle_1m(self, row):
         """
         row = (ts, instrument, open, high, low, close, volume)
@@ -93,5 +103,73 @@ class DBWriter:
             ce_volume_band = EXCLUDED.ce_volume_band,
             pe_volume_band = EXCLUDED.pe_volume_band,
             pcr = EXCLUDED.pcr;
+        """
+        self._execute(query, row)
+
+    def insert_option_band_snapshots_1m(self, rows):
+        """
+        rows = [
+            (
+                ts, instrument, atm_strike, strike, distance_from_atm,
+                option_type, security_id, oi, volume, ltp, iv
+            ),
+            ...
+        ]
+        """
+        query = """
+        INSERT INTO option_band_snapshots_1m
+        (
+            ts, instrument, atm_strike, strike, distance_from_atm,
+            option_type, security_id, oi, volume, ltp, iv
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ts, instrument, strike, option_type) DO UPDATE
+        SET atm_strike = EXCLUDED.atm_strike,
+            distance_from_atm = EXCLUDED.distance_from_atm,
+            security_id = EXCLUDED.security_id,
+            oi = EXCLUDED.oi,
+            volume = EXCLUDED.volume,
+            ltp = EXCLUDED.ltp,
+            iv = EXCLUDED.iv;
+        """
+        self._execute_many(query, rows)
+
+    def insert_strategy_decision_5m(self, row):
+        """
+        row = (
+            ts, instrument, price, signal, reason, strategy_score, score_factors,
+            volume_signal, oi_bias, oi_trend, build_up, pressure_bias,
+            ce_delta_total, pe_delta_total, pcr,
+            orb_high, orb_low, vwap, atr, strike
+        )
+        """
+        query = """
+        INSERT INTO strategy_decisions_5m
+        (
+            ts, instrument, price, signal, reason, strategy_score, score_factors,
+            volume_signal, oi_bias, oi_trend, build_up, pressure_bias,
+            ce_delta_total, pe_delta_total, pcr,
+            orb_high, orb_low, vwap, atr, strike
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ts, instrument) DO UPDATE
+        SET price = EXCLUDED.price,
+            signal = EXCLUDED.signal,
+            reason = EXCLUDED.reason,
+            strategy_score = EXCLUDED.strategy_score,
+            score_factors = EXCLUDED.score_factors,
+            volume_signal = EXCLUDED.volume_signal,
+            oi_bias = EXCLUDED.oi_bias,
+            oi_trend = EXCLUDED.oi_trend,
+            build_up = EXCLUDED.build_up,
+            pressure_bias = EXCLUDED.pressure_bias,
+            ce_delta_total = EXCLUDED.ce_delta_total,
+            pe_delta_total = EXCLUDED.pe_delta_total,
+            pcr = EXCLUDED.pcr,
+            orb_high = EXCLUDED.orb_high,
+            orb_low = EXCLUDED.orb_low,
+            vwap = EXCLUDED.vwap,
+            atr = EXCLUDED.atr,
+            strike = EXCLUDED.strike;
         """
         self._execute(query, row)

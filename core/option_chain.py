@@ -122,6 +122,7 @@ class OptionChain:
 
             atm_ce = None
             atm_pe = None
+            band_snapshots = []
 
             for strike in strikes_needed:
                 strike_key = f"{strike:.6f}"
@@ -139,6 +140,32 @@ class OptionChain:
                 total_put_oi += pe["oi"]
                 total_call_volume += ce.get("volume", 0)
                 total_put_volume += pe.get("volume", 0)
+
+                distance_from_atm = int((strike - atm) / Config.STRIKE_GAP)
+                band_snapshots.extend([
+                    {
+                        "atm_strike": atm,
+                        "strike": strike,
+                        "distance_from_atm": distance_from_atm,
+                        "option_type": "CE",
+                        "security_id": ce.get("security_id"),
+                        "oi": ce.get("oi", 0),
+                        "volume": ce.get("volume", 0),
+                        "ltp": ce.get("last_price", 0),
+                        "iv": ce.get("implied_volatility", 0),
+                    },
+                    {
+                        "atm_strike": atm,
+                        "strike": strike,
+                        "distance_from_atm": distance_from_atm,
+                        "option_type": "PE",
+                        "security_id": pe.get("security_id"),
+                        "oi": pe.get("oi", 0),
+                        "volume": pe.get("volume", 0),
+                        "ltp": pe.get("last_price", 0),
+                        "iv": pe.get("implied_volatility", 0),
+                    },
+                ])
 
                 if ce["oi"] > max_call_oi:
                     max_call_oi = ce["oi"]
@@ -163,6 +190,7 @@ class OptionChain:
                 # OI Ladder
                 "ce_oi_ladder": ce_oi_ladder,
                 "pe_oi_ladder": pe_oi_ladder,
+                "band_snapshots": band_snapshots,
 
                 # Support / Resistance
                 "max_call_oi_strike": max_call_strike,

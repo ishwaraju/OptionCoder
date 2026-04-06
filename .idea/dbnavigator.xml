@@ -9,6 +9,24 @@
     <value-preview-text-wrapping value="false" />
     <value-preview-pinned value="false" />
   </component>
+  <component name="DBNavigator.Project.DataExportManager">
+    <export-instructions>
+      <create-header value="true" />
+      <friendly-headers value="false" />
+      <quote-values-containing-separator value="true" />
+      <quote-all-values value="false" />
+      <value-separator value="" />
+      <begin-quote value="&quot;" />
+      <end-quote value="&quot;" />
+      <file-name value="" />
+      <file-location value="" />
+      <scope value="GLOBAL" />
+      <destination value="FILE" />
+      <format value="EXCEL" />
+      <charset value="UTF-8" />
+      <charset value="UTF-8" />
+    </export-instructions>
+  </component>
   <component name="DBNavigator.Project.DatabaseAssistantManager">
     <assistants>
       <assistant-state connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" assistant-type="SELECT_AI" default-profile-name="" selected-chat-id="" availability="UNAVAILABLE" acknowledgement="NONE" selected="true">
@@ -37,7 +55,8 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
     <open-files>
-      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/oi_snapshots_1m" />
+      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/option_band_snapshots_1m" />
+      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/strategy_decisions_5m" />
     </open-files>
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
@@ -53,7 +72,9 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
         <condition column="id" operator="=" value="" active="true" />
       </filter>
     </filter-actions>
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.option_band_snapshots_1m" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.candles_5m" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.strategy_decisions_5m" active-filter-id="EMPTY_FILTER" />
   </component>
   <component name="DBNavigator.Project.ExecutionManager">
     <retain-sticky-names value="false" />

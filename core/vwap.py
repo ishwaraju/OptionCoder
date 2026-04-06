@@ -9,6 +9,14 @@ class VWAPCalculator:
         self.current_day = None
         self.vwap = None
 
+    def _get_session_day(self, candle):
+        candle_dt = candle.get("time") or candle.get("datetime") or candle.get("close_time")
+
+        if hasattr(candle_dt, "date"):
+            return candle_dt.date().isoformat()
+
+        return self.time_utils.today_str()
+
     def reset(self):
         """Reset VWAP for new trading day"""
         self.cumulative_pv = 0
@@ -28,12 +36,12 @@ class VWAPCalculator:
         }
         """
 
-        today = self.time_utils.today_str()
+        session_day = self._get_session_day(candle)
 
         # Reset VWAP if new day
-        if self.current_day != today:
+        if self.current_day != session_day:
             self.reset()
-            self.current_day = today
+            self.current_day = session_day
 
         high = candle["high"]
         low = candle["low"]

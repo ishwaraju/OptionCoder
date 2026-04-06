@@ -9,6 +9,7 @@ from core.volume_analyzer import VolumeAnalyzer
 from core.oi_analyzer import OIAnalyzer
 from core.option_chain import OptionChain
 from core.oi_ladder import OILadder
+from core.pressure_analyzer import PressureAnalyzer
 from strategy.breakout_strategy import BreakoutStrategy
 from strategy.strike_selector import StrikeSelector
 from db.writer import DBWriter
@@ -28,6 +29,7 @@ class EventEngine:
         self.oi = OIAnalyzer()
         self.option_chain = OptionChain()
         self.oi_ladder = OILadder()
+        self.pressure = PressureAnalyzer()
         self.strategy = BreakoutStrategy()
         self.strike_selector = StrikeSelector()
 
@@ -84,7 +86,6 @@ class EventEngine:
         """
         try:
             if not self.option_data:
-                print("Skipping OI snapshot: option_data unavailable")
                 return
 
             row = (
@@ -99,17 +100,87 @@ class EventEngine:
                 int(self.option_data.get("pe_volume_band")) if self.option_data.get("pe_volume_band") is not None else None,
                 float(self.option_data.get("pcr")) if self.option_data.get("pcr") is not None else None,
             )
-            print(
-                "Saving OI snapshot:",
-                ts,
-                "CE_OI=", self.option_data.get("ce_oi"),
-                "PE_OI=", self.option_data.get("pe_oi"),
-                "CE_VOL=", self.option_data.get("ce_volume"),
-                "PE_VOL=", self.option_data.get("pe_volume"),
-            )
             self.db.insert_oi_1m(row)
         except Exception as e:
             print("DB save error (OI snapshot):", e)
+
+    def _safe_save_option_band_snapshots(self, ts):
+        try:
+            if not self.option_data:
+                return
+
+            band_snapshots = self.option_data.get("band_snapshots", [])
+            if not band_snapshots:
+                return
+
+            rows = []
+            for snapshot in band_snapshots:
+                rows.append(
+                    (
+                        ts,
+                        self.instrument,
+                        int(snapshot["atm_strike"]),
+                        int(snapshot["strike"]),
+                        int(snapshot["distance_from_atm"]),
+                        snapshot["option_type"],
+                        int(snapshot["security_id"]) if snapshot.get("security_id") is not None else None,
+                        int(snapshot["oi"]) if snapshot.get("oi") is not None else None,
+                        int(snapshot["volume"]) if snapshot.get("volume") is not None else None,
+                        float(snapshot["ltp"]) if snapshot.get("ltp") is not None else None,
+                        float(snapshot["iv"]) if snapshot.get("iv") is not None else None,
+                    )
+                )
+
+            self.db.insert_option_band_snapshots_1m(rows)
+        except Exception as e:
+            print("DB save error (option band snapshots):", e)
+
+    def _safe_save_strategy_decision(
+            self,
+            ts,
+            price,
+            signal,
+            reason,
+            volume_signal,
+            oi_bias,
+            oi_trend,
+            build_up,
+            pressure_metrics,
+            ce_delta_total,
+            pe_delta_total,
+            pcr,
+            orb_high,
+            orb_low,
+            vwap,
+            atr,
+            strike,
+    ):
+        try:
+            row = (
+                ts,
+                self.instrument,
+                float(price) if price is not None else None,
+                signal,
+                reason,
+                int(self.strategy.last_score),
+                ", ".join(self.strategy.last_score_components),
+                volume_signal,
+                oi_bias,
+                oi_trend,
+                build_up,
+                pressure_metrics["pressure_bias"] if pressure_metrics else None,
+                int(ce_delta_total) if ce_delta_total is not None else None,
+                int(pe_delta_total) if pe_delta_total is not None else None,
+                float(pcr) if pcr is not None else None,
+                float(orb_high) if orb_high is not None else None,
+                float(orb_low) if orb_low is not None else None,
+                float(vwap) if vwap is not None else None,
+                float(atr) if atr is not None else None,
+                int(strike) if strike is not None else None,
+            )
+            self.db.insert_strategy_decision_5m(row)
+        except Exception as e:
+            print("DB save error (strategy decision):", e)
 
     def run(self):
         print("Event Engine Started...")
@@ -165,6 +236,7 @@ class EventEngine:
 
                 # Save 1m OI snapshot (aligned with minute timestamp)
                 self._safe_save_oi_snapshot(candle_1m["datetime"], price)
+                self._safe_save_option_band_snapshots(candle_1m["datetime"])
 
                 # =========================
                 # 1-min → 5-min candle
@@ -196,6 +268,7 @@ class EventEngine:
 
                     oi_signal = self.oi.get_oi_signal()
                     oi_bias = self.oi.get_bias()
+                    pressure_metrics = self.pressure.analyze(self.option_data) if self.option_data else None
 
                     # ===== OI Ladder =====
                     oi_ladder_data = None
@@ -208,20 +281,14 @@ class EventEngine:
                         if self.prev_price:
                             price_change = price - self.prev_price
 
-                        # Total OI change
-                        total_oi = sum(ce_oi_ladder.values()) + sum(pe_oi_ladder.values())
-                        oi_change = 0
-                        if self.prev_total_oi:
-                            oi_change = total_oi - self.prev_total_oi
-
                         self.prev_price = price
-                        self.prev_total_oi = total_oi
+                        self.prev_total_oi = sum(ce_oi_ladder.values()) + sum(pe_oi_ladder.values())
 
                         oi_ladder_data = self.oi_ladder.analyze(
                             ce_oi_ladder,
                             pe_oi_ladder,
                             price_change,
-                            oi_change
+                            atm=self.option_data.get("atm"),
                         )
 
                         print("\n===== OI LADDER =====")
@@ -241,6 +308,10 @@ class EventEngine:
 
                         if not self.orb.is_orb_ready():
                             orb_high, orb_low = self.orb.calculate_orb()
+                            if orb_high is None or orb_low is None:
+                                orb_high, orb_low = self.orb.get_fallback_levels(
+                                    self.candle_manager.get_all_5min_candles()
+                                )
                         else:
                             orb_high, orb_low = self.orb.get_orb_levels()
 
@@ -253,6 +324,10 @@ class EventEngine:
                     print("OI Bias:", oi_bias)
                     print("ORB High:", orb_high)
                     print("ORB Low:", orb_low)
+                    if pressure_metrics:
+                        print("Pressure Bias:", pressure_metrics["pressure_bias"])
+                        print("Near CE/PE Vol:", pressure_metrics["near_ce_volume"], "/", pressure_metrics["near_pe_volume"])
+                        print("Strongest CE/PE Strike:", pressure_metrics["strongest_ce_strike"], "/", pressure_metrics["strongest_pe_strike"])
 
                     if self.option_data:
                         print(
@@ -274,22 +349,47 @@ class EventEngine:
                         oi_trend=oi_ladder_data["trend"] if oi_ladder_data else None,
                         build_up=oi_ladder_data["build_up"] if oi_ladder_data else None,
                         can_trade=True if Config.TEST_MODE else self.time_utils.can_trade(),
-                        buffer=buffer
+                        buffer=buffer,
+                        pressure_metrics=pressure_metrics,
+                    )
+
+                    selected_strike = None
+                    if signal and self.option_data:
+                        selected_strike = self.strike_selector.select_strike(
+                            price=price,
+                            signal=signal,
+                            volume_signal=volume_signal,
+                            strategy_score=self.strategy.last_score,
+                            pressure_metrics=pressure_metrics,
+                        )
+
+                    self._safe_save_strategy_decision(
+                        ts=candle_5m["time"],
+                        price=price,
+                        signal=signal,
+                        reason=reason,
+                        volume_signal=volume_signal,
+                        oi_bias=oi_bias,
+                        oi_trend=oi_ladder_data["trend"] if oi_ladder_data else None,
+                        build_up=oi_ladder_data["build_up"] if oi_ladder_data else None,
+                        pressure_metrics=pressure_metrics,
+                        ce_delta_total=oi_ladder_data["ce_delta_total"] if oi_ladder_data else None,
+                        pe_delta_total=oi_ladder_data["pe_delta_total"] if oi_ladder_data else None,
+                        pcr=self.option_data.get("pcr") if self.option_data else None,
+                        orb_high=orb_high,
+                        orb_low=orb_low,
+                        vwap=vwap_value,
+                        atr=atr_value,
+                        strike=selected_strike,
                     )
 
                     # ===== Signal Output =====
                     if signal and self.option_data:
-                        strike = self.strike_selector.select_strike(
-                            price,
-                            signal,
-                            volume_signal
-                        )
-
                         print("\n================ SIGNAL ================")
                         print("Time:", self.time_utils.current_time())
                         print("Signal:", signal)
                         print("Price:", price)
-                        print("Strike:", strike)
+                        print("Strike:", selected_strike)
                         print("VWAP:", vwap_value)
                         print("ORB High:", orb_high)
                         print("ORB Low:", orb_low)
@@ -297,6 +397,9 @@ class EventEngine:
                         print("OI Signal:", oi_signal)
                         print("OI Trend:", oi_ladder_data["trend"] if oi_ladder_data else None)
                         print("Build-up:", oi_ladder_data["build_up"] if oi_ladder_data else None)
+                        print("Pressure Bias:", pressure_metrics["pressure_bias"] if pressure_metrics else None)
+                        print("Strategy Score:", self.strategy.last_score)
+                        print("Score Factors:", ", ".join(self.strategy.last_score_components))
                         print("Volume Signal:", volume_signal)
                         print("Reason:", reason)
                         print("========================================\n")
