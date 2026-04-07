@@ -1,6 +1,10 @@
 """
 Trading Engine Module
 Handles order placement, position management, and risk management
+
+Note:
+This module is auxiliary/legacy relative to the current EventEngine-driven
+decision flow. Keep it config-aligned so it remains safe if reused later.
 """
 
 import logging
@@ -297,18 +301,7 @@ class TradingEngine:
         Returns:
             int: Lot size for the symbol
         """
-        if symbol == "NIFTY":
-            return 65
-        elif symbol == "BANKNIFTY":
-            return 30
-        elif symbol == "FINNIFTY":
-            return 60
-        elif symbol == "MIDCPNIFTY":
-            return 120
-        elif symbol == "SENSEX":
-            return 20
-        else:
-            return 50
+        return Config.LOT_SIZE.get(symbol, Config.DEFAULT_QUANTITY)
     
     def get_total_pnl(self):
         """

@@ -48,7 +48,46 @@ LOG_LEVEL=INFO
 
 Run the application:
 ```bash
-python main.py
+python3 main.py
+```
+
+Replay the latest decision from the audit log:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/replay_decision.py
+```
+
+Replay a specific decision by time match:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/replay_decision.py "2026-04-06 12:25"
+```
+
+## Decision Operations
+
+Use compact console output for live trading:
+```bash
+CONSOLE_MODE=COMPACT python3 main.py
+```
+
+Use detailed console output for debugging:
+```bash
+CONSOLE_MODE=DETAILED python3 main.py
+```
+
+Decision audit trail is written to:
+```text
+data/decision_audit.csv
+```
+
+End-of-day session summary is written to files like:
+```text
+data/session_summary_YYYYMMDD.txt
+```
+
+Telegram alert setup:
+```text
+Set TELEGRAM_ENABLED=true
+Set TELEGRAM_BOT_TOKEN in .env
+Set TELEGRAM_CHAT_ID in .env after messaging your bot once
 ```
 
 ### Main Menu Options

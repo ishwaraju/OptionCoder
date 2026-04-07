@@ -56,6 +56,8 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
   <component name="DBNavigator.Project.DatabaseFileManager">
     <open-files>
       <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/option_band_snapshots_1m" />
+      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/candles_5m" />
+      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/oi_snapshots_1m" />
       <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/strategy_decisions_5m" />
     </open-files>
   </component>

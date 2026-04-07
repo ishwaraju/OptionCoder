@@ -1,6 +1,10 @@
 """
 Option Trading Module
 Handles option chain analysis and trading operations
+
+Note:
+This module is kept as an auxiliary/legacy helper. The active live decision
+path is driven by EventEngine + BreakoutStrategy.
 """
 
 import pandas as pd

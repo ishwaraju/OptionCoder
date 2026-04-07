@@ -48,6 +48,18 @@ class DBWriter:
         except Exception as e:
             print("DB bulk execute error:", e)
 
+    def _fetch_all(self, query, params=None):
+        if not self.enabled or not self.conn:
+            return []
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, params or ())
+                return cur.fetchall()
+        except Exception as e:
+            print("DB fetch error:", e)
+            return []
+
     def insert_candle_1m(self, row):
         """
         row = (ts, instrument, open, high, low, close, volume)
@@ -173,3 +185,26 @@ class DBWriter:
             strike = EXCLUDED.strike;
         """
         self._execute(query, row)
+
+    def fetch_recent_candles_5m(self, instrument, limit=24):
+        query = """
+        SELECT ts, open, high, low, close, volume
+        FROM candles_5m
+        WHERE instrument = %s
+          AND DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
+        ORDER BY ts ASC
+        LIMIT %s;
+        """
+        rows = self._fetch_all(query, (instrument, limit))
+        return [
+            {
+                "time": row[0],
+                "close_time": None,
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": int(row[5]),
+            }
+            for row in rows
+        ]

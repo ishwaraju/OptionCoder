@@ -12,6 +12,8 @@ class TradeLogger:
     def __init__(self):
         self.signal_file = "data/signals.csv"
         self.trade_file = "data/trades.csv"
+        self.decision_file = "data/decision_audit.csv"
+        self.summary_file = f"data/session_summary_{datetime.now().strftime('%Y%m%d')}.txt"
 
         # Create files if not exist
         self.create_file_if_not_exists(self.signal_file, [
@@ -40,6 +42,24 @@ class TradeLogger:
             "target",
             "exit",
             "pnl"
+        ])
+
+        self.create_file_if_not_exists(self.decision_file, [
+            "time",
+            "instrument",
+            "price",
+            "signal",
+            "strike",
+            "score",
+            "confidence",
+            "regime",
+            "manual_guidance",
+            "signal_valid_till",
+            "blockers",
+            "cautions",
+            "score_factors",
+            "reason",
+            "strike_reason",
         ])
 
     def create_file_if_not_exists(self, file, headers):
@@ -101,3 +121,45 @@ class TradeLogger:
                 exit_price,
                 pnl
             ])
+
+    def log_decision(
+            self,
+            instrument,
+            price,
+            signal,
+            strike,
+            score,
+            confidence,
+            regime,
+            manual_guidance,
+            signal_valid_till,
+            blockers,
+            cautions,
+            score_factors,
+            reason,
+            strike_reason,
+    ):
+        with open(self.decision_file, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now(),
+                instrument,
+                price,
+                signal,
+                strike,
+                score,
+                confidence,
+                regime,
+                manual_guidance,
+                signal_valid_till,
+                blockers,
+                cautions,
+                score_factors,
+                reason,
+                strike_reason,
+            ])
+
+    def write_session_summary(self, summary_text):
+        os.makedirs(os.path.dirname(self.summary_file), exist_ok=True)
+        with open(self.summary_file, mode="w") as f:
+            f.write(summary_text)

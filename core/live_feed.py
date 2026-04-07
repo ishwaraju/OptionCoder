@@ -25,6 +25,8 @@ class LiveFeed:
         self.ws = None
         self.reconnect_delay = 5
         self.last_snapshot_time = 0
+        self.is_connected = False
+        self.last_tick_epoch = 0
 
         # Store OI ladder data
         self.ce_oi = {}
@@ -37,6 +39,8 @@ class LiveFeed:
     # =========================
     def on_open(self, ws):
         print("WebSocket Connected:", self.time_utils.current_time())
+        self.is_connected = True
+        self.reconnect_delay = 5
 
         # INDEX → Ticker
         ticker_msg = {
@@ -73,6 +77,7 @@ class LiveFeed:
             return
 
         security_id = data["security_id"]
+        self.last_tick_epoch = time.time()
 
         # INDEX
         if security_id == 13:
@@ -117,15 +122,18 @@ class LiveFeed:
                   "| Fut OI:", snapshot["oi"])
 
             # OI Ladder Print
-            print("\n----- OI LADDER -----")
-            strikes = sorted(set(list(self.ce_oi.keys()) + list(self.pe_oi.keys())))
+            if Config.CONSOLE_MODE == "DETAILED":
+                print("\n----- OI LADDER -----")
+                strikes = sorted(set(list(self.ce_oi.keys()) + list(self.pe_oi.keys())))
 
-            for strike in strikes:
-                ce_oi = self.ce_oi.get(strike, 0)
-                pe_oi = self.pe_oi.get(strike, 0)
-                print(f"{strike} | CE OI: {ce_oi} | PE OI: {pe_oi}")
+                for strike in strikes:
+                    ce_oi = self.ce_oi.get(strike, 0)
+                    pe_oi = self.pe_oi.get(strike, 0)
+                    print(f"{strike} | CE OI: {ce_oi} | PE OI: {pe_oi}")
 
-            print("---------------------\n")
+                print("---------------------\n")
+            else:
+                print("Tracked Strikes:", len(set(list(self.ce_oi.keys()) + list(self.pe_oi.keys()))))
 
             self.last_snapshot_time = time.time()
 
@@ -139,15 +147,18 @@ class LiveFeed:
     # Close + Reconnect
     # =========================
     def on_close(self, ws, close_status_code, close_msg):
+        self.is_connected = False
         print("WebSocket Closed. Reconnecting in", self.reconnect_delay, "sec")
         time.sleep(self.reconnect_delay)
         self.reconnect_delay = min(self.reconnect_delay * 2, 60)
 
         if self.time_utils.is_market_open():
             self.connect()
-        else:
+        elif Config.AUTO_SWITCH_TO_MOCK_AFTER_CLOSE or Config.TEST_MODE:
             print("Market Closed - Switching to MOCK feed")
             self.start_mock_feed()
+        else:
+            print("Market Closed - Live feed stopped")
 
     # =========================
     # Connect
@@ -159,8 +170,11 @@ class LiveFeed:
             return
 
         if not self.time_utils.is_market_open():
-            print("Market Closed - Using MOCK feed")
-            self.start_mock_feed()
+            if Config.AUTO_SWITCH_TO_MOCK_AFTER_CLOSE:
+                print("Market Closed - Using MOCK feed")
+                self.start_mock_feed()
+            else:
+                print("Market Closed - Live feed not started")
             return
 
         self.ws = websocket.WebSocketApp(
@@ -220,5 +234,7 @@ class LiveFeed:
         snapshot["pe_oi_ladder"] = self.pe_oi
         snapshot["ce_volume_ladder"] = self.ce_volume
         snapshot["pe_volume_ladder"] = self.pe_volume
+        snapshot["feed_connected"] = self.is_connected
+        snapshot["last_tick_epoch"] = self.last_tick_epoch
 
         return snapshot

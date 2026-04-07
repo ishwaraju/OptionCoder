@@ -1,4 +1,5 @@
 import time
+from datetime import timedelta
 from utils.time_utils import TimeUtils
 from config import Config
 from core.candle_manager import CandleManager
@@ -13,6 +14,8 @@ from core.pressure_analyzer import PressureAnalyzer
 from strategy.breakout_strategy import BreakoutStrategy
 from strategy.strike_selector import StrikeSelector
 from db.writer import DBWriter
+from utils.logger import TradeLogger
+from utils.notifier import Notifier
 
 
 class EventEngine:
@@ -36,6 +39,8 @@ class EventEngine:
         # DB
         self.instrument = Config.SYMBOL
         self.db = DBWriter()
+        self.audit_logger = TradeLogger()
+        self.notifier = Notifier()
 
         # Timers
         self.last_option_fetch = 0
@@ -46,6 +51,41 @@ class EventEngine:
         self.prev_total_oi = None
 
         self.option_data = None
+        self.feed_stale = False
+        self.last_stale_log = 0
+        self.reconnect_cooldown_remaining = 0
+        self.signal_cooldown_remaining = 0
+        self.last_emitted_signal = None
+        self.session_decisions = []
+        self.day_high_5m = None
+        self.day_low_5m = None
+        self.opening_range_30_high = None
+        self.opening_range_30_low = None
+
+        self._restore_indicator_state()
+
+    def _restore_indicator_state(self):
+        if not self.db.enabled:
+            return
+
+        recent_candles = self.db.fetch_recent_candles_5m(
+            instrument=self.instrument,
+            limit=Config.STATE_RECOVERY_5M_BARS,
+        )
+        if not recent_candles:
+            return
+
+        for candle in recent_candles:
+            self.candle_manager.five_min_candles.append(dict(candle))
+            self.vwap.update(candle)
+            self.atr.update(candle)
+            self.volume.update(candle)
+            self.orb.add_candle(candle)
+
+        if not self.orb.is_orb_ready():
+            self.orb.calculate_orb()
+
+        print(f"Recovered {len(recent_candles)} historical 5m candles for indicator warmup")
 
     # =========================
     # DB Save Helpers
@@ -199,6 +239,8 @@ class EventEngine:
             # =========================
             if not self.time_utils.is_market_open() and not Config.TEST_MODE:
                 print("Market Closed:", self.time_utils.current_time())
+                if self.session_decisions:
+                    self._write_session_summary()
                 time.sleep(60)
                 continue
 
@@ -209,10 +251,36 @@ class EventEngine:
             price = live_data.get("price")
             futures_volume = live_data.get("futures_volume", 0)
             futures_oi = live_data.get("oi", 0)
+            data_age_seconds = live_data.get("data_age_seconds")
+            feed_connected = live_data.get("feed_connected", True)
 
             if price is None:
                 time.sleep(1)
                 continue
+
+            if (
+                    not Config.TEST_MODE
+                    and (
+                        not feed_connected
+                        or data_age_seconds is None
+                        or data_age_seconds > Config.LIVE_DATA_STALE_SECONDS
+                    )
+            ):
+                if not self.feed_stale:
+                    print("Live feed stale. Resetting open candles and waiting for fresh ticks...")
+                    self.candle_manager.reset_incomplete_candles()
+                    self.feed_stale = True
+                    self.last_stale_log = time.time()
+                elif time.time() - self.last_stale_log > 30:
+                    print("Live feed still stale. Skipping candle generation...")
+                    self.last_stale_log = time.time()
+                time.sleep(1)
+                continue
+
+            if self.feed_stale:
+                print("Live feed recovered. Resuming candle generation.")
+                self.feed_stale = False
+                self.reconnect_cooldown_remaining = Config.RECONNECT_COOLDOWN_BARS
 
             # Keep option chain fresh independently of 5m candle formation so
             # 1m OI snapshots can be saved with the latest CE/PE data.
@@ -246,6 +314,18 @@ class EventEngine:
                 if candle_5m:
                     print("\n========== New 5-min Candle ==========")
                     print(candle_5m)
+
+                    self.day_high_5m = candle_5m["high"] if self.day_high_5m is None else max(self.day_high_5m, candle_5m["high"])
+                    self.day_low_5m = candle_5m["low"] if self.day_low_5m is None else min(self.day_low_5m, candle_5m["low"])
+                    if candle_5m["time"].time() < self.time_utils._parse_clock("09:45"):
+                        self.opening_range_30_high = (
+                            candle_5m["high"] if self.opening_range_30_high is None
+                            else max(self.opening_range_30_high, candle_5m["high"])
+                        )
+                        self.opening_range_30_low = (
+                            candle_5m["low"] if self.opening_range_30_low is None
+                            else min(self.opening_range_30_low, candle_5m["low"])
+                        )
 
                     # Save 5m candle
                     self._safe_save_5m_candle(candle_5m)
@@ -291,6 +371,7 @@ class EventEngine:
                             atm=self.option_data.get("atm"),
                         )
 
+                    if Config.CONSOLE_MODE == "DETAILED":
                         print("\n===== OI LADDER =====")
                         print("Support:", oi_ladder_data["support"])
                         print("Resistance:", oi_ladder_data["resistance"])
@@ -316,58 +397,126 @@ class EventEngine:
                             orb_high, orb_low = self.orb.get_orb_levels()
 
                     # ===== Debug Prints =====
-                    print("Price:", price)
-                    print("VWAP:", vwap_value)
-                    print("ATR:", atr_value)
-                    print("Volume Signal:", volume_signal)
-                    print("OI Signal:", oi_signal)
-                    print("OI Bias:", oi_bias)
-                    print("ORB High:", orb_high)
-                    print("ORB Low:", orb_low)
-                    if pressure_metrics:
-                        print("Pressure Bias:", pressure_metrics["pressure_bias"])
-                        print("Near CE/PE Vol:", pressure_metrics["near_ce_volume"], "/", pressure_metrics["near_pe_volume"])
-                        print("Strongest CE/PE Strike:", pressure_metrics["strongest_ce_strike"], "/", pressure_metrics["strongest_pe_strike"])
+                    if Config.CONSOLE_MODE == "DETAILED":
+                        print("Price:", price)
+                        print("VWAP:", vwap_value)
+                        print("ATR:", atr_value)
+                        print("Volume Signal:", volume_signal)
+                        print("OI Signal:", oi_signal)
+                        print("OI Bias:", oi_bias)
+                        print("ORB High:", orb_high)
+                        print("ORB Low:", orb_low)
+                        if pressure_metrics:
+                            print("Pressure Bias:", pressure_metrics["pressure_bias"])
+                            print("Near CE/PE Vol:", pressure_metrics["near_ce_volume"], "/", pressure_metrics["near_pe_volume"])
+                            print("Strongest CE/PE Strike:", pressure_metrics["strongest_ce_strike"], "/", pressure_metrics["strongest_pe_strike"])
 
-                    if self.option_data:
-                        print(
-                            "Option Data Updated | PCR:",
-                            self.option_data.get("pcr"),
-                            "| CE IV:", self.option_data.get("ce_iv"),
-                            "| PE IV:", self.option_data.get("pe_iv")
-                        )
-                        print("PCR:", self.option_data.get("pcr"))
+                        if self.option_data:
+                            print(
+                                "Option Data Updated | PCR:",
+                                self.option_data.get("pcr"),
+                                "| CE IV:", self.option_data.get("ce_iv"),
+                                "| PE IV:", self.option_data.get("pe_iv")
+                            )
+                            print("PCR:", self.option_data.get("pcr"))
 
                     # ===== Strategy =====
+                    support = oi_ladder_data["support"] if oi_ladder_data else None
+                    resistance = oi_ladder_data["resistance"] if oi_ladder_data else None
+
                     signal, reason = self.strategy.generate_signal(
                         price=price,
                         orb_high=orb_high,
                         orb_low=orb_low,
                         vwap=vwap_value,
+                        atr=atr_value,
                         volume_signal=volume_signal,
                         oi_bias=oi_bias,
                         oi_trend=oi_ladder_data["trend"] if oi_ladder_data else None,
                         build_up=oi_ladder_data["build_up"] if oi_ladder_data else None,
+                        support=support,
+                        resistance=resistance,
                         can_trade=True if Config.TEST_MODE else self.time_utils.can_trade(),
                         buffer=buffer,
                         pressure_metrics=pressure_metrics,
+                        candle_high=candle_5m["high"],
+                        candle_low=candle_5m["low"],
+                        candle_close=candle_5m["close"],
+                        candle_open=candle_5m["open"],
+                        expiry=self.option_data.get("expiry") if self.option_data else None,
                     )
 
+                    if self.reconnect_cooldown_remaining > 0:
+                        signal = None
+                        reason = (
+                            f"Reconnect cooldown active ({self.reconnect_cooldown_remaining} bars left)"
+                            f" | score={self.strategy.last_score}"
+                        )
+                        self.reconnect_cooldown_remaining -= 1
+
+                    if signal and self.last_emitted_signal == signal and self.signal_cooldown_remaining > 0:
+                        signal = None
+                        reason = (
+                            f"Duplicate signal cooldown active ({self.signal_cooldown_remaining} bars left)"
+                            f" | score={self.strategy.last_score}"
+                        )
+                        self.signal_cooldown_remaining -= 1
+                    elif signal:
+                        self.last_emitted_signal = signal
+                        self.signal_cooldown_remaining = Config.SIGNAL_COOLDOWN_BARS
+                    elif self.signal_cooldown_remaining > 0:
+                        self.signal_cooldown_remaining -= 1
+
                     selected_strike = None
+                    strike_reason = None
                     if signal and self.option_data:
-                        selected_strike = self.strike_selector.select_strike(
+                        selected_strike, strike_reason = self.strike_selector.select_strike_with_reason(
                             price=price,
                             signal=signal,
                             volume_signal=volume_signal,
                             strategy_score=self.strategy.last_score,
                             pressure_metrics=pressure_metrics,
                         )
+                        selected_strike, strike_reason = self.strategy.expiry_rules.adjust_strike_choice(
+                            expiry_value=self.option_data.get("expiry"),
+                            signal=signal,
+                            strike=selected_strike,
+                            strike_reason=strike_reason,
+                            price=price,
+                            strategy_score=self.strategy.last_score,
+                            confidence=self.strategy.last_confidence,
+                        )
+
+                    score_factors_text = ", ".join(self.strategy.last_score_components)
+                    blockers_text = ", ".join(self.strategy.last_blockers)
+                    cautions_text = ", ".join(self.strategy.last_cautions)
+                    manual_guidance = self._get_manual_guidance(
+                        signal=signal,
+                        score=self.strategy.last_score,
+                        confidence=self.strategy.last_confidence,
+                        blockers=self.strategy.last_blockers,
+                        cautions=self.strategy.last_cautions,
+                    )
+                    signal_valid_till = (
+                        candle_5m["close_time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
+                        if signal and candle_5m.get("close_time") is not None
+                        else None
+                    )
+                    enriched_reason = reason
+                    if self.strategy.last_confidence:
+                        enriched_reason = f"{reason} | confidence={self.strategy.last_confidence} | regime={self.strategy.last_regime}"
+                    if blockers_text:
+                        enriched_reason += f" | blockers={blockers_text}"
+                    if cautions_text:
+                        enriched_reason += f" | cautions={cautions_text}"
+                    if strike_reason:
+                        enriched_reason += f" | strike_reason={strike_reason}"
 
                     self._safe_save_strategy_decision(
                         ts=candle_5m["time"],
                         price=price,
                         signal=signal,
-                        reason=reason,
+                        reason=enriched_reason,
                         volume_signal=volume_signal,
                         oi_bias=oi_bias,
                         oi_trend=oi_ladder_data["trend"] if oi_ladder_data else None,
@@ -383,8 +532,74 @@ class EventEngine:
                         strike=selected_strike,
                     )
 
-                    # ===== Signal Output =====
+                    self.audit_logger.log_decision(
+                        instrument=self.instrument,
+                        price=price,
+                        signal=signal or "NO_TRADE",
+                        strike=selected_strike,
+                        score=self.strategy.last_score,
+                        confidence=self.strategy.last_confidence,
+                        regime=self.strategy.last_regime,
+                        manual_guidance=manual_guidance,
+                        signal_valid_till=signal_valid_till,
+                        blockers=blockers_text,
+                        cautions=cautions_text,
+                        score_factors=score_factors_text,
+                        reason=reason,
+                        strike_reason=strike_reason,
+                    )
+                    self.session_decisions.append(
+                        {
+                            "time": candle_5m["time"],
+                            "signal": signal or "NO_TRADE",
+                            "score": self.strategy.last_score,
+                            "confidence": self.strategy.last_confidence,
+                            "regime": self.strategy.last_regime,
+                            "manual_guidance": manual_guidance,
+                            "blockers": blockers_text,
+                            "cautions": cautions_text,
+                        }
+                    )
+
+                    # ===== Decision Output =====
+                    print("\n============= DECISION =============")
+                    print("Time:", self.time_utils.current_time())
+                    print("Price:", price)
+                    print("Expiry Day Mode:", "ON" if self.strategy.last_is_expiry_day else "OFF")
+                    print("Regime:", self.strategy.last_regime)
+                    print("Strategy Score:", self.strategy.last_score)
+                    print("Confidence:", self.strategy.last_confidence)
+                    print("Decision Reason:", reason)
+                    print("Manual Guidance:", manual_guidance)
+                    if signal_valid_till is not None:
+                        print("Signal Valid Till:", signal_valid_till)
+                    print("Day High / Low:", self.day_high_5m, "/", self.day_low_5m)
+                    print("Opening 30m High / Low:", self.opening_range_30_high, "/", self.opening_range_30_low)
+                    if self.strategy.last_blockers:
+                        print("Blockers:", ", ".join(self.strategy.last_blockers))
+                    if self.strategy.last_cautions:
+                        print("Caution:", ", ".join(self.strategy.last_cautions))
+                    print(
+                        "Decision Line:",
+                        f"{signal or 'NO TRADE'} | score {self.strategy.last_score} | "
+                        f"conf {self.strategy.last_confidence} | regime {self.strategy.last_regime}"
+                    )
+
                     if signal and self.option_data:
+                        print("Action:", f"TRADE NOW: {signal}")
+                        print("Recommended Strike:", selected_strike)
+                        print("Strike Reason:", strike_reason)
+                        print("Execution Note:", f"Take {signal} at strike {selected_strike}")
+                        if signal_valid_till is not None:
+                            print("Signal Ageing:", f"Use within {Config.SIGNAL_VALIDITY_MINUTES} minutes")
+                        self.notifier.send_trade_notification(
+                            {
+                                "signal": signal,
+                                "strike": selected_strike,
+                                "confidence": self.strategy.last_confidence,
+                            }
+                        )
+
                         print("\n================ SIGNAL ================")
                         print("Time:", self.time_utils.current_time())
                         print("Signal:", signal)
@@ -399,9 +614,64 @@ class EventEngine:
                         print("Build-up:", oi_ladder_data["build_up"] if oi_ladder_data else None)
                         print("Pressure Bias:", pressure_metrics["pressure_bias"] if pressure_metrics else None)
                         print("Strategy Score:", self.strategy.last_score)
+                        print("Confidence:", self.strategy.last_confidence)
+                        print("Regime:", self.strategy.last_regime)
                         print("Score Factors:", ", ".join(self.strategy.last_score_components))
+                        if self.strategy.last_blockers:
+                            print("Blockers:", ", ".join(self.strategy.last_blockers))
+                        if self.strategy.last_cautions:
+                            print("Caution:", ", ".join(self.strategy.last_cautions))
                         print("Volume Signal:", volume_signal)
+                        print("Strike Reason:", strike_reason)
                         print("Reason:", reason)
                         print("========================================\n")
+                    else:
+                        print("Action: NO TRADE")
+                        if self.strategy.last_score_components:
+                            print("Context:", ", ".join(self.strategy.last_score_components))
+                        print("=======================================\n")
 
             time.sleep(1)
+
+    def _get_manual_guidance(self, signal, score, confidence, blockers, cautions):
+        if signal and confidence == "HIGH" and "far_from_vwap" not in cautions and "opposite_pressure" not in cautions:
+            return "ENTRY OK"
+        if signal and confidence in ["HIGH", "MEDIUM"] and ("far_from_vwap" in cautions or "near_resistance" in cautions or "near_support" in cautions):
+            return "AVOID CHASE"
+        if signal and confidence == "MEDIUM":
+            return "REDUCE SIZE"
+        if "opening_session" in cautions or "expiry_day_mode" in cautions:
+            return "WAIT"
+        if blockers:
+            return "HIGH RISK"
+        return "WAIT"
+
+    def _write_session_summary(self):
+        total = len(self.session_decisions)
+        if total == 0:
+            return
+
+        trade_signals = [d for d in self.session_decisions if d["signal"] in ["CE", "PE"]]
+        no_trade = [d for d in self.session_decisions if d["signal"] == "NO_TRADE"]
+        high_conf = [d for d in self.session_decisions if d["confidence"] == "HIGH"]
+        expiry_skips = [d for d in self.session_decisions if "expiry" in d["blockers"]]
+
+        summary_lines = [
+            f"Session Summary - {self.time_utils.today_str()}",
+            f"Instrument: {self.instrument}",
+            f"Total decisions: {total}",
+            f"Trade signals: {len(trade_signals)}",
+            f"No-trade decisions: {len(no_trade)}",
+            f"High-confidence decisions: {len(high_conf)}",
+            f"Expiry filter skips: {len(expiry_skips)}",
+        ]
+
+        if self.session_decisions:
+            summary_lines.append("Recent decisions:")
+            for decision in self.session_decisions[-5:]:
+                summary_lines.append(
+                    f"{decision['time']} | {decision['signal']} | {decision['manual_guidance']} | "
+                    f"score={decision['score']} | conf={decision['confidence']} | regime={decision['regime']}"
+                )
+
+        self.audit_logger.write_session_summary("\n".join(summary_lines) + "\n")

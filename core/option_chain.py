@@ -25,6 +25,35 @@ class OptionChain:
         self.option_chain_data = None
         self.underlying_price = None
 
+    def _post_json(self, url, payload, label):
+        last_error = None
+
+        for attempt in range(1, Config.OPTION_CHAIN_RETRIES + 1):
+            try:
+                response = requests.post(
+                    url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=Config.OPTION_CHAIN_TIMEOUT,
+                )
+
+                if response.status_code == 200:
+                    return response
+
+                last_error = f"{label} API Failed: {response.status_code}"
+                print("ERROR:", last_error, f"(attempt {attempt}/{Config.OPTION_CHAIN_RETRIES})")
+            except Exception as e:
+                last_error = e
+                print(
+                    f"ERROR: {label} API Exception (attempt {attempt}/{Config.OPTION_CHAIN_RETRIES}):",
+                    e,
+                )
+
+            if attempt < Config.OPTION_CHAIN_RETRIES:
+                time.sleep(attempt)
+
+        return None
+
     # -------------------------------------------------
     # Get nearest weekly expiry
     # -------------------------------------------------
@@ -38,10 +67,8 @@ class OptionChain:
         }
 
         try:
-            response = requests.post(self.expiry_url, headers=self.headers, json=payload)
-
-            if response.status_code != 200:
-                print("ERROR: Expiry API Failed:", response.status_code)
+            response = self._post_json(self.expiry_url, payload, "Expiry")
+            if response is None:
                 return None
 
             data = response.json()["data"]
@@ -87,10 +114,8 @@ class OptionChain:
         }
 
         try:
-            response = requests.post(self.base_url, headers=self.headers, json=payload)
-
-            if response.status_code != 200:
-                print("ERROR: Option Chain API Failed:", response.status_code)
+            response = self._post_json(self.base_url, payload, "Option Chain")
+            if response is None:
                 return None
 
             data = response.json()["data"]
@@ -183,6 +208,7 @@ class OptionChain:
 
             result = {
                 "time": self.time_utils.current_time(),
+                "expiry": expiry,
                 "underlying_price": self.underlying_price,
                 "atm": atm,
                 "pcr": round(pcr, 2),

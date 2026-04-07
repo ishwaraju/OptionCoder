@@ -145,6 +145,16 @@ class CandleManager:
             snapshot["close_time"] = snapshot["time"] + __import__("datetime").timedelta(minutes=self.timeframe)
         return snapshot
 
+    def reset_incomplete_candles(self):
+        """
+        Drop in-progress candles when the live feed goes stale so we do not
+        stretch flat/stale prices across reconnect gaps.
+        """
+        self.current_minute = None
+        self.current_1m_candle = None
+        self.current_5m_candle = None
+        self.last_5m_slot = None
+
     # =========================
     # Getters
     # =========================
