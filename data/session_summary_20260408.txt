@@ -1,0 +1,13 @@
+Session Summary - 2026-04-08
+Instrument: NIFTY
+Total decisions: 54
+Trade signals: 1
+No-trade decisions: 53
+High-confidence decisions: 0
+Expiry filter skips: 0
+Recent decisions:
+2026-04-08 14:40:00+05:30 | NO_TRADE | HIGH RISK | score=73 | conf=MEDIUM | regime=TRENDING
+2026-04-08 14:45:00+05:30 | NO_TRADE | HIGH RISK | score=53 | conf=LOW | regime=TRENDING
+2026-04-08 14:50:00+05:30 | NO_TRADE | HIGH RISK | score=43 | conf=LOW | regime=TRENDING
+2026-04-08 14:55:00+05:30 | NO_TRADE | HIGH RISK | score=43 | conf=LOW | regime=NO_TRADE_WINDOW
+2026-04-08 15:00:00+05:30 | NO_TRADE | HIGH RISK | score=58 | conf=LOW | regime=NO_TRADE_WINDOW
