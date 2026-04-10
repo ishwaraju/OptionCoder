@@ -1,21 +1,28 @@
+from collections import deque
+from datetime import timedelta
+
 from config import Config
 from utils.time_utils import TimeUtils
 
 
 class CandleManager:
+    MAX_1M_HISTORY = 600
+    MAX_5M_HISTORY = 300
+
     def __init__(self):
         self.time_utils = TimeUtils()
         self.timeframe = Config.VWAP_TIMEFRAME  # default 5 min
 
-        # 1-min candle
+        # In-progress state
         self.current_minute = None
         self.current_1m_candle = None
-        self.minute_candles = []
-
-        # 5-min candle
         self.current_5m_candle = None
-        self.five_min_candles = []
         self.last_5m_slot = None
+        self.last_tick_time = None
+
+        # Bounded history buffers
+        self.minute_candles = deque(maxlen=self.MAX_1M_HISTORY)
+        self.five_min_candles = deque(maxlen=self.MAX_5M_HISTORY)
 
     # =========================
     # Internal Helpers
@@ -27,44 +34,72 @@ class CandleManager:
     def _next_minute_slot(self, dt):
         """Return next minute slot timestamp."""
         base = self._minute_slot(dt)
-        return base.replace(minute=base.minute) + __import__("datetime").timedelta(minutes=1)
+        return base + timedelta(minutes=1)
 
     def _get_5min_slot(self, dt):
         minute = (dt.minute // self.timeframe) * self.timeframe
         return dt.replace(minute=minute, second=0, microsecond=0)
+
+    def _start_1m_candle(self, minute_dt, price, volume):
+        minute_key = minute_dt.strftime("%Y-%m-%d %H:%M")
+        self.current_minute = minute_key
+        self.current_1m_candle = {
+            "datetime": minute_dt,
+            "close_time": None,
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": volume,
+            "tick_count": 1,
+        }
+        return self.current_1m_candle
+
+    def _finalize_current_1m(self, next_minute_dt):
+        if not self.current_1m_candle:
+            return None
+
+        completed = dict(self.current_1m_candle)
+        completed["close_time"] = next_minute_dt
+        self.minute_candles.append(completed)
+        return completed
+
+    def _start_5m_candle(self, slot, minute_candle):
+        self.current_5m_candle = {
+            "time": slot,
+            "close_time": None,
+            "open": minute_candle["open"],
+            "high": minute_candle["high"],
+            "low": minute_candle["low"],
+            "close": minute_candle["close"],
+            "volume": minute_candle["volume"],
+            "tick_count": minute_candle.get("tick_count", 0),
+        }
+        self.last_5m_slot = slot
+        return self.current_5m_candle
+
+    def ingest_completed_5m(self, candle):
+        self.five_min_candles.append(dict(candle))
 
     # =========================
     # Tick → 1-min candle
     # =========================
     def add_tick(self, price, volume):
         now = self.time_utils.now_ist()
+        self.last_tick_time = now
         minute_dt = self._minute_slot(now)
-        minute_key = minute_dt.strftime("%Y-%m-%d %H:%M")
 
         # New minute candle
-        if self.current_minute != minute_key:
-            if self.current_1m_candle:
-                # mark completed candle close time as next minute slot
-                self.current_1m_candle["close_time"] = minute_dt
-                self.minute_candles.append(self.current_1m_candle)
-
-            self.current_minute = minute_key
-            self.current_1m_candle = {
-                "datetime": minute_dt,       # candle start time
-                "close_time": None,          # filled when candle closes
-                "open": price,
-                "high": price,
-                "low": price,
-                "close": price,
-                "volume": volume
-            }
-            return self.current_1m_candle, True
+        if self.current_minute != minute_dt.strftime("%Y-%m-%d %H:%M"):
+            self._finalize_current_1m(minute_dt)
+            return self._start_1m_candle(minute_dt, price, volume), True
 
         # Update current candle
         self.current_1m_candle["high"] = max(self.current_1m_candle["high"], price)
         self.current_1m_candle["low"] = min(self.current_1m_candle["low"], price)
         self.current_1m_candle["close"] = price
         self.current_1m_candle["volume"] += volume
+        self.current_1m_candle["tick_count"] += 1
 
         return self.current_1m_candle, False
 
@@ -77,16 +112,7 @@ class CandleManager:
 
         # First 5-min candle
         if self.current_5m_candle is None:
-            self.current_5m_candle = {
-                "time": slot,  # 5m start time
-                "close_time": None,
-                "open": minute_candle["open"],
-                "high": minute_candle["high"],
-                "low": minute_candle["low"],
-                "close": minute_candle["close"],
-                "volume": minute_candle["volume"]
-            }
-            self.last_5m_slot = slot
+            self._start_5m_candle(slot, minute_candle)
             return None
 
         # Same 5-min slot → update
@@ -95,24 +121,16 @@ class CandleManager:
             self.current_5m_candle["low"] = min(self.current_5m_candle["low"], minute_candle["low"])
             self.current_5m_candle["close"] = minute_candle["close"]
             self.current_5m_candle["volume"] += minute_candle["volume"]
+            self.current_5m_candle["tick_count"] += minute_candle.get("tick_count", 0)
             return None
 
         # 5-min candle completed
-        completed = self.current_5m_candle
+        completed = dict(self.current_5m_candle)
         completed["close_time"] = slot
-        self.five_min_candles.append(completed)
+        self.ingest_completed_5m(completed)
 
         # Start new 5-min candle
-        self.current_5m_candle = {
-            "time": slot,
-            "close_time": None,
-            "open": minute_candle["open"],
-            "high": minute_candle["high"],
-            "low": minute_candle["low"],
-            "close": minute_candle["close"],
-            "volume": minute_candle["volume"]
-        }
-        self.last_5m_slot = slot
+        self._start_5m_candle(slot, minute_candle)
 
         return completed
 
@@ -142,7 +160,7 @@ class CandleManager:
 
         snapshot = dict(self.current_5m_candle)
         if snapshot["close_time"] is None:
-            snapshot["close_time"] = snapshot["time"] + __import__("datetime").timedelta(minutes=self.timeframe)
+            snapshot["close_time"] = snapshot["time"] + timedelta(minutes=self.timeframe)
         return snapshot
 
     def reset_incomplete_candles(self):
@@ -164,7 +182,7 @@ class CandleManager:
         return None
 
     def get_all_1min_candles(self):
-        return self.minute_candles
+        return list(self.minute_candles)
 
     def get_last_5min_candle(self):
         if self.five_min_candles:
@@ -172,4 +190,19 @@ class CandleManager:
         return None
 
     def get_all_5min_candles(self):
-        return self.five_min_candles
+        return list(self.five_min_candles)
+
+    def get_last_candle_time(self):
+        """Get the timestamp of the last completed 1m candle"""
+        if self.minute_candles:
+            return self.minute_candles[-1]["datetime"]
+        return None
+
+    def add_historical_candle(self, candle):
+        """Add a historical candle (for backfill) without affecting current state"""
+        if "datetime" not in candle:
+            return None
+
+        snapshot = dict(candle)
+        self.minute_candles.append(snapshot)
+        return snapshot

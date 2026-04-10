@@ -51,7 +51,36 @@ class Notifier:
         signal = trade_data.get("signal")
         strike = trade_data.get("strike")
         confidence = trade_data.get("confidence")
+        signal_type = trade_data.get("signal_type")
+        grade = trade_data.get("signal_grade")
         message = f"TRADE NOW {signal} | strike={strike} | confidence={confidence}"
+        if signal_type:
+            message += f" | type={signal_type}"
+        if grade:
+            message += f" | grade={grade}"
+        self.send_alert(message)
+
+    def send_entry_trigger_notification(self, trigger_data):
+        """Send immediate 1-minute entry trigger notification"""
+        if not self.enabled:
+            return
+
+        signal = trigger_data.get("signal")
+        strike = trigger_data.get("strike")
+        confidence = trigger_data.get("confidence")
+        signal_type = trigger_data.get("signal_type")
+        signal_grade = trigger_data.get("signal_grade")
+        price = trigger_data.get("price")
+        trigger_price = trigger_data.get("trigger_price")
+
+        message = f"1M ENTRY TRIGGER {signal} | strike={strike} | price={price} | confidence={confidence}"
+        if signal_type:
+            message += f" | type={signal_type}"
+        if signal_grade:
+            message += f" | grade={signal_grade}"
+        if trigger_price is not None:
+            message += f" | trigger={trigger_price}"
+
         self.send_alert(message)
     
     def send_error_alert(self, error_message):
@@ -59,3 +88,34 @@ class Notifier:
         if not self.enabled:
             return
         self.send_alert(f"ERROR: {error_message}")
+    
+    def send_strategy_decision(self, decision_data):
+        """Send strategy decision notification"""
+        if not self.enabled:
+            return
+        
+        signal = decision_data.get("signal", "NO_TRADE")
+        score = decision_data.get("score")
+        confidence = decision_data.get("confidence")
+        regime = decision_data.get("regime")
+        price = decision_data.get("price")
+        reason = decision_data.get("reason")
+        manual_guidance = decision_data.get("manual_guidance")
+        blockers = decision_data.get("blockers")
+        cautions = decision_data.get("cautions")
+        
+        message = f"STRATEGY DECISION\n"
+        message += f"Signal: {signal}\n"
+        message += f"Price: {price}\n"
+        message += f"Score: {score}\n"
+        message += f"Confidence: {confidence}\n"
+        message += f"Regime: {regime}\n"
+        message += f"Reason: {reason}\n"
+        message += f"Guidance: {manual_guidance}"
+        
+        if blockers:
+            message += f"\nBlockers: {blockers}"
+        if cautions:
+            message += f"\nCautions: {cautions}"
+            
+        self.send_alert(message)

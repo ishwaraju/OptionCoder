@@ -6,14 +6,16 @@ Saves signals and trades to CSV
 import csv
 import os
 from datetime import datetime
+import pytz
 
 
 class TradeLogger:
     def __init__(self):
+        self.ist = pytz.timezone('Asia/Kolkata')
         self.signal_file = "data/signals.csv"
         self.trade_file = "data/trades.csv"
         self.decision_file = "data/decision_audit.csv"
-        self.summary_file = f"data/session_summary_{datetime.now().strftime('%Y%m%d')}.txt"
+        self.summary_file = f"data/session_summary_{self._now_ist().strftime('%Y%m%d')}.txt"
 
         # Create files if not exist
         self.create_file_if_not_exists(self.signal_file, [
@@ -71,6 +73,9 @@ class TradeLogger:
                 writer = csv.writer(f)
                 writer.writerow(headers)
 
+    def _now_ist(self):
+        return datetime.now(self.ist)
+
     def log_signal(
             self,
             signal,
@@ -91,7 +96,7 @@ class TradeLogger:
         with open(self.signal_file, mode="a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                datetime.now(),
+                self._now_ist(),
                 signal,
                 strike,
                 price,
@@ -112,7 +117,7 @@ class TradeLogger:
         with open(self.trade_file, mode="a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                datetime.now(),
+                self._now_ist(),
                 signal,
                 strike,
                 entry,
@@ -142,7 +147,7 @@ class TradeLogger:
         with open(self.decision_file, mode="a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                datetime.now(),
+                self._now_ist(),
                 instrument,
                 price,
                 signal,

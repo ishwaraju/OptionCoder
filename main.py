@@ -4,14 +4,19 @@ from core.option_chain import OptionChain
 from engine.event_engine import EventEngine
 from config import Config
 from dhanhq import dhanhq
+from utils.runtime_watchdog import RuntimeWatchdog
 import time
 import pandas as pd
 import warnings
 import os
+import sys
+import requests
 
 warnings.simplefilter(action='ignore', category=pd.errors.DtypeWarning)
 
 FUTURE_ID_FILE = "data/nifty_future_id.txt"
+HEARTBEAT_FILE = "data/runtime_heartbeat.json"
+WATCHDOG_STATE_FILE = "data/watchdog_state.json"
 
 
 # ===============================
@@ -70,6 +75,28 @@ def get_nifty_future_security_id():
 # ===============================
 def generate_strikes(atm, step=50, count=5):
     return [atm + i * step for i in range(-count, count + 1)]
+
+
+def send_watchdog_telegram(message):
+    if not (
+            Config.ENABLE_ALERTS
+            and Config.TELEGRAM_ENABLED
+            and Config.TELEGRAM_BOT_TOKEN
+            and Config.TELEGRAM_CHAT_ID
+    ):
+        return
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": Config.TELEGRAM_CHAT_ID,
+                "text": message,
+            },
+            timeout=5,
+        )
+    except Exception as exc:
+        print(f"[WATCHDOG] Telegram alert failed: {exc}")
 
 
 # ===============================
@@ -164,6 +191,43 @@ def main():
 
     print("Total Instruments Subscribed:", len(instruments))
 
+    watchdog = RuntimeWatchdog(
+        heartbeat_file=HEARTBEAT_FILE,
+        stale_after_seconds=Config.WATCHDOG_STALE_SECONDS,
+        check_interval=Config.WATCHDOG_CHECK_INTERVAL,
+        state_file=WATCHDOG_STATE_FILE,
+        max_restarts=Config.WATCHDOG_MAX_RESTARTS,
+        restart_window_seconds=Config.WATCHDOG_RESTART_WINDOW_SECONDS,
+    )
+
+    def restart_process(age, payload):
+        can_restart, recent_restarts = watchdog.can_restart_now()
+        message = (
+            f"[WATCHDOG] Heartbeat stale for {age:.1f}s. "
+            f"Recent restarts in window: {recent_restarts}/{Config.WATCHDOG_MAX_RESTARTS}. "
+            f"Last payload: {payload}"
+        )
+        send_watchdog_telegram(message)
+
+        if not can_restart:
+            print("\n[WATCHDOG] Restart limit reached. Not restarting automatically.")
+            print(f"[WATCHDOG] Last payload: {payload}")
+            watchdog.touch({"phase": "watchdog_restart_limit_reached", "payload": payload})
+            return
+
+        restart_count = watchdog.record_restart({"age_seconds": age, "payload": payload})
+        print(
+            f"\n[WATCHDOG] Heartbeat stale for {age:.1f}s. Restarting process."
+        )
+        print(f"[WATCHDOG] Restart count in active window: {restart_count}/{Config.WATCHDOG_MAX_RESTARTS}")
+        print(f"[WATCHDOG] Last payload: {payload}")
+        time.sleep(2)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    if Config.ENABLE_WATCHDOG:
+        watchdog.touch({"phase": "boot"})
+        watchdog.start(restart_process)
+
     # Step 3 - Start WebSocket
     print("Starting WebSocket...")
     live_feed = LiveFeed(instruments)
@@ -173,7 +237,7 @@ def main():
 
     # Step 4 - Start Event Engine
     print("Initializing Event Engine...")
-    engine = EventEngine(live_feed)
+    engine = EventEngine(live_feed, watchdog=watchdog if Config.ENABLE_WATCHDOG else None)
     print("Running Event Engine...")
     engine.run()
 

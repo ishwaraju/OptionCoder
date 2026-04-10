@@ -61,6 +61,16 @@ Replay a specific decision by time match:
 python3 /Users/ishwar/Documents/OptionCoder/tools/replay_decision.py "2026-04-06 12:25"
 ```
 
+Reload one trading day of intraday candles from Dhan historical API into `candles_1m` and `candles_5m`:
+```bash
+.venv/bin/python /Users/ishwar/Documents/OptionCoder/tools/reload_intraday_day.py --date YYYY-MM-DD --replace-day
+```
+
+Example:
+```bash
+.venv/bin/python /Users/ishwar/Documents/OptionCoder/tools/reload_intraday_day.py --date 2026-04-08 --replace-day
+```
+
 ## Decision Operations
 
 Use compact console output for live trading:

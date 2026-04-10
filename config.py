@@ -97,12 +97,21 @@ class Config:
     ORB_END = os.getenv('ORB_END', '09:30')
 
     # ==============================
+    # BOT SHUTDOWN SETTINGS (IST)
+    # ==============================
+    BOT_SHUTDOWN_TIME = os.getenv('BOT_SHUTDOWN_TIME', '15:40')  # 3:40 PM IST
+    AUTO_SYSTEM_SHUTDOWN = os.getenv('AUTO_SYSTEM_SHUTDOWN', 'True').lower() == 'true'
+    SHUTDOWN_GRACE_PERIOD = int(os.getenv('SHUTDOWN_GRACE_PERIOD', '300'))  # 5 minutes grace period
+    SYSTEM_SHUTDOWN_DELAY = int(os.getenv('SYSTEM_SHUTDOWN_DELAY', '60'))  # 1 minute after bot shutdown
+
+    # ==============================
     # DATA FETCH SETTINGS
     # ==============================
     VWAP_TIMEFRAME = int(os.getenv('VWAP_TIMEFRAME', '5'))
     OI_FETCH_INTERVAL = int(os.getenv('OI_FETCH_INTERVAL', '300'))  # seconds
     PRICE_FETCH_INTERVAL = int(os.getenv('PRICE_FETCH_INTERVAL', '5'))
     LIVE_DATA_STALE_SECONDS = int(os.getenv('LIVE_DATA_STALE_SECONDS', '8'))
+    STALE_FEED_FORCE_RECONNECT_SECONDS = int(os.getenv('STALE_FEED_FORCE_RECONNECT_SECONDS', '30'))
     AUTO_SWITCH_TO_MOCK_AFTER_CLOSE = os.getenv('AUTO_SWITCH_TO_MOCK_AFTER_CLOSE', 'False').lower() == 'true'
     SIGNAL_COOLDOWN_BARS = int(os.getenv('SIGNAL_COOLDOWN_BARS', '2'))
     RECONNECT_COOLDOWN_BARS = int(os.getenv('RECONNECT_COOLDOWN_BARS', '2'))
@@ -110,6 +119,33 @@ class Config:
     OPTION_CHAIN_RETRIES = int(os.getenv('OPTION_CHAIN_RETRIES', '3'))
     STATE_RECOVERY_5M_BARS = int(os.getenv('STATE_RECOVERY_5M_BARS', '24'))
     SIGNAL_VALIDITY_MINUTES = int(os.getenv('SIGNAL_VALIDITY_MINUTES', '4'))
+    ENABLE_1M_TRIGGER = os.getenv('ENABLE_1M_TRIGGER', 'True').lower() == 'true'
+    ENTRY_TRIGGER_VALIDITY_MINUTES = int(os.getenv('ENTRY_TRIGGER_VALIDITY_MINUTES', '2'))
+    ENTRY_TRIGGER_MIN_BODY = int(os.getenv('ENTRY_TRIGGER_MIN_BODY', '5'))
+    ALLOW_CONTINUATION_ENTRY = os.getenv('ALLOW_CONTINUATION_ENTRY', 'False').lower() == 'true'
+
+    # ==============================
+    # SPREAD FILTER SETTINGS (Tuned for Option Buyer)
+    # ==============================
+    MAX_SPREAD_PERCENT = float(os.getenv('MAX_SPREAD_PERCENT', '7.0'))  # Increased from 5.0 to 7.0
+    MIN_BID_QUANTITY = int(os.getenv('MIN_BID_QUANTITY', '50'))  # Reduced from 100 to 50
+    MIN_ASK_QUANTITY = int(os.getenv('MIN_ASK_QUANTITY', '50'))  # Reduced from 100 to 50
+    MIN_SPREAD_RUPEES = float(os.getenv('MIN_SPREAD_RUPEES', '0.3'))  # Reduced from 0.5 to 0.3
+
+    # ==============================
+    # OI/QUOTE CONFIRMATION SETTINGS (Tuned for Option Buyer)
+    # ==============================
+    MIN_OI_CHANGE_PERCENT = float(os.getenv('MIN_OI_CHANGE_PERCENT', '8.0'))  # Reduced from 10.0 to 8.0
+    MIN_VOLUME_THRESHOLD = int(os.getenv('MIN_VOLUME_THRESHOLD', '800'))  # Reduced from 1000 to 800
+    MAX_QUOTE_AGE_SECONDS = int(os.getenv('MAX_QUOTE_AGE_SECONDS', '45'))  # Increased from 30 to 45
+    OI_CONFIRMATION_WINDOW = int(os.getenv('OI_CONFIRMATION_WINDOW', '5'))  # Increased from 3 to 5
+
+    # ==============================
+    # MINIMUM SCORE THRESHOLD (Tuned for Option Buyer)
+    # ==============================
+    MIN_SCORE_THRESHOLD = float(os.getenv('MIN_SCORE_THRESHOLD', '55.0'))  # Reduced from 60 to 55
+    MIN_HIGH_QUALITY_SCORE = float(os.getenv('MIN_HIGH_QUALITY_SCORE', '65.0'))  # Reduced from 70 to 65
+    AGGRESSIVE_MODE = os.getenv('AGGRESSIVE_MODE', 'False').lower() == 'true'
 
     # ==============================
     # DATABASE SETTINGS (PostgreSQL)
@@ -136,6 +172,11 @@ class Config:
     TELEGRAM_ENABLED = os.getenv('TELEGRAM_ENABLED', 'False').lower() == 'true'
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
     TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
+    ENABLE_WATCHDOG = os.getenv('ENABLE_WATCHDOG', 'True').lower() == 'true'
+    WATCHDOG_STALE_SECONDS = int(os.getenv('WATCHDOG_STALE_SECONDS', '90'))
+    WATCHDOG_CHECK_INTERVAL = int(os.getenv('WATCHDOG_CHECK_INTERVAL', '10'))
+    WATCHDOG_MAX_RESTARTS = int(os.getenv('WATCHDOG_MAX_RESTARTS', '5'))
+    WATCHDOG_RESTART_WINDOW_SECONDS = int(os.getenv('WATCHDOG_RESTART_WINDOW_SECONDS', '1800'))
 
     # ==============================
     # VALIDATION
