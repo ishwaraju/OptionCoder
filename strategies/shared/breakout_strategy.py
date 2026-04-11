@@ -419,7 +419,7 @@ class BreakoutStrategy:
         reversal_regime_ok = regime in ["RANGING", "CHOPPY"]
 
         trade_start = self.time_utils._parse_clock(Config.TRADE_START_TIME)
-        current_now = self.time_utils.current_time()
+        current_now = candle_time.time() if candle_time is not None else self.time_utils.current_time()
         opening_session = trade_start <= current_now < self.time_utils._parse_clock("09:45")
         opening_drive_window = trade_start <= current_now < self.time_utils._parse_clock("09:40")
         time_regime = self._derive_time_regime(current_now)

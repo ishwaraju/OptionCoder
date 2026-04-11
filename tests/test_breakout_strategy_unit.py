@@ -92,6 +92,7 @@ def test_allows_medium_score_continuation_follow_through_for_bullish_setup():
         candle_close=23875,
         candle_open=23866,
         candle_tick_count=5,
+        candle_time=datetime(2026, 4, 10, 10, 20),
     )
 
     assert signal == "CE"
