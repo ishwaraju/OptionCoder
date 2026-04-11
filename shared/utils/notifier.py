@@ -93,38 +93,6 @@ class Notifier:
             return
         self.send_alert(f"ERROR: {error_message}")
     
-    def send_strategy_decision(self, decision_data):
-        """Send strategy decision notification"""
-        if not self.enabled:
-            return
-        
-        instrument = decision_data.get("instrument")
-        signal = decision_data.get("signal", "NO_TRADE")
-        score = decision_data.get("score")
-        confidence = decision_data.get("confidence")
-        regime = decision_data.get("regime")
-        price = decision_data.get("price")
-        reason = decision_data.get("reason")
-        manual_guidance = decision_data.get("manual_guidance")
-        blockers = decision_data.get("blockers")
-        cautions = decision_data.get("cautions")
-        
-        message = f"{instrument} | STRATEGY DECISION\n" if instrument else "STRATEGY DECISION\n"
-        message += f"Signal: {signal}\n"
-        message += f"Price: {price}\n"
-        message += f"Score: {score}\n"
-        message += f"Confidence: {confidence}\n"
-        message += f"Regime: {regime}\n"
-        message += f"Reason: {reason}\n"
-        message += f"Guidance: {manual_guidance}"
-        
-        if blockers:
-            message += f"\nBlockers: {blockers}"
-        if cautions:
-            message += f"\nCautions: {cautions}"
-            
-        self.send_alert(message)
-
     def send_trade_monitor_update(self, monitor_data):
         """Send manual trade monitor guidance update."""
         if not self.enabled:

@@ -1,6 +1,7 @@
 BEGIN;
 
 DROP TABLE IF EXISTS trade_monitor_events_1m CASCADE;
+DROP TABLE IF EXISTS signals_issued CASCADE;
 DROP TABLE IF EXISTS strategy_decisions_5m CASCADE;
 DROP TABLE IF EXISTS option_band_snapshots_1m CASCADE;
 DROP TABLE IF EXISTS oi_snapshots_1m CASCADE;
@@ -148,6 +149,27 @@ CREATE TABLE strategy_decisions_5m (
   UNIQUE (ts, instrument)
 );
 
+CREATE TABLE signals_issued (
+  id BIGSERIAL PRIMARY KEY,
+  ts TIMESTAMPTZ NOT NULL,
+  instrument TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  price NUMERIC(12,2),
+  strike INTEGER,
+  strategy_score INTEGER,
+  signal_quality TEXT,
+  setup_type TEXT,
+  tradability TEXT,
+  time_regime TEXT,
+  oi_mode TEXT,
+  reason TEXT,
+  telegram_sent BOOLEAN NOT NULL DEFAULT FALSE,
+  monitor_started BOOLEAN NOT NULL DEFAULT FALSE,
+  entry_window_end TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ts, instrument, signal, strike)
+);
+
 CREATE TABLE trade_monitor_events_1m (
   id BIGSERIAL PRIMARY KEY,
   ts TIMESTAMPTZ NOT NULL,
@@ -190,6 +212,10 @@ CREATE INDEX idx_strategy_decisions_inst_ts ON strategy_decisions_5m (instrument
 CREATE INDEX idx_strategy_signal_quality ON strategy_decisions_5m (instrument, signal_quality, ts DESC);
 CREATE INDEX idx_strategy_time_regime ON strategy_decisions_5m (instrument, time_regime, ts DESC);
 CREATE INDEX idx_strategy_signal ON strategy_decisions_5m (instrument, signal, ts DESC);
+
+CREATE INDEX idx_signals_issued_inst_ts ON signals_issued (instrument, ts DESC);
+CREATE INDEX idx_signals_issued_signal ON signals_issued (instrument, signal, ts DESC);
+CREATE INDEX idx_signals_issued_quality ON signals_issued (instrument, signal_quality, ts DESC);
 
 CREATE INDEX idx_monitor_inst_ts ON trade_monitor_events_1m (instrument, ts DESC);
 CREATE INDEX idx_monitor_entry ON trade_monitor_events_1m (instrument, entry_ts DESC);

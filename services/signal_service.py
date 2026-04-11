@@ -547,6 +547,30 @@ class SignalService:
         except Exception as e:
             print("[Signal Service] DB save error (trade monitor):", e)
 
+    def _safe_save_signal_issued(self, ts, signal, price, strike, reason, balanced_pro, oi_mode, telegram_sent=True, monitor_started=True, entry_window_end=None):
+        """Persist only actual fired actionable signals to DB."""
+        try:
+            row = (
+                ts,
+                self.instrument,
+                signal,
+                float(price) if price is not None else None,
+                int(strike) if strike is not None else None,
+                int(self.strategy.last_score),
+                balanced_pro["quality"] if balanced_pro else None,
+                balanced_pro["setup"] if balanced_pro else None,
+                balanced_pro["tradability"] if balanced_pro else None,
+                balanced_pro["time_regime"] if balanced_pro else None,
+                oi_mode,
+                reason,
+                bool(telegram_sent),
+                bool(monitor_started),
+                entry_window_end,
+            )
+            self.db_writer.insert_signal_issued(row)
+        except Exception as e:
+            print("[Signal Service] DB save error (signal issued):", e)
+
     def _process_5m_candle(self, candle_5m):
         """Process 5-minute candle and generate signal"""
         price = candle_5m["close"]
@@ -711,20 +735,21 @@ class SignalService:
             print(f"Score: {self.strategy.last_score} | Confidence: {self.strategy.last_confidence}")
             print(f"Strike: {selected_strike} | Reason: {reason}")
             print(f"Price: {price} | Time: {candle_5m['time']}")
-            
-            self.notifier.send_strategy_decision({
-                "instrument": self.instrument,
-                "signal": signal,
-                "price": price,
-                "score": self.strategy.last_score,
-                "confidence": self.strategy.last_confidence,
-                "regime": self.strategy.last_regime,
-                "reason": reason,
-                "strike": selected_strike,
-                "strike_reason": strike_reason,
-                "blockers": self.strategy.last_blockers,
-                "cautions": self.strategy.last_cautions,
-            })
+            self._safe_save_signal_issued(
+                ts=candle_5m["time"],
+                signal=signal,
+                price=price,
+                strike=selected_strike,
+                reason=enriched_reason,
+                balanced_pro=balanced_pro,
+                oi_mode=oi_mode,
+                telegram_sent=Config.ENABLE_ALERTS,
+                monitor_started=True,
+                entry_window_end=(
+                    candle_5m["close_time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
+                    if candle_5m.get("close_time") else None
+                ),
+            )
             self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
             self.signals_generated += 1
         else:
@@ -930,7 +955,42 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--instrument", default=Config.SYMBOL)
     args = parser.parse_args()
-    signal_service = SignalService(instrument=args.instrument)
+    
+    # Handle comma-separated instruments
+    instrument = args.instrument
+    if ',' in instrument:
+        instruments = [inst.strip() for inst in instrument.split(',')]
+        # Filter out empty strings
+        instruments = [inst for inst in instruments if inst]
+        print(f"[Signal Service] Starting for instruments: {instruments}")
+        # Start multiple signal services (one per instrument)
+        services = []
+        for inst in instruments:
+            service = SignalService(instrument=inst)
+            services.append(service)
+        
+        try:
+            # Run all services concurrently
+            import threading
+            threads = []
+            for service in services:
+                thread = threading.Thread(target=service.run)
+                thread.daemon = True
+                thread.start()
+                threads.append(thread)
+            
+            # Keep main thread alive
+            while any(thread.is_alive() for thread in threads):
+                time_module.sleep(1)
+                
+        except KeyboardInterrupt:
+            print("\n[Signal Service] Shutting down...")
+            for service in services:
+                service.stop()
+        except Exception as e:
+            print(f"[Signal Service] Error: {e}")
+    else:
+        signal_service = SignalService(instrument=instrument)
     
     try:
         signal_service.run()

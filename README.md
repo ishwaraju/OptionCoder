@@ -81,6 +81,35 @@ Compact one-line status:
 python3 /Users/ishwar/Documents/OptionCoder/tools/runtime_status.py --one-line
 ```
 
+Start `data_collector` and `oi_collector` together for all supported instruments:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/run_collectors.py
+```
+
+This launcher starts collectors for:
+- `NIFTY`
+- `BANKNIFTY`
+- `SENSEX`
+
+`signal_service` is intentionally separate so you can start or stop it independently.
+
+Telegram read-only command listener:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/services/telegram_bot_service.py
+```
+
+Shortcut launcher:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/run_telegram.py
+```
+
+Supported Telegram commands:
+- `/status`
+- `/health`
+- `/signals`
+- `/stop`
+- `/shutdown`
+
 ## Decision Operations
 
 Use compact console output for live trading:
@@ -96,6 +125,13 @@ CONSOLE_MODE=DETAILED python3 main.py
 Decision audit trail is written to:
 ```text
 data/decision_audit.csv
+```
+
+Database tables:
+```text
+strategy_decisions_5m  -> full 5-minute decision audit (signals + no-trade decisions)
+signals_issued         -> only actual fired actionable signals
+trade_monitor_events_1m -> per-minute post-signal hold/exit guidance
 ```
 
 End-of-day session summary is written to files like:

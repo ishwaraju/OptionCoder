@@ -255,6 +255,37 @@ class DBWriter:
         """
         self._execute(query, row)
 
+    def insert_signal_issued(self, row):
+        """
+        row = (
+            ts, instrument, signal, price, strike, strategy_score,
+            signal_quality, setup_type, tradability, time_regime, oi_mode,
+            reason, telegram_sent, monitor_started, entry_window_end
+        )
+        """
+        query = """
+        INSERT INTO signals_issued
+        (
+            ts, instrument, signal, price, strike, strategy_score,
+            signal_quality, setup_type, tradability, time_regime, oi_mode,
+            reason, telegram_sent, monitor_started, entry_window_end
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ts, instrument, signal, strike) DO UPDATE
+        SET price = EXCLUDED.price,
+            strategy_score = EXCLUDED.strategy_score,
+            signal_quality = EXCLUDED.signal_quality,
+            setup_type = EXCLUDED.setup_type,
+            tradability = EXCLUDED.tradability,
+            time_regime = EXCLUDED.time_regime,
+            oi_mode = EXCLUDED.oi_mode,
+            reason = EXCLUDED.reason,
+            telegram_sent = EXCLUDED.telegram_sent,
+            monitor_started = EXCLUDED.monitor_started,
+            entry_window_end = EXCLUDED.entry_window_end;
+        """
+        self._execute(query, row)
+
     def insert_trade_monitor_event_1m(self, row):
         """
         row = (

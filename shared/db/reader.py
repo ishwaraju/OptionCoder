@@ -231,3 +231,63 @@ class DBReader:
         
         rows = self._execute(query, (instrument, start_time, end_time))
         return [row[0] for row in rows]
+
+    def fetch_latest_signal_issued(self, instrument):
+        """Fetch latest fired signal for an instrument."""
+        query = """
+        SELECT
+            ts, signal, price, strike, strategy_score,
+            signal_quality, setup_type, tradability, time_regime, oi_mode, reason
+        FROM signals_issued
+        WHERE instrument = %s
+        ORDER BY ts DESC
+        LIMIT 1;
+        """
+        rows = self._execute(query, (instrument,))
+        if not rows:
+            return None
+
+        row = rows[0]
+        return {
+            "time": row[0],
+            "signal": row[1],
+            "price": float(row[2]) if row[2] is not None else None,
+            "strike": row[3],
+            "score": float(row[4]) if row[4] is not None else None,
+            "quality": row[5],
+            "setup_type": row[6],
+            "tradability": row[7],
+            "time_regime": row[8],
+            "oi_mode": row[9],
+            "reason": row[10],
+        }
+
+    def fetch_latest_trade_monitor_event(self, instrument):
+        """Fetch latest trade monitor event for an instrument."""
+        query = """
+        SELECT
+            ts, signal, entry_ts, entry_price, current_price,
+            pnl_points, guidance, reason, structure_state, quality, time_regime
+        FROM trade_monitor_events_1m
+        WHERE instrument = %s
+        ORDER BY ts DESC
+        LIMIT 1;
+        """
+        rows = self._execute(query, (instrument,))
+        if not rows:
+            return None
+
+        row = rows[0]
+        return {
+            "time": row[0],
+            "signal": row[1],
+            "entry_ts": row[2],
+            "entry_price": float(row[3]) if row[3] is not None else None,
+            "current_price": float(row[4]) if row[4] is not None else None,
+            "pnl_points": float(row[5]) if row[5] is not None else None,
+            "guidance": row[6],
+            "reason": row[7],
+            "structure_state": row[8],
+            "quality": row[9],
+            "time_regime": row[10],
+        }

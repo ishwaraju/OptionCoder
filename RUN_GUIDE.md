@@ -23,6 +23,26 @@ source .venv/bin/activate
 
 ## OPTION 1: SEPARATE SERVICES (CLEAN ARCHITECTURE)
 
+### Optional: Start All Collectors Together
+
+If you want one command for all market-data collectors, use:
+
+```bash
+python3 tools/run_collectors.py
+```
+
+This starts:
+- `data_collector` for `NIFTY`, `BANKNIFTY`, `SENSEX`
+- `oi_collector` for `NIFTY`, `BANKNIFTY`, `SENSEX`
+
+It does **not** start `signal_service`, so you can still run signals separately.
+
+Examples:
+```bash
+python3 tools/run_collectors.py --instruments NIFTY BANKNIFTY
+python3 tools/run_collectors.py --instruments SENSEX --stagger-seconds 1
+```
+
 ### Step 1: Start Data Collection (Always Running)
 
 #### Terminal 1: Start Data Collector
@@ -54,6 +74,27 @@ Total Instruments: 1
 ```bash
 python3 services/signal_service.py
 ```
+
+### Optional: Start Telegram Read-Only Commands
+
+If you want Telegram bot commands for runtime checks, start:
+
+```bash
+python3 services/telegram_bot_service.py
+```
+
+Shortcut:
+
+```bash
+python3 tools/run_telegram.py
+```
+
+Supported commands:
+- `/status`
+- `/health`
+- `/signals`
+- `/stop`
+- `/shutdown`
 
 **Expected Output:**
 ```
@@ -104,6 +145,13 @@ Strike: 19800 | Reason: ORB breakout with volume
 Price: 19850 | Time: 10:30 AM
 
 [Signal Service] No signal | Score: 45 | Reason: Score below threshold
+```
+
+### Signal Tables
+```text
+strategy_decisions_5m   -> every 5-minute strategy decision, including no-trade rows
+signals_issued          -> only actual fired CE/PE signals
+trade_monitor_events_1m -> minute-by-minute post-signal guidance
 ```
 
 ### Manual Trading Actions:

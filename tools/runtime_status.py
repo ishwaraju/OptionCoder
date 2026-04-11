@@ -53,7 +53,7 @@ def discover_service_pairs():
     return pairs
 
 
-def derive_status(heartbeat, watchdog_state, now):
+def derive_status(heartbeat, watchdog_state, now, watchdog_state_present=False):
     if not heartbeat:
         return {
             "severity": "ALERT",
@@ -107,16 +107,22 @@ def derive_status(heartbeat, watchdog_state, now):
         "last_restart_epoch": (watchdog_state or {}).get("last_restart_epoch"),
         "last_restart_meta": (watchdog_state or {}).get("last_restart_meta"),
         "timestamp": heartbeat.get("timestamp"),
+        "watchdog_state_present": watchdog_state_present,
     }
 
 
 def render_one_line(service_name, result):
     state = result["service_state"]
+    watchdog_note = (
+        f"restarts={len(result['recent_restarts'])}/{Config.WATCHDOG_MAX_RESTARTS}"
+        if result["watchdog_state_present"]
+        else "restarts=0/5 (no state yet)"
+    )
     return (
         f"{service_name} | {result['severity']} | {result['status']} | "
         f"phase={state.get('phase')} | "
         f"hb_age={round(result['heartbeat_age'], 1) if result['heartbeat_age'] is not None else 'unknown'} | "
-        f"restarts={len(result['recent_restarts'])}/{Config.WATCHDOG_MAX_RESTARTS}"
+        f"{watchdog_note}"
     )
 
 
@@ -147,7 +153,11 @@ def render_full(service_name, result):
             f"Data Age Seconds: {state.get('data_age_seconds')}",
             f"Price: {state.get('price')}",
             f"Reconnect Attempts: {state.get('reconnect_attempts')}",
-            f"Recent Restarts: {len(result['recent_restarts'])}/{Config.WATCHDOG_MAX_RESTARTS}",
+            (
+                f"Recent Restarts: {len(result['recent_restarts'])}/{Config.WATCHDOG_MAX_RESTARTS}"
+                if result["watchdog_state_present"]
+                else "Recent Restarts: 0/5 (watchdog state not created yet)"
+            ),
         ]
     )
 
@@ -169,8 +179,10 @@ def main():
 
     for service_name, heartbeat_file, state_file in pairs:
         heartbeat = load_json(heartbeat_file)
-        watchdog_state = load_json(state_file) or {"restart_epochs": []}
-        result = derive_status(heartbeat, watchdog_state, now)
+        raw_watchdog_state = load_json(state_file)
+        watchdog_state_present = raw_watchdog_state is not None
+        watchdog_state = raw_watchdog_state or {"restart_epochs": []}
+        result = derive_status(heartbeat, watchdog_state, now, watchdog_state_present=watchdog_state_present)
         outputs.append(render_one_line(service_name, result) if args.one_line else render_full(service_name, result))
 
     print("\n\n".join(outputs))

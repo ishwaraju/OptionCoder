@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+data/*_heartbeat.json
+data/*_watchdog_state.json
+data/run_signals_state.json
+data/run_collectors_state.json
