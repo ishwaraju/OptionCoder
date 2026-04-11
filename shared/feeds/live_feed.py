@@ -8,6 +8,7 @@ from threading import Lock
 from config import Config
 from shared.feeds.binary_parser import BinaryParser
 from shared.feeds.live_data import LiveData
+from shared.utils.future_id_cache import FutureIdCache
 from shared.utils.time_utils import TimeUtils
 
 
@@ -57,6 +58,18 @@ class LiveFeed:
         self.last_ping_time = 0
         self.ping_interval = 30  # seconds
         self.keep_alive_enabled = True
+        self.future_id_cache = FutureIdCache()
+        self.future_ids = self.future_id_cache.load_all()
+        self.index_security_map = {
+            int(security_id): instrument
+            for instrument, security_id in getattr(Config, "SECURITY_IDS", {}).items()
+            if security_id is not None
+        }
+        self.future_security_map = {
+            int(security_id): instrument
+            for instrument, security_id in self.future_ids.items()
+            if security_id is not None
+        }
 
         # Store OI ladder data
         self.ce_oi = {}
@@ -142,7 +155,7 @@ class LiveFeed:
         self.last_tick_epoch = time.time()
 
         # INDEX
-        if security_id == 13:
+        if security_id in self.index_security_map:
             self.live_data.update_index_data(
                 data.get("price"),
                 data.get("open"),
@@ -152,7 +165,7 @@ class LiveFeed:
             )
 
         # FUTURES
-        elif security_id == getattr(Config, "NIFTY_FUTURE_ID", 0):
+        elif security_id in self.future_security_map or security_id == getattr(Config, "NIFTY_FUTURE_ID", 0):
             self.live_data.update_futures_data(
                 data.get("volume", 0),
                 data.get("oi", 0)
