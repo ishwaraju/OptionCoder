@@ -1,4 +1,4 @@
-from core.candle_manager import CandleManager
+from shared.indicators.candle_manager import CandleManager
 from datetime import datetime
 import pytz
 

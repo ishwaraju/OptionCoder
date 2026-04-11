@@ -98,7 +98,7 @@ class DhanClient:
                 self.reconnect()
             
             # DhanHQ v2 API requires from_date and to_date with time format
-            from utils.time_utils import TimeUtils
+            from shared.utils.time_utils import TimeUtils
             time_utils = TimeUtils()
             
             if not from_date:
@@ -156,12 +156,16 @@ class DhanClient:
             if not self.connected:
                 self.reconnect()
 
-            return self.dhan.get_option_chain(exchange, segment, expiry)
+            return self.dhan.option_chain(exchange, segment, expiry)
 
         except Exception as e:
             logging.error(f"Option chain error: {e}")
             self.connected = False
             return None
+    
+    def option_chain(self, exchange, segment, expiry):
+        """Direct access to option chain method"""
+        return self.get_option_chain(exchange, segment, expiry)
 
     def place_order(self, order_data):
         """Place order (Safe mode with paper trade check)"""

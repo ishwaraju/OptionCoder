@@ -3,7 +3,7 @@ from datetime import datetime
 import pytz
 
 from config import Config
-from strategy.breakout_strategy import BreakoutStrategy
+from strategies.shared.breakout_strategy import BreakoutStrategy
 
 
 def _ist_dt(hour, minute):

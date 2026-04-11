@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.oi_analyzer import OIAnalyzer
+from shared.market.oi_analyzer import OIAnalyzer
 
 oi = OIAnalyzer()
 

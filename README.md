@@ -71,6 +71,16 @@ Example:
 .venv/bin/python /Users/ishwar/Documents/OptionCoder/tools/reload_intraday_day.py --date 2026-04-08 --replace-day
 ```
 
+Check service heartbeat/watchdog status:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/runtime_status.py
+```
+
+Compact one-line status:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/runtime_status.py --one-line
+```
+
 ## Decision Operations
 
 Use compact console output for live trading:

@@ -1,4 +1,4 @@
-from utils.logger import TradeLogger
+from shared.utils.logger import TradeLogger
 
 
 def test_logger_uses_ist_timestamp_for_summary_file():

@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.candle_manager import CandleManager
+from shared.indicators.candle_manager import CandleManager
 import random
 from datetime import datetime, timedelta
 
@@ -33,7 +33,7 @@ for i in range(20):  # 20 minutes data
         "low": low_price,
         "close": close_price,
         "volume": volume,
-        "datetime": current_time.strftime("%Y-%m-%d %H:%M:%S")
+        "datetime": current_time
     }
 
     completed = cm.add_minute_candle(minute_candle)
@@ -46,5 +46,5 @@ for i in range(20):  # 20 minutes data
         print("--------------------------------\n")
 
 print("\nAll 5-min Candles:")
-for c in cm.get_all_candles():
+for c in cm.get_all_5min_candles():
     print(c)

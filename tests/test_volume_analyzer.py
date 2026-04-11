@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.volume_analyzer import VolumeAnalyzer
+from shared.indicators.volume_analyzer import VolumeAnalyzer
 from datetime import datetime
 
 va = VolumeAnalyzer()

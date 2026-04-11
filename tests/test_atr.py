@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.atr import ATRCalculator
+from shared.indicators.atr import ATRCalculator
 
 atr = ATRCalculator(period=5)
 

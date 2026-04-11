@@ -1,8 +1,8 @@
 from datetime import time
 
 from config import Config
-from core.live_feed import LiveFeed
-import core.live_feed as live_feed_module
+from shared.feeds.live_feed import LiveFeed
+import shared.feeds.live_feed as live_feed_module
 
 
 class _DummyTimeUtils:

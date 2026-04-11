@@ -9,8 +9,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import Config
-from core.historical_backfill import HistoricalBackfill
-from db.writer import DBWriter
+from shared.db.pool import DBPool
+from shared.db.writer import DBWriter
+from shared.market.historical_backfill import HistoricalBackfill
+from shared.utils.instrument_profile import get_instrument_profile
 
 
 def floor_to_5m(ts):
@@ -49,9 +51,11 @@ def main():
     args = parser.parse_args()
 
     target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
-    security_id = args.security_id or Config.SECURITY_IDS.get(args.symbol)
+    profile = get_instrument_profile(args.symbol)
+    symbol = profile["instrument"]
+    security_id = args.security_id or profile["security_id"] or Config.SECURITY_IDS.get(symbol)
     if not security_id:
-        raise SystemExit(f"No security id found for symbol {args.symbol}")
+        raise SystemExit(f"No security id found for symbol {symbol}")
 
     backfill = HistoricalBackfill()
     rows = backfill.fetch_intraday_candles(
@@ -81,7 +85,7 @@ def main():
         )
 
     if not normalized:
-        print(f"No intraday candles returned for {args.date} {args.symbol} ({args.exchange_segment}/{args.instrument_type}).")
+        print(f"No intraday candles returned for {args.date} {symbol} ({args.exchange_segment}/{args.instrument_type}).")
         return
 
     candles_5m = aggregate_5m(normalized)
@@ -90,24 +94,27 @@ def main():
         raise SystemExit("DB is not enabled or connection failed")
 
     if args.replace_day:
-        with db.conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM candles_1m WHERE instrument = %s AND DATE(ts AT TIME ZONE 'Asia/Kolkata') = %s",
-                (args.symbol, args.date),
-            )
-            cur.execute(
-                "DELETE FROM candles_5m WHERE instrument = %s AND DATE(ts AT TIME ZONE 'Asia/Kolkata') = %s",
-                (args.symbol, args.date),
-            )
+        with DBPool.connection() as conn:
+            if conn is None:
+                raise SystemExit("DB pool connection unavailable")
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM candles_1m WHERE instrument = %s AND DATE(ts AT TIME ZONE 'Asia/Kolkata') = %s",
+                    (symbol, args.date),
+                )
+                cur.execute(
+                    "DELETE FROM candles_5m WHERE instrument = %s AND DATE(ts AT TIME ZONE 'Asia/Kolkata') = %s",
+                    (symbol, args.date),
+                )
 
     for row in normalized:
-        db.insert_candle_1m((row["ts"], args.symbol, row["open"], row["high"], row["low"], row["close"], row["volume"]))
+        db.insert_candle_1m((row["ts"], symbol, row["open"], row["high"], row["low"], row["close"], row["volume"]))
     for row in candles_5m:
-        db.insert_candle_5m((row["ts"], args.symbol, row["open"], row["high"], row["low"], row["close"], row["volume"]))
+        db.insert_candle_5m((row["ts"], symbol, row["open"], row["high"], row["low"], row["close"], row["volume"]))
 
     print(
         f"Reloaded {len(normalized)} 1m candles and {len(candles_5m)} 5m candles "
-        f"for {args.date} {args.symbol} using {args.exchange_segment}/{args.instrument_type}."
+        f"for {args.date} {symbol} using {args.exchange_segment}/{args.instrument_type}."
     )
 
 

@@ -1,4 +1,4 @@
-from core.connection_manager import ConnectionManager
+from shared.feeds.connection_manager import ConnectionManager
 
 
 class _DummyFeed:

@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.vwap import VWAPCalculator
+from shared.indicators.vwap import VWAPCalculator
 from datetime import datetime
 
 vwap = VWAPCalculator()

@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from strategy.strike_selector import StrikeSelector
+from strategies.shared.strike_selector import StrikeSelector
 
 ss = StrikeSelector()
 

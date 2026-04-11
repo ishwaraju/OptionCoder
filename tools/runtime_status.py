@@ -1,13 +1,15 @@
 """
-Runtime health summary for the trading bot.
+Runtime health summary for the trading bot services.
 
-Reads heartbeat and watchdog state files and prints a quick status:
+Reads service heartbeat and watchdog state files and prints:
 - healthy
 - stale
 - restart-loop-risk
+- no-heartbeat
 """
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -19,8 +21,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 
 
-HEARTBEAT_FILE = "data/runtime_heartbeat.json"
-WATCHDOG_STATE_FILE = "data/watchdog_state.json"
+LEGACY_HEARTBEAT_FILE = "data/runtime_heartbeat.json"
+LEGACY_WATCHDOG_STATE_FILE = "data/watchdog_state.json"
 
 
 def load_json(path):
@@ -33,42 +35,52 @@ def load_json(path):
         return {"error": str(exc)}
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Show bot runtime heartbeat/watchdog status")
-    parser.add_argument("--one-line", action="store_true", help="Print a compact single-line summary")
-    args = parser.parse_args()
+def discover_service_pairs():
+    heartbeat_files = sorted(glob.glob("data/*_heartbeat.json"))
+    pairs = []
+    seen = set()
 
-    heartbeat = load_json(HEARTBEAT_FILE)
-    watchdog_state = load_json(WATCHDOG_STATE_FILE) or {"restart_epochs": []}
+    for heartbeat_file in heartbeat_files:
+        base = heartbeat_file[: -len("_heartbeat.json")]
+        state_file = f"{base}_watchdog_state.json"
+        service_key = os.path.basename(base)
+        pairs.append((service_key, heartbeat_file, state_file))
+        seen.add(service_key)
 
+    if "runtime" not in seen:
+        pairs.append(("runtime", LEGACY_HEARTBEAT_FILE, LEGACY_WATCHDOG_STATE_FILE))
+
+    return pairs
+
+
+def derive_status(heartbeat, watchdog_state, now):
     if not heartbeat:
-        if args.one_line:
-            print("NO_HEARTBEAT | heartbeat file missing")
-            return
-        print("RUNTIME STATUS")
-        print("=" * 40)
-        print("Severity: ALERT")
-        print("Status: NO_HEARTBEAT")
-        print(f"Heartbeat file missing: {HEARTBEAT_FILE}")
-        return
+        return {
+            "severity": "ALERT",
+            "status": "NO_HEARTBEAT",
+            "heartbeat_age": None,
+            "service_state": {},
+            "recent_restarts": [],
+            "last_restart_epoch": None,
+            "last_restart_meta": None,
+        }
 
     if heartbeat.get("error"):
-        if args.one_line:
-            print(f"HEARTBEAT_READ_ERROR | {heartbeat['error']}")
-            return
-        print("RUNTIME STATUS")
-        print("=" * 40)
-        print("Severity: ALERT")
-        print("Status: HEARTBEAT_READ_ERROR")
-        print("Error:", heartbeat["error"])
-        return
+        return {
+            "severity": "ALERT",
+            "status": "HEARTBEAT_READ_ERROR",
+            "heartbeat_age": None,
+            "service_state": heartbeat,
+            "recent_restarts": [],
+            "last_restart_epoch": None,
+            "last_restart_meta": None,
+        }
 
-    now = time.time()
     heartbeat_epoch = heartbeat.get("epoch")
     heartbeat_age = None if heartbeat_epoch is None else max(0.0, now - heartbeat_epoch)
-    status = heartbeat.get("status", {})
+    service_state = heartbeat.get("status", {})
 
-    restart_epochs = watchdog_state.get("restart_epochs", [])
+    restart_epochs = (watchdog_state or {}).get("restart_epochs", [])
     recent_restarts = [
         epoch for epoch in restart_epochs
         if now - epoch <= Config.WATCHDOG_RESTART_WINDOW_SECONDS
@@ -86,36 +98,82 @@ def main():
     elif "RESTART_LOOP_RISK" in derived_status:
         severity = "WARN"
 
-    if args.one_line:
-        print(
-            f"{severity} | {derived_status} | phase={status.get('phase')} | "
-            f"feed_connected={status.get('feed_connected')} | "
-            f"data_age={status.get('data_age_seconds')} | "
-            f"hb_age={round(heartbeat_age, 1) if heartbeat_age is not None else 'unknown'} | "
-            f"restarts={len(recent_restarts)}/{Config.WATCHDOG_MAX_RESTARTS}"
-        )
-        return
+    return {
+        "severity": severity,
+        "status": derived_status,
+        "heartbeat_age": heartbeat_age,
+        "service_state": service_state,
+        "recent_restarts": recent_restarts,
+        "last_restart_epoch": (watchdog_state or {}).get("last_restart_epoch"),
+        "last_restart_meta": (watchdog_state or {}).get("last_restart_meta"),
+        "timestamp": heartbeat.get("timestamp"),
+    }
 
-    print("RUNTIME STATUS")
-    print("=" * 40)
-    print("Severity:", severity)
-    print("Status:", derived_status)
-    print("Heartbeat Age Seconds:", round(heartbeat_age, 1) if heartbeat_age is not None else "unknown")
-    print("Last Timestamp:", heartbeat.get("timestamp"))
-    print("Phase:", status.get("phase"))
-    print("Feed Connected:", status.get("feed_connected"))
-    print("Data Age Seconds:", status.get("data_age_seconds"))
-    print("Price:", status.get("price"))
-    print("Reconnect Attempts:", status.get("reconnect_attempts"))
-    print("Recent Restarts:", f"{len(recent_restarts)}/{Config.WATCHDOG_MAX_RESTARTS}")
 
-    last_restart_epoch = watchdog_state.get("last_restart_epoch")
-    if last_restart_epoch:
-        print(
-            "Last Restart:",
-            datetime.fromtimestamp(last_restart_epoch).isoformat()
-        )
-        print("Last Restart Meta:", watchdog_state.get("last_restart_meta"))
+def render_one_line(service_name, result):
+    state = result["service_state"]
+    return (
+        f"{service_name} | {result['severity']} | {result['status']} | "
+        f"phase={state.get('phase')} | "
+        f"hb_age={round(result['heartbeat_age'], 1) if result['heartbeat_age'] is not None else 'unknown'} | "
+        f"restarts={len(result['recent_restarts'])}/{Config.WATCHDOG_MAX_RESTARTS}"
+    )
+
+
+def render_full(service_name, result):
+    state = result["service_state"]
+    lines = [
+        service_name.upper(),
+        "=" * 40,
+        f"Severity: {result['severity']}",
+        f"Status: {result['status']}",
+    ]
+
+    if result["status"] == "NO_HEARTBEAT":
+        lines.append("Heartbeat file missing")
+        return "\n".join(lines)
+
+    if result["status"] == "HEARTBEAT_READ_ERROR":
+        lines.append(f"Error: {state.get('error')}")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            f"Heartbeat Age Seconds: {round(result['heartbeat_age'], 1) if result['heartbeat_age'] is not None else 'unknown'}",
+            f"Last Timestamp: {result.get('timestamp')}",
+            f"Phase: {state.get('phase')}",
+            f"Instrument: {state.get('instrument')}",
+            f"Feed Connected: {state.get('feed_connected')}",
+            f"Data Age Seconds: {state.get('data_age_seconds')}",
+            f"Price: {state.get('price')}",
+            f"Reconnect Attempts: {state.get('reconnect_attempts')}",
+            f"Recent Restarts: {len(result['recent_restarts'])}/{Config.WATCHDOG_MAX_RESTARTS}",
+        ]
+    )
+
+    if result["last_restart_epoch"]:
+        lines.append(f"Last Restart: {datetime.fromtimestamp(result['last_restart_epoch']).isoformat()}")
+        lines.append(f"Last Restart Meta: {result['last_restart_meta']}")
+
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Show service heartbeat/watchdog status")
+    parser.add_argument("--one-line", action="store_true", help="Print compact service summaries")
+    args = parser.parse_args()
+
+    now = time.time()
+    pairs = discover_service_pairs()
+    outputs = []
+
+    for service_name, heartbeat_file, state_file in pairs:
+        heartbeat = load_json(heartbeat_file)
+        watchdog_state = load_json(state_file) or {"restart_epochs": []}
+        result = derive_status(heartbeat, watchdog_state, now)
+        outputs.append(render_one_line(service_name, result) if args.one_line else render_full(service_name, result))
+
+    print("\n\n".join(outputs))
 
 
 if __name__ == "__main__":
