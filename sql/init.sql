@@ -210,6 +210,6 @@ SET exchange_segment = EXCLUDED.exchange_segment,
     atr_multiplier = EXCLUDED.atr_multiplier,
     notes = EXCLUDED.notes,
     updated_at = NOW();
-    
+
 
 COMMIT;
