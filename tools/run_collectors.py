@@ -27,10 +27,11 @@ STATE_FILE = REPO_ROOT / "data" / "run_collectors_state.json"
 
 
 class CollectorLauncher:
-    def __init__(self, instruments, stagger_seconds=2.0, python_executable=None):
+    def __init__(self, instruments, stagger_seconds=2.0, python_executable=None, skip_market_wait=False):
         self.instruments = [instrument.upper() for instrument in instruments]
         self.stagger_seconds = float(stagger_seconds)
         self.python_executable = python_executable or sys.executable
+        self.skip_market_wait = bool(skip_market_wait)
         self.processes = []
         self.running = False
         self.time_utils = TimeUtils()
@@ -157,7 +158,10 @@ class CollectorLauncher:
         print("[Launcher] Signal service is intentionally not started here.")
 
         # Wait for market to open if before market hours
-        self._wait_for_market_open()
+        if not self.skip_market_wait:
+            self._wait_for_market_open()
+        else:
+            print("[Launcher] Skipping market-open wait (forced start).")
 
         for instrument in self.instruments:
             for service_name in SERVICE_ORDER:
@@ -285,12 +289,22 @@ class CollectorLauncher:
     def monitor(self):
         try:
             while self.running:
+                active_entries = []
                 for entry in self.processes:
                     return_code = entry["process"].poll()
                     if return_code is None:
+                        active_entries.append(entry)
                         continue
 
                     label = f"{entry['service']}:{entry['instrument']}"
+                    if entry["service"] == "data_collector" and return_code == 0:
+                        print(
+                            f"[Launcher] {label} exited normally with code 0. "
+                            f"Keeping remaining collector services running."
+                        )
+                        self._save_state()
+                        continue
+
                     print(
                         f"[Launcher] {label} exited unexpectedly "
                         f"with code {return_code}."
@@ -299,6 +313,13 @@ class CollectorLauncher:
                     self._save_state()
                     self.stop()
                     raise SystemExit(return_code or 1)
+
+                self.processes = active_entries
+                if not self.processes:
+                    self.running = False
+                    self._clear_state()
+                    print("[Launcher] No active collector services remaining.")
+                    return
 
                 time.sleep(1)
         except KeyboardInterrupt:
@@ -335,6 +356,11 @@ def parse_args():
         default=sys.executable,
         help="Python executable to use for child services.",
     )
+    parser.add_argument(
+        "--skip-market-wait",
+        action="store_true",
+        help="Start collectors immediately without waiting for market open.",
+    )
     return parser.parse_args()
 
 
@@ -348,6 +374,7 @@ def main():
         instruments=args.instruments,
         stagger_seconds=args.stagger_seconds,
         python_executable=args.python,
+        skip_market_wait=args.skip_market_wait,
     )
 
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)

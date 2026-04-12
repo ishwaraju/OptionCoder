@@ -6,8 +6,10 @@ Supported commands:
 - /health
 - /signals
 - /start_signal
+- /start_signal_force
 - /stop_signal
 - /start_data
+- /start_data_force
 - /stop_data
 - /stop
 - /shutdown
@@ -201,63 +203,183 @@ class TelegramCommandService:
     def _format_status(self):
         rows = self._service_heartbeat_rows()
         if not rows:
-            return "No service heartbeat files found."
+            return "📊 Service Status\n=================\n\nNo service heartbeat files found."
 
-        grouped = {
-            "Signals": [],
-            "Data": [],
-            "OI": [],
-            "Telegram": [],
-            "Other": [],
-        }
-
+        # Group services by category
+        signal_services = []
+        data_services = []
+        oi_services = []
+        communication_services = []
+        
         for row in rows:
             age = "unknown" if row["heartbeat_age"] is None else f"{row['heartbeat_age']:.0f}s"
-            lifecycle = "RUNNING" if row["running"] else "STOPPED"
+            lifecycle = self._classify_service_state(row, for_health=False)
             label = row["instrument"] or row["service"]
-            line = f"{label} | {lifecycle} | phase={row['phase']} | hb_age={age}"
-
-            if row["service"] == "signal_service":
-                grouped["Signals"].append(line)
-            elif row["service"] == "data_collector" or row["service"] == "runtime":
-                grouped["Data"].append(line)
-            elif row["service"] == "oi_collector":
-                grouped["OI"].append(line)
-            elif row["service"] == "telegram_bot_service":
-                grouped["Telegram"].append(line)
+            
+            # Get status emoji
+            if lifecycle == "RUNNING":
+                status_emoji = "💚"
+            elif lifecycle in ["IDLE", "PAUSED", "STALE"]:
+                status_emoji = "💛"
             else:
-                grouped["Other"].append(f"{row['service']} | {line}")
-
-        lines = ["Status"]
-        for heading in ("Signals", "Data", "OI", "Telegram", "Other"):
-            if not grouped[heading]:
-                continue
-            lines.append(f"{heading}:")
-            lines.extend(grouped[heading])
+                status_emoji = "💔"
+            
+            service_line = f"  {label} {status_emoji} {lifecycle} ({age})"
+            
+            if row["service"] == "signal_service":
+                signal_services.append(service_line)
+            elif row["service"] in ["data_collector", "runtime"]:
+                data_services.append(service_line)
+            elif row["service"] == "oi_collector":
+                oi_services.append(service_line)
+            elif row["service"] == "telegram_bot_service":
+                communication_services.append(service_line)
+        
+        # Build output with section headers
+        lines = ["📊 Service Status", "================="]
+        
+        if signal_services:
+            lines.append("🎯 Signals")
+            lines.extend(sorted(signal_services))
+            lines.append("")
+        
+        if data_services:
+            lines.append("📈 Data Collection")
+            lines.extend(sorted(data_services))
+            lines.append("")
+        
+        if oi_services:
+            lines.append("🧠 OI Collection")
+            lines.extend(sorted(oi_services))
+            lines.append("")
+        
+        if communication_services:
+            lines.append("🤖 Communication")
+            lines.extend(sorted(communication_services))
+            lines.append("")
+        
+        # Add summary
+        total_services = len(rows)
+        running_services = sum(1 for row in rows if self._classify_service_state(row, for_health=False) == "RUNNING")
+        lines.append(f"📈 {running_services}/{total_services} services running")
+        
         return "\n".join(lines)
 
     def _format_health(self):
         rows = self._service_heartbeat_rows()
         if not rows:
-            return "Health\nNo heartbeat data available."
+            return "📊 Health Status\n==============\n\nNo heartbeat data available."
 
-        lines = ["Health"]
+        service_icons = {
+            "HEALTHY": "💚",
+            "RUNNING": "💚",
+            "IDLE": "💛",
+            "PAUSED": "💛",
+            "STALE": "💛",
+            "STOPPED": "💔",
+        }
+        
+        # Group services by instrument
+        instrument_groups = {}
+        global_services = []
+        
         for row in rows:
-            age = row["heartbeat_age"]
-            if not row["running"]:
-                state = "STOPPED"
-            elif age is None:
-                state = "RUNNING"
-            elif age > Config.WATCHDOG_STALE_SECONDS:
-                state = "STALE"
+            instrument = row.get("instrument")
+            if instrument:
+                if instrument not in instrument_groups:
+                    instrument_groups[instrument] = []
+                instrument_groups[instrument].append(row)
             else:
-                state = "HEALTHY"
-            instrument_suffix = f" | {row['instrument']}" if row["instrument"] else ""
-            age_text = "unknown" if age is None else f"{age:.0f}s"
-            lines.append(
-                f"{row['service']}{instrument_suffix} | {state} | hb_age={age_text}"
-            )
+                global_services.append(row)
+        
+        lines = ["📊 Health Status", "=============="]
+        
+        # Sort instruments
+        for instrument in sorted(instrument_groups.keys()):
+            services = instrument_groups[instrument]
+            
+            # Calculate instrument overall status
+            running_count = 0
+            total_count = len(services)
+            
+            for service_row in services:
+                state = self._classify_service_state(service_row, for_health=True)
+                if state in ["HEALTHY", "RUNNING"]:
+                    running_count += 1
+            
+            # Instrument status emoji
+            if running_count == total_count:
+                instrument_emoji = "🟢"
+            elif running_count > 0:
+                instrument_emoji = "🟡"
+            else:
+                instrument_emoji = "🔴"
+            
+            lines.append(f"{instrument_emoji} {instrument}")
+            
+            # Sort services within instrument
+            for service_row in sorted(services, key=lambda x: x["service"]):
+                age = service_row["heartbeat_age"]
+                state = self._classify_service_state(service_row, for_health=True)
+                status_emoji = service_icons.get(state, "•")
+                age_text = "unknown" if age is None else f"{age:.0f}s"
+                status_text = "RUNNING" if state in ["HEALTHY", "RUNNING"] else state
+                lines.append(f"  {service_row['service']} {status_emoji} {status_text} ({age_text})")
+            
+            lines.append("")  # Empty line between instruments
+        
+        # Add global services
+        if global_services:
+            # Calculate global status
+            running_count = 0
+            total_count = len(global_services)
+            
+            for service_row in global_services:
+                state = self._classify_service_state(service_row, for_health=True)
+                if state in ["HEALTHY", "RUNNING"]:
+                    running_count += 1
+            
+            global_emoji = "🟢" if running_count == total_count else "🔴"
+            lines.append(f"{global_emoji} Global")
+            
+            for service_row in sorted(global_services, key=lambda x: x["service"]):
+                age = service_row["heartbeat_age"]
+                state = self._classify_service_state(service_row, for_health=True)
+                status_emoji = service_icons.get(state, "•")
+                age_text = "unknown" if age is None else f"{age:.0f}s"
+                status_text = "RUNNING" if state in ["HEALTHY", "RUNNING"] else state
+                lines.append(f"  {service_row['service']} {status_emoji} {status_text} ({age_text})")
+        
+        # Add summary
+        total_services = len(rows)
+        running_services = sum(1 for row in rows if self._classify_service_state(row, for_health=True) in ["HEALTHY", "RUNNING"])
+        lines.append(f"\n📈 {running_services}/{total_services} services running")
+        
         return "\n".join(lines)
+
+    def _classify_service_state(self, row, for_health=False):
+        if not row["running"]:
+            return "STOPPED"
+
+        age = row["heartbeat_age"]
+        phase = row.get("phase") or ""
+
+        if row["service"] == "telegram_bot_service":
+            return "RUNNING" if for_health else "RUNNING"
+
+        if age is None:
+            return "RUNNING" if for_health else "RUNNING"
+
+        if age > Config.WATCHDOG_STALE_SECONDS:
+            return "STALE"
+
+        if phase in {"data_pause", "no_heartbeat"}:
+            return "IDLE"
+        if phase in {"heartbeat", "loop_alive"}:
+            return "HEALTHY" if for_health else "RUNNING"
+        if phase in {"starting"}:
+            return "IDLE"
+        return "HEALTHY" if for_health else "RUNNING"
 
     def _format_signals(self):
         lines = ["Signals"]
@@ -353,12 +475,16 @@ class TelegramCommandService:
         valid = [instrument for instrument in requested if instrument in DEFAULT_INSTRUMENTS]
         return valid or list(DEFAULT_INSTRUMENTS)
 
+    @staticmethod
+    def _extract_force_flag(tokens):
+        return any(token.upper() in {"FORCE", "NOW", "TEST"} for token in (tokens or []))
+
     def _build_start_preview(self, label, instruments):
         return f"{label} start requested\nInstruments: {', '.join(instruments)}"
 
-    def _execute_start_signals(self, instruments):
+    def _execute_start_signals(self, instruments, force=False):
         instruments = self._valid_instruments(instruments)
-        if not self.time_utils.is_market_open():
+        if not force and not self.time_utils.is_market_open():
             now_ist = self.time_utils.now_ist().strftime("%Y-%m-%d %H:%M:%S")
             return [f"signals: not started (market closed at {now_ist} IST)"]
         process = self._start_local_tool("tools/run_signals.py", "start", "--instruments", *instruments)
@@ -375,12 +501,13 @@ class TelegramCommandService:
         outputs.extend(self._pkill_patterns(["services/signal_service.py", "tools/run_signals.py monitor"]))
         return outputs
 
-    def _execute_start_data(self, instruments):
+    def _execute_start_data(self, instruments, force=False):
         instruments = self._valid_instruments(instruments)
-        if not self.time_utils.is_market_open():
+        if not force and not self.time_utils.is_market_open():
             now_ist = self.time_utils.now_ist().strftime("%Y-%m-%d %H:%M:%S")
             return [f"collectors: not started (market closed at {now_ist} IST)"]
-        process = self._start_local_tool("tools/run_collectors.py", "start", "--instruments", *instruments)
+        extra_args = ["--skip-market-wait"] if force else []
+        process = self._start_local_tool("tools/run_collectors.py", "start", "--instruments", *instruments, *extra_args)
         return [f"collectors: started launcher pid={process.pid} for {', '.join(instruments)}"]
 
     def _execute_stop_data(self):
@@ -452,17 +579,31 @@ class TelegramCommandService:
             return {"reply": self._format_signals(), "post_action": None}
         if command == "/start_signal":
             instruments = self._valid_instruments(command_args)
+            force = self._extract_force_flag(command_args)
             return {
                 "reply": self._build_start_preview("Signal", instruments),
-                "post_action": {"type": "start_signal", "instruments": instruments},
+                "post_action": {"type": "start_signal", "instruments": instruments, "force": force},
+            }
+        if command == "/start_signal_force":
+            instruments = self._valid_instruments(command_args)
+            return {
+                "reply": self._build_start_preview("Signal", instruments),
+                "post_action": {"type": "start_signal", "instruments": instruments, "force": True},
             }
         if command == "/stop_signal":
             return {"reply": "Signal stop requested", "post_action": {"type": "stop_signal"}}
         if command == "/start_data":
             instruments = self._valid_instruments(command_args)
+            force = self._extract_force_flag(command_args)
             return {
                 "reply": self._build_start_preview("Data", instruments),
-                "post_action": {"type": "start_data", "instruments": instruments},
+                "post_action": {"type": "start_data", "instruments": instruments, "force": force},
+            }
+        if command == "/start_data_force":
+            instruments = self._valid_instruments(command_args)
+            return {
+                "reply": self._build_start_preview("Data", instruments),
+                "post_action": {"type": "start_data", "instruments": instruments, "force": True},
             }
         if command == "/stop_data":
             return {"reply": "Data stop requested", "post_action": {"type": "stop_data"}}
@@ -477,8 +618,10 @@ class TelegramCommandService:
                 "/health\n"
                 "/signals\n"
                 "/start_signal [NIFTY BANKNIFTY SENSEX]\n"
+                "/start_signal_force [NIFTY BANKNIFTY SENSEX]\n"
                 "/stop_signal\n"
                 "/start_data [NIFTY BANKNIFTY SENSEX]\n"
+                "/start_data_force [NIFTY BANKNIFTY SENSEX]\n"
                 "/stop_data\n"
                 "/stop\n"
                 "/shutdown"
@@ -504,11 +647,11 @@ class TelegramCommandService:
             action_type = post_action.get("type")
             outputs = []
             if action_type == "start_signal":
-                outputs = self._execute_start_signals(post_action.get("instruments"))
+                outputs = self._execute_start_signals(post_action.get("instruments"), force=bool(post_action.get("force")))
             elif action_type == "stop_signal":
                 outputs = self._execute_stop_signals()
             elif action_type == "start_data":
-                outputs = self._execute_start_data(post_action.get("instruments"))
+                outputs = self._execute_start_data(post_action.get("instruments"), force=bool(post_action.get("force")))
             elif action_type == "stop_data":
                 outputs = self._execute_stop_data()
             reply = "\n".join(outputs) if outputs else result["reply"]
