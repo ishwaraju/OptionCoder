@@ -1,10 +1,16 @@
 """
-Telegram command listener for read-only bot commands.
+Telegram command listener for bot commands.
 
 Supported commands:
 - /status
 - /health
 - /signals
+- /start_signal
+- /stop_signal
+- /start_data
+- /stop_data
+- /stop
+- /shutdown
 """
 
 import argparse
@@ -196,6 +202,17 @@ class TelegramCommandService:
             timeout=30,
         )
 
+    def _start_local_tool(self, relative_path, *args):
+        command = [self.python_executable, os.path.join(REPO_ROOT, relative_path), *args]
+        process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return process
+
     def _pkill_patterns(self, patterns):
         outputs = []
         for pattern in patterns:
@@ -221,6 +238,53 @@ class TelegramCommandService:
         ):
             previews.append(f"{label}: stop requested")
         return "Stop requested\n" + "\n".join(previews)
+
+    def _parse_command_args(self, text):
+        tokens = (text or "").strip().split()
+        if len(tokens) <= 1:
+            return []
+        return [token.upper() for token in tokens[1:]]
+
+    def _valid_instruments(self, requested):
+        if not requested:
+            return list(DEFAULT_INSTRUMENTS)
+        valid = [instrument for instrument in requested if instrument in DEFAULT_INSTRUMENTS]
+        return valid or list(DEFAULT_INSTRUMENTS)
+
+    def _build_start_preview(self, label, instruments):
+        return f"{label} start requested\nInstruments: {', '.join(instruments)}"
+
+    def _execute_start_signals(self, instruments):
+        instruments = self._valid_instruments(instruments)
+        process = self._start_local_tool("tools/run_signals.py", "start", "--instruments", *instruments)
+        return [f"signals: started launcher pid={process.pid} for {', '.join(instruments)}"]
+
+    def _execute_stop_signals(self):
+        outputs = []
+        try:
+            result = self._run_local_tool("tools/run_signals.py", "stop")
+            detail = (result.stdout or result.stderr or "").strip()
+            outputs.append(f"signals: {detail or 'stop requested'}")
+        except Exception as exc:
+            outputs.append(f"signals: stop failed ({exc})")
+        outputs.extend(self._pkill_patterns(["services/signal_service.py", "tools/run_signals.py monitor"]))
+        return outputs
+
+    def _execute_start_data(self, instruments):
+        instruments = self._valid_instruments(instruments)
+        process = self._start_local_tool("tools/run_collectors.py", "start", "--instruments", *instruments)
+        return [f"collectors: started launcher pid={process.pid} for {', '.join(instruments)}"]
+
+    def _execute_stop_data(self):
+        outputs = []
+        try:
+            result = self._run_local_tool("tools/run_collectors.py", "stop")
+            detail = (result.stdout or result.stderr or "").strip()
+            outputs.append(f"collectors: {detail or 'stop requested'}")
+        except Exception as exc:
+            outputs.append(f"collectors: stop failed ({exc})")
+        outputs.extend(self._pkill_patterns(["services/data_collector.py", "services/oi_collector.py", "tools/run_collectors.py monitor"]))
+        return outputs
 
     def _execute_stop(self):
         outputs = []
@@ -271,12 +335,29 @@ class TelegramCommandService:
 
     def _handle_command(self, text):
         command = (text or "").strip().split()[0].lower()
+        command_args = self._parse_command_args(text)
         if command == "/status":
             return {"reply": self._format_status(), "post_action": None}
         if command == "/health":
             return {"reply": self._format_health(), "post_action": None}
         if command == "/signals":
             return {"reply": self._format_signals(), "post_action": None}
+        if command == "/start_signal":
+            instruments = self._valid_instruments(command_args)
+            return {
+                "reply": self._build_start_preview("Signal", instruments),
+                "post_action": {"type": "start_signal", "instruments": instruments},
+            }
+        if command == "/stop_signal":
+            return {"reply": "Signal stop requested", "post_action": {"type": "stop_signal"}}
+        if command == "/start_data":
+            instruments = self._valid_instruments(command_args)
+            return {
+                "reply": self._build_start_preview("Data", instruments),
+                "post_action": {"type": "start_data", "instruments": instruments},
+            }
+        if command == "/stop_data":
+            return {"reply": "Data stop requested", "post_action": {"type": "stop_data"}}
         if command == "/stop":
             return {"reply": self._build_stop_preview(), "post_action": "stop"}
         if command == "/shutdown":
@@ -287,6 +368,10 @@ class TelegramCommandService:
                 "/status\n"
                 "/health\n"
                 "/signals\n"
+                "/start_signal [NIFTY BANKNIFTY SENSEX]\n"
+                "/stop_signal\n"
+                "/start_data [NIFTY BANKNIFTY SENSEX]\n"
+                "/stop_data\n"
                 "/stop\n"
                 "/shutdown"
             ),
@@ -312,6 +397,16 @@ class TelegramCommandService:
             self._execute_stop()
         elif post_action == "shutdown":
             self._execute_shutdown()
+        elif isinstance(post_action, dict):
+            action_type = post_action.get("type")
+            if action_type == "start_signal":
+                self._execute_start_signals(post_action.get("instruments"))
+            elif action_type == "stop_signal":
+                self._execute_stop_signals()
+            elif action_type == "start_data":
+                self._execute_start_data(post_action.get("instruments"))
+            elif action_type == "stop_data":
+                self._execute_stop_data()
 
     def run_forever(self):
         self._validate()

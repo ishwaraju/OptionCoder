@@ -3,10 +3,23 @@ Main Configuration File
 """
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+
+def _read_raw_token():
+    token_path = Path(__file__).resolve().parents[1] / ".token"
+    if token_path.exists():
+        try:
+            token = token_path.read_text(encoding="utf-8").strip()
+            if token:
+                return token
+        except Exception:
+            pass
+    return os.getenv('DHAN_ACCESS_TOKEN', '')
 
 
 class MainConfig:
@@ -16,7 +29,7 @@ class MainConfig:
     # DHAN API CREDENTIALS
     # ==============================
     DHAN_CLIENT_ID = os.getenv('DHAN_CLIENT_ID', '')
-    DHAN_ACCESS_TOKEN = os.getenv('DHAN_ACCESS_TOKEN', '')
+    DHAN_ACCESS_TOKEN = _read_raw_token()
 
     # ==============================
     # DATA MODE
