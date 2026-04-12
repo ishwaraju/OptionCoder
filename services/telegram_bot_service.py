@@ -28,6 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
 from shared.db.reader import DBReader
+from shared.utils.time_utils import TimeUtils
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,6 +40,7 @@ class TelegramCommandService:
     def __init__(self, instruments=None):
         self.instruments = [instrument.upper() for instrument in (instruments or DEFAULT_INSTRUMENTS)]
         self.db_reader = DBReader()
+        self.time_utils = TimeUtils()
         self.bot_token = Config.TELEGRAM_BOT_TOKEN
         self.allowed_chat_id = str(Config.TELEGRAM_CHAT_ID) if Config.TELEGRAM_CHAT_ID else None
         self.api_base = f"https://api.telegram.org/bot{self.bot_token}"
@@ -107,20 +109,91 @@ class TelegramCommandService:
         except Exception:
             return None
 
+    def _find_running_pids(self, pattern):
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", pattern],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+            return [int(line.strip()) for line in result.stdout.splitlines() if line.strip().isdigit()]
+        except Exception:
+            return []
+
+    def _heartbeat_process_info(self, service_key, instrument=None):
+        instrument_upper = (instrument or "").upper()
+        if service_key == "runtime":
+            pids = self._find_running_pids("main.py")
+            return {"running": bool(pids), "pids": pids}
+        if service_key == "signal_service":
+            pids = self._find_running_pids(f"services/signal_service.py --instrument {instrument_upper}")
+            return {"running": bool(pids), "pids": pids}
+        if service_key == "data_collector":
+            pids = self._find_running_pids(f"services/data_collector.py --instrument {instrument_upper}")
+            return {"running": bool(pids), "pids": pids}
+        if service_key == "oi_collector":
+            pids = self._find_running_pids(f"services/oi_collector.py --instrument {instrument_upper}")
+            return {"running": bool(pids), "pids": pids}
+        if service_key == "telegram_bot_service":
+            return {"running": True, "pids": [os.getpid()]}
+        return {"running": False, "pids": []}
+
     def _service_heartbeat_rows(self):
         rows = []
         now = time.time()
+        seen = set()
         for heartbeat_file in sorted(glob.glob("data/*_heartbeat.json")):
             heartbeat = self._load_json(heartbeat_file)
             if not heartbeat:
                 continue
             status = heartbeat.get("status", {})
+            service_key = status.get("service") or os.path.basename(heartbeat_file).replace("_heartbeat.json", "")
+            instrument = status.get("instrument")
+            process_info = self._heartbeat_process_info(service_key, instrument)
+            seen.add((service_key, instrument))
             rows.append(
                 {
-                    "service": os.path.basename(heartbeat_file).replace("_heartbeat.json", ""),
+                    "service": service_key,
                     "phase": status.get("phase"),
-                    "instrument": status.get("instrument"),
+                    "instrument": instrument,
                     "heartbeat_age": None if heartbeat.get("epoch") is None else max(0.0, now - heartbeat["epoch"]),
+                    "running": process_info["running"],
+                    "pids": process_info["pids"],
+                }
+            )
+
+        expected = []
+        for instrument in self.instruments:
+            expected.extend(
+                [
+                    ("signal_service", instrument),
+                    ("data_collector", instrument),
+                    ("oi_collector", instrument),
+                ]
+            )
+        expected.extend(
+            [
+                ("telegram_bot_service", None),
+                ("runtime", None),
+            ]
+        )
+
+        for service_key, instrument in expected:
+            if (service_key, instrument) in seen:
+                continue
+            process_info = self._heartbeat_process_info(service_key, instrument)
+            rows.append(
+                {
+                    "service": service_key,
+                    "phase": "no_heartbeat",
+                    "instrument": instrument,
+                    "heartbeat_age": None,
+                    "running": process_info["running"],
+                    "pids": process_info["pids"],
                 }
             )
         return rows
@@ -130,13 +203,37 @@ class TelegramCommandService:
         if not rows:
             return "No service heartbeat files found."
 
-        lines = ["Status"]
+        grouped = {
+            "Signals": [],
+            "Data": [],
+            "OI": [],
+            "Telegram": [],
+            "Other": [],
+        }
+
         for row in rows:
             age = "unknown" if row["heartbeat_age"] is None else f"{row['heartbeat_age']:.0f}s"
-            instrument_suffix = f" | {row['instrument']}" if row["instrument"] else ""
-            lines.append(
-                f"{row['service']}{instrument_suffix} | phase={row['phase']} | hb_age={age}"
-            )
+            lifecycle = "RUNNING" if row["running"] else "STOPPED"
+            label = row["instrument"] or row["service"]
+            line = f"{label} | {lifecycle} | phase={row['phase']} | hb_age={age}"
+
+            if row["service"] == "signal_service":
+                grouped["Signals"].append(line)
+            elif row["service"] == "data_collector" or row["service"] == "runtime":
+                grouped["Data"].append(line)
+            elif row["service"] == "oi_collector":
+                grouped["OI"].append(line)
+            elif row["service"] == "telegram_bot_service":
+                grouped["Telegram"].append(line)
+            else:
+                grouped["Other"].append(f"{row['service']} | {line}")
+
+        lines = ["Status"]
+        for heading in ("Signals", "Data", "OI", "Telegram", "Other"):
+            if not grouped[heading]:
+                continue
+            lines.append(f"{heading}:")
+            lines.extend(grouped[heading])
         return "\n".join(lines)
 
     def _format_health(self):
@@ -147,9 +244,14 @@ class TelegramCommandService:
         lines = ["Health"]
         for row in rows:
             age = row["heartbeat_age"]
-            state = "HEALTHY"
-            if age is None or age > Config.WATCHDOG_STALE_SECONDS:
+            if not row["running"]:
+                state = "STOPPED"
+            elif age is None:
+                state = "RUNNING"
+            elif age > Config.WATCHDOG_STALE_SECONDS:
                 state = "STALE"
+            else:
+                state = "HEALTHY"
             instrument_suffix = f" | {row['instrument']}" if row["instrument"] else ""
             age_text = "unknown" if age is None else f"{age:.0f}s"
             lines.append(
@@ -256,6 +358,9 @@ class TelegramCommandService:
 
     def _execute_start_signals(self, instruments):
         instruments = self._valid_instruments(instruments)
+        if not self.time_utils.is_market_open():
+            now_ist = self.time_utils.now_ist().strftime("%Y-%m-%d %H:%M:%S")
+            return [f"signals: not started (market closed at {now_ist} IST)"]
         process = self._start_local_tool("tools/run_signals.py", "start", "--instruments", *instruments)
         return [f"signals: started launcher pid={process.pid} for {', '.join(instruments)}"]
 
@@ -272,6 +377,9 @@ class TelegramCommandService:
 
     def _execute_start_data(self, instruments):
         instruments = self._valid_instruments(instruments)
+        if not self.time_utils.is_market_open():
+            now_ist = self.time_utils.now_ist().strftime("%Y-%m-%d %H:%M:%S")
+            return [f"collectors: not started (market closed at {now_ist} IST)"]
         process = self._start_local_tool("tools/run_collectors.py", "start", "--instruments", *instruments)
         return [f"collectors: started launcher pid={process.pid} for {', '.join(instruments)}"]
 
@@ -391,22 +499,27 @@ class TelegramCommandService:
             return
 
         result = self._handle_command(text)
-        self._send_message(chat_id, result["reply"])
         post_action = result.get("post_action")
+        if isinstance(post_action, dict):
+            action_type = post_action.get("type")
+            outputs = []
+            if action_type == "start_signal":
+                outputs = self._execute_start_signals(post_action.get("instruments"))
+            elif action_type == "stop_signal":
+                outputs = self._execute_stop_signals()
+            elif action_type == "start_data":
+                outputs = self._execute_start_data(post_action.get("instruments"))
+            elif action_type == "stop_data":
+                outputs = self._execute_stop_data()
+            reply = "\n".join(outputs) if outputs else result["reply"]
+            self._send_message(chat_id, reply)
+            return
+
+        self._send_message(chat_id, result["reply"])
         if post_action == "stop":
             self._execute_stop()
         elif post_action == "shutdown":
             self._execute_shutdown()
-        elif isinstance(post_action, dict):
-            action_type = post_action.get("type")
-            if action_type == "start_signal":
-                self._execute_start_signals(post_action.get("instruments"))
-            elif action_type == "stop_signal":
-                self._execute_stop_signals()
-            elif action_type == "start_data":
-                self._execute_start_data(post_action.get("instruments"))
-            elif action_type == "stop_data":
-                self._execute_stop_data()
 
     def run_forever(self):
         self._validate()
