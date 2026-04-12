@@ -12,7 +12,7 @@ class ServiceWatchdog:
         self.instrument = instrument
         base_name = f"{service_name.lower()}_{instrument.lower()}"
         self.heartbeat_file = os.path.join("data", "heartbeat", f"{base_name}.json")
-        self.state_file = os.path.join("data", f"{base_name}_watchdog_state.json")
+        self.state_file = os.path.join("data", "watchdog", f"{base_name}_state.json")
         self.watchdog = None
 
         if Config.ENABLE_WATCHDOG:

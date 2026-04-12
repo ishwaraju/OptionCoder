@@ -22,7 +22,7 @@ from config import Config
 
 
 LEGACY_HEARTBEAT_FILE = "data/heartbeat/runtime.json"
-LEGACY_WATCHDOG_STATE_FILE = "data/watchdog_state.json"
+LEGACY_WATCHDOG_STATE_FILE = "data/watchdog/runtime_state.json"
 
 
 def load_json(path):
@@ -42,7 +42,7 @@ def discover_service_pairs():
 
     for heartbeat_file in heartbeat_files:
         base = heartbeat_file[: -len(".json")]
-        state_file = f"{base}_watchdog_state.json"
+        state_file = f"data/watchdog/{base}_state.json"
         service_key = os.path.basename(base)
         pairs.append((service_key, heartbeat_file, state_file))
         seen.add(service_key)
