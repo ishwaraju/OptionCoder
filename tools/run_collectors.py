@@ -30,7 +30,7 @@ STATE_FILE = REPO_ROOT / "data" / "run_collectors_state.json"
 class CollectorLauncher:
     def __init__(self, instruments, stagger_seconds=2.0, python_executable=None, skip_market_wait=False):
         self.instruments = [instrument.upper() for instrument in instruments]
-        self.stagger_seconds = float(stagger_seconds)
+        self.stagger_seconds = float(stagger_seconds) if stagger_seconds else 0.0
         self.python_executable = python_executable or sys.executable
         self.skip_market_wait = bool(skip_market_wait)
         self.processes = []
@@ -178,7 +178,8 @@ class CollectorLauncher:
         for instrument in self.instruments:
             for service_name in SERVICE_ORDER:
                 self._spawn(service_name, instrument)
-                time.sleep(self.stagger_seconds)
+                if self.stagger_seconds > 0:
+                    time.sleep(self.stagger_seconds)
 
         print("[Launcher] All collector services started.")
         print("[Launcher] Press Ctrl+C to stop all collectors.")
