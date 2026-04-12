@@ -47,9 +47,7 @@ def discover_service_pairs():
         pairs.append((service_key, heartbeat_file, state_file))
         seen.add(service_key)
 
-    if "runtime" not in seen:
-        pairs.append(("runtime", LEGACY_HEARTBEAT_FILE, LEGACY_WATCHDOG_STATE_FILE))
-
+    
     return pairs
 
 

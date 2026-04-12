@@ -5,4 +5,4 @@ data/*_watchdog_state.json
 data/run_signals_state.json
 data/run_collectors_state.json
 .token
-logs/*.log
+logs/*/*.log
