@@ -11,6 +11,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ from shared.db.reader import DBReader
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_INSTRUMENTS = ["NIFTY", "BANKNIFTY", "SENSEX"]
+HA_BIAS_RE = re.compile(r"ha_bias=([A-Z_]+)")
 
 
 class TelegramCommandService:
@@ -172,6 +174,10 @@ class TelegramCommandService:
                 f"{instrument}: {latest_signal['signal']} | {signal_time} | "
                 f"score {score} | Q{latest_signal['quality']} | {latest_signal['setup_type']}"
             )
+            reason = latest_signal.get("reason") or ""
+            ha_match = HA_BIAS_RE.search(reason)
+            if ha_match:
+                base += f" | HA_{ha_match.group(1)}"
             if latest_monitor and latest_monitor.get("guidance"):
                 base += f" | {latest_monitor['guidance']}"
             lines.append(base)

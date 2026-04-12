@@ -202,6 +202,7 @@ class SignalService:
             "pnl_points": pnl_points,
             "quality": self.active_trade_monitor["quality"],
             "time_regime": time_regime,
+            "heikin_ashi": (self.strategy.last_heikin_ashi or {}).get("bias"),
         }
 
     def _maybe_send_trade_monitor_update(self, latest_5m_candle):
@@ -677,6 +678,11 @@ class SignalService:
             f"| quality={balanced_pro['quality']} | tradability={balanced_pro['tradability']} "
             f"| time_regime={balanced_pro['time_regime']}"
         )
+        if self.strategy.last_heikin_ashi:
+            enriched_reason += (
+                f" | ha_bias={self.strategy.last_heikin_ashi.get('bias')}"
+                f" | ha_strength={self.strategy.last_heikin_ashi.get('strength')}"
+            )
         if fallback_context and fallback_context["fallback_used"]:
             enriched_reason += " | oi_mode=OI_ONLY_FALLBACK"
         if self.strategy.last_blockers:

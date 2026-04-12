@@ -114,3 +114,86 @@ def test_aggressive_mode_allows_clean_mid_score_continuation():
     finally:
         Config.TEST_MODE = original_test_mode
         Config.AGGRESSIVE_MODE = original_aggressive_mode
+
+
+def test_heikin_ashi_alignment_allows_bullish_breakout():
+    strategy = BreakoutStrategy()
+    strategy.time_utils.current_time = lambda: _ist_dt(10, 5).time()
+
+    signal, reason = strategy.generate_signal(
+        price=23990,
+        orb_high=23960,
+        orb_low=23920,
+        vwap=23955,
+        volume_signal="STRONG",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="LONG_BUILDUP",
+        can_trade=True,
+        buffer=10,
+        pressure_metrics={"pressure_bias": "BULLISH", "atm_pe_concentration": 0.3, "atm_ce_concentration": 0.1},
+        atr=25,
+        candle_high=23995,
+        candle_low=23962,
+        candle_close=23990,
+        candle_open=23964,
+        candle_tick_count=6,
+        candle_time=_ist_dt(10, 5),
+        candle_volume=1200000,
+    )
+
+    assert signal == "CE"
+    assert strategy.last_heikin_ashi["bias"] == "BULLISH"
+    assert "Breakout" in reason or "breakout" in reason
+
+
+def test_heikin_ashi_opposite_blocks_bullish_breakout():
+    strategy = BreakoutStrategy()
+    strategy.time_utils.current_time = lambda: _ist_dt(10, 10).time()
+
+    strategy.generate_signal(
+        price=23970,
+        orb_high=23960,
+        orb_low=23920,
+        vwap=23945,
+        volume_signal="NORMAL",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="LONG_BUILDUP",
+        can_trade=True,
+        buffer=10,
+        pressure_metrics={"pressure_bias": "BULLISH", "atm_pe_concentration": 0.2, "atm_ce_concentration": 0.1},
+        atr=20,
+        candle_high=23976,
+        candle_low=23950,
+        candle_close=23970,
+        candle_open=23954,
+        candle_tick_count=5,
+        candle_time=_ist_dt(10, 5),
+        candle_volume=800000,
+    )
+
+    signal, reason = strategy.generate_signal(
+        price=23990,
+        orb_high=23960,
+        orb_low=23920,
+        vwap=23955,
+        volume_signal="STRONG",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="LONG_BUILDUP",
+        can_trade=True,
+        buffer=10,
+        pressure_metrics={"pressure_bias": "BULLISH", "atm_pe_concentration": 0.3, "atm_ce_concentration": 0.1},
+        atr=25,
+        candle_high=24010,
+        candle_low=23890,
+        candle_close=23900,
+        candle_open=24005,
+        candle_tick_count=6,
+        candle_time=_ist_dt(10, 10),
+        candle_volume=1200000,
+    )
+
+    assert signal is None
+    assert strategy.last_heikin_ashi["bias"] == "BEARISH"

@@ -108,6 +108,7 @@ class Notifier:
         reason = monitor_data.get("reason")
         structure = monitor_data.get("structure")
         pnl_points = monitor_data.get("pnl_points")
+        heikin_ashi = monitor_data.get("heikin_ashi")
         structure_short = structure or ""
         prefix = f"{instrument} | " if instrument else ""
         message = f"{prefix}{signal} | {guidance}"
@@ -115,6 +116,8 @@ class Notifier:
             message += f" | {pnl_points:+.2f}pts"
         if structure_short:
             message += f" | {structure_short}"
+        if heikin_ashi:
+            message += f" | HA_{heikin_ashi}"
         if time_regime:
             message += f" | {time_regime}"
         if quality:

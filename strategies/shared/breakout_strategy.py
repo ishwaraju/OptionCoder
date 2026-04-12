@@ -17,9 +17,55 @@ class BreakoutStrategy:
         self.last_is_expiry_day = False
         self.last_signal_type = "NONE"
         self.last_signal_grade = "SKIP"
+        self.last_heikin_ashi = None
+        self.prev_heikin_ashi_open = None
+        self.prev_heikin_ashi_close = None
         self.retest_setup = None
         self.confirmation_setup = None
         self.retest_bars_max = 3
+        self.last_emitted_signal = None
+
+    def _compute_heikin_ashi(self, candle_open, candle_high, candle_low, candle_close):
+        if None in (candle_open, candle_high, candle_low, candle_close):
+            return None
+
+        ha_close = (candle_open + candle_high + candle_low + candle_close) / 4.0
+        had_prior_context = not (
+            self.prev_heikin_ashi_open is None or self.prev_heikin_ashi_close is None
+        )
+        if not had_prior_context:
+            ha_open = (candle_open + candle_close) / 2.0
+        else:
+            ha_open = (self.prev_heikin_ashi_open + self.prev_heikin_ashi_close) / 2.0
+
+        ha_high = max(candle_high, ha_open, ha_close)
+        ha_low = min(candle_low, ha_open, ha_close)
+        lower_wick = min(ha_open, ha_close) - ha_low
+        upper_wick = ha_high - max(ha_open, ha_close)
+        tolerance = max(abs(candle_close - candle_open) * 0.1, 0.5)
+
+        if ha_close > ha_open:
+            bias = "BULLISH"
+            strength = "BULLISH_STRONG" if lower_wick <= tolerance else "BULLISH"
+        elif ha_close < ha_open:
+            bias = "BEARISH"
+            strength = "BEARISH_STRONG" if upper_wick <= tolerance else "BEARISH"
+        else:
+            bias = "NEUTRAL"
+            strength = "NEUTRAL"
+
+        self.prev_heikin_ashi_open = ha_open
+        self.prev_heikin_ashi_close = ha_close
+        self.last_heikin_ashi = {
+            "open": ha_open,
+            "high": ha_high,
+            "low": ha_low,
+            "close": ha_close,
+            "bias": bias,
+            "strength": strength,
+            "had_prior_context": had_prior_context,
+        }
+        return self.last_heikin_ashi
 
     @staticmethod
     def _has_bullish_build_up(build_up):
@@ -51,6 +97,42 @@ class BreakoutStrategy:
             "bars_remaining": 2,
             "session_day": current_bar_time.date() if current_bar_time is not None else self.time_utils.now_ist().date(),
             "score": score,
+        }
+
+    def _should_suppress_duplicate(self, direction, signal_type, current_bar_time, level=None):
+        if current_bar_time is None or signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST"}:
+            return False
+
+        last = self.last_emitted_signal
+        if not last:
+            return False
+
+        if last["session_day"] != current_bar_time.date():
+            return False
+
+        if last["direction"] != direction or last["signal_type"] != signal_type:
+            return False
+
+        bars_apart = int((current_bar_time - last["time"]).total_seconds() // 300)
+        if bars_apart > 2:
+            return False
+
+        if level is None or last["level"] is None:
+            return True
+
+        return abs(level - last["level"]) <= max(last["buffer"] * 2, 10)
+
+    def _mark_signal_emitted(self, direction, signal_type, current_bar_time, level=None, buffer=0):
+        if current_bar_time is None:
+            return
+
+        self.last_emitted_signal = {
+            "direction": direction,
+            "signal_type": signal_type,
+            "time": current_bar_time,
+            "session_day": current_bar_time.date(),
+            "level": level,
+            "buffer": buffer or 0,
         }
 
     def _update_retest_setup(self, current_bar_time):
@@ -154,13 +236,13 @@ class BreakoutStrategy:
             thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 60 if fallback_mode else 58)
             thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 68)
         elif time_regime == "MIDDAY":
-            thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 60)
+            thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 63 if fallback_mode else 60)
             thresholds["confirm_min_score"] = max(thresholds["confirm_min_score"], 64)
             thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 72)
             thresholds["high_continuation_min_score"] = max(thresholds["high_continuation_min_score"], 80)
             thresholds["allow_fallback_continuation"] = False
         elif time_regime == "LATE_DAY":
-            thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 58)
+            thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 60 if fallback_mode else 58)
             thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 62 if fallback_mode else 65)
         elif time_regime == "ENDGAME":
             thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 65)
@@ -392,6 +474,19 @@ class BreakoutStrategy:
             breakout_body_ok = candle_body >= max(buffer * 0.6, 8)
             breakout_structure_ok = candle_range == 0 or (candle_body / candle_range) >= 0.30
         candle_liquidity_ok = candle_tick_count is None or candle_tick_count >= 3
+        heikin_ashi = self._compute_heikin_ashi(candle_open, candle_high, candle_low, candle_close)
+        ha_bias = heikin_ashi["bias"] if heikin_ashi else "NEUTRAL"
+        ha_strength = heikin_ashi["strength"] if heikin_ashi else "NEUTRAL"
+        ha_has_context = heikin_ashi["had_prior_context"] if heikin_ashi else False
+        bullish_ha_ok = (ha_bias == "BULLISH") if ha_has_context else True
+        bearish_ha_ok = (ha_bias == "BEARISH") if ha_has_context else True
+        strong_bullish_ha = ha_strength == "BULLISH_STRONG"
+        strong_bearish_ha = ha_strength == "BEARISH_STRONG"
+
+        if scored_direction == "CE" and ha_has_context and ha_strength == "BEARISH_STRONG":
+            cautions.append("heikin_ashi_strong_opposite")
+        elif scored_direction == "PE" and ha_has_context and ha_strength == "BULLISH_STRONG":
+            cautions.append("heikin_ashi_strong_opposite")
 
         bullish_buildups = ["LONG_BUILDUP", "SHORT_COVERING"]
         bearish_buildups = ["SHORT_BUILDUP", "LONG_UNWINDING"]
@@ -534,6 +629,7 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and candle_liquidity_ok
+                and bullish_ha_ok
                 and "opposite_pressure" not in cautions
                 and "far_from_vwap" not in cautions
         ):
@@ -564,6 +660,7 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and candle_liquidity_ok
+                and bearish_ha_ok
                 and "opposite_pressure" not in cautions
                 and "far_from_vwap" not in cautions
         ):
@@ -596,6 +693,10 @@ class BreakoutStrategy:
                 and continuation_regime_ok
                 and score >= time_thresholds["confirm_min_score"]
         ):
+            if self._should_suppress_duplicate("CE", "BREAKOUT_CONFIRM", candle_time, active_confirmation["level"]):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate breakout confirmation suppressed | score={score}"
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
                 blockers=blockers,
@@ -606,6 +707,7 @@ class BreakoutStrategy:
             )
             level = active_confirmation["level"]
             self._reset_confirmation_setup()
+            self._mark_signal_emitted("CE", "BREAKOUT_CONFIRM", candle_time, level=level, buffer=buffer)
             return "CE", f"Breakout confirmation above {level} | score={score}"
 
         if (
@@ -625,6 +727,10 @@ class BreakoutStrategy:
                 and continuation_regime_ok
                 and score >= time_thresholds["confirm_min_score"]
         ):
+            if self._should_suppress_duplicate("PE", "BREAKOUT_CONFIRM", candle_time, active_confirmation["level"]):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate breakdown confirmation suppressed | score={score}"
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
                 blockers=blockers,
@@ -635,6 +741,7 @@ class BreakoutStrategy:
             )
             level = active_confirmation["level"]
             self._reset_confirmation_setup()
+            self._mark_signal_emitted("PE", "BREAKOUT_CONFIRM", candle_time, level=level, buffer=buffer)
             return "PE", f"Breakdown confirmation below {level} | score={score}"
 
         if (
@@ -655,6 +762,10 @@ class BreakoutStrategy:
                 and not opening_session
                 and retest_regime_ok
         ):
+            if self._should_suppress_duplicate("CE", "RETEST", candle_time, active_retest["level"]):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate retest suppressed | score={score}"
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
                 blockers=blockers,
@@ -666,6 +777,7 @@ class BreakoutStrategy:
             level = active_retest["level"]
             self._reset_retest_setup()
             self._reset_confirmation_setup()
+            self._mark_signal_emitted("CE", "RETEST", candle_time, level=level, buffer=buffer)
             return "CE", f"Breakout retest support entry above {level} | score={score}"
 
         if (
@@ -686,6 +798,10 @@ class BreakoutStrategy:
                 and not opening_session
                 and retest_regime_ok
         ):
+            if self._should_suppress_duplicate("PE", "RETEST", candle_time, active_retest["level"]):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate retest suppressed | score={score}"
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
                 blockers=blockers,
@@ -697,6 +813,7 @@ class BreakoutStrategy:
             level = active_retest["level"]
             self._reset_retest_setup()
             self._reset_confirmation_setup()
+            self._mark_signal_emitted("PE", "RETEST", candle_time, level=level, buffer=buffer)
             return "PE", f"Breakdown retest resistance entry below {level} | score={score}"
 
         # =============================
@@ -715,10 +832,19 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and candle_liquidity_ok
+                and bullish_ha_ok
                 and (candle_close is None or candle_close > orb_high)
                 and not opening_session
                 and breakout_regime_ok
         ):
+            if fallback_mode and time_regime in ["MIDDAY", "LATE_DAY"] and volume_signal != "STRONG":
+                blockers.append("fallback_volume_not_strong")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Fallback breakout needs stronger volume | score={score}"
+            if self._should_suppress_duplicate("CE", "BREAKOUT", candle_time, orb_high):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate breakout suppressed | score={score}"
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
                 blockers=blockers,
@@ -729,6 +855,7 @@ class BreakoutStrategy:
             )
             self._reset_retest_setup()
             self._reset_confirmation_setup()
+            self._mark_signal_emitted("CE", "BREAKOUT", candle_time, level=orb_high, buffer=buffer)
             return "CE", f"ORB Breakout Up + VWAP + Volume + Long Build-up | score={score}"
 
         # =============================
@@ -747,10 +874,19 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and candle_liquidity_ok
+                and bearish_ha_ok
                 and (candle_close is None or candle_close < orb_low)
                 and not opening_session
                 and breakout_regime_ok
         ):
+            if fallback_mode and time_regime in ["MIDDAY", "LATE_DAY"] and volume_signal != "STRONG":
+                blockers.append("fallback_volume_not_strong")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Fallback breakdown needs stronger volume | score={score}"
+            if self._should_suppress_duplicate("PE", "BREAKOUT", candle_time, orb_low):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate breakdown suppressed | score={score}"
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
                 blockers=blockers,
@@ -761,6 +897,7 @@ class BreakoutStrategy:
             )
             self._reset_retest_setup()
             self._reset_confirmation_setup()
+            self._mark_signal_emitted("PE", "BREAKOUT", candle_time, level=orb_low, buffer=buffer)
             return "PE", f"ORB Breakdown Down + VWAP + Volume + Short Build-up | score={score}"
 
         # =============================
@@ -820,6 +957,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and breakout_body_ok
                 and breakout_structure_ok
+                and bullish_ha_ok
                 and "opposite_pressure" not in cautions
                 and "far_from_vwap" not in cautions
                 and not opening_session
@@ -850,6 +988,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and breakout_body_ok
                 and breakout_structure_ok
+                and bearish_ha_ok
                 and "opposite_pressure" not in cautions
                 and "far_from_vwap" not in cautions
                 and not opening_session
@@ -880,6 +1019,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and breakout_body_ok
                 and breakout_structure_ok
+                and bullish_ha_ok
                 and (
                     "far_from_vwap" not in cautions
                     or (
@@ -916,6 +1056,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and breakout_body_ok
                 and breakout_structure_ok
+                and bullish_ha_ok
                 and "opposite_pressure" not in cautions
                 and "far_from_vwap" not in cautions
                 and not opening_session
@@ -946,6 +1087,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and breakout_body_ok
                 and breakout_structure_ok
+                and bearish_ha_ok
                 and (
                     "far_from_vwap" not in cautions
                     or (
@@ -982,6 +1124,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and breakout_body_ok
                 and breakout_structure_ok
+                and bearish_ha_ok
                 and "opposite_pressure" not in cautions
                 and "far_from_vwap" not in cautions
                 and not opening_session
@@ -1107,7 +1250,7 @@ class BreakoutStrategy:
                 blockers.append("vwap_not_supportive")
             if oi_bias == "BEARISH" or oi_trend == "BEARISH":
                 blockers.append("oi_conflict")
-            if not bullish_build_up_ok:
+            if not bullish_build_up_ok and not fallback_mode:
                 blockers.append("build_up_missing")
             elif build_up not in bullish_buildups:
                 blockers.append("build_up_inferred")
@@ -1122,7 +1265,7 @@ class BreakoutStrategy:
                 blockers.append("vwap_not_supportive")
             if oi_bias == "BULLISH" or oi_trend == "BULLISH":
                 blockers.append("oi_conflict")
-            if not bearish_build_up_ok:
+            if not bearish_build_up_ok and not fallback_mode:
                 blockers.append("build_up_missing")
             elif build_up not in bearish_buildups:
                 blockers.append("build_up_inferred")
