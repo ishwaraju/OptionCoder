@@ -70,6 +70,7 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
       </filter>
     </filter-actions>
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.option_band_snapshots_1m" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.trade_monitor_events_1m" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.signals_issued" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.candles_5m" active-filter-id="EMPTY_FILTER" />

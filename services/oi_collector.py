@@ -65,6 +65,10 @@ class OICollector:
         self.last_market_status_check = 0
         self.market_status_interval = 60  # Every minute
         self.last_market_status = "UNKNOWN"
+        
+        # Data pause tracking
+        self.data_pause_active = False
+        self.last_data_pause_reason = None
         self.oi_snapshots_collected = 0
         self.option_bands_collected = 0
         
@@ -474,6 +478,21 @@ class OICollector:
             elif market_status == "POST_MARKET":
                 print(f"[OI Collector] Post-market - Market closed for today")
                 print(f"[OI Collector] Next market open: Tomorrow {market_open.strftime('%H:%M')} IST")
+                # Set data pause and show IDLE status
+                self.data_pause_active = True
+                self.last_data_pause_reason = "Market closed"
+                self.watchdog.touch({"phase": "data_pause", "reason": "Market closed"})
+                # Wait for next day instead of stopping
+                while True:
+                    time_module.sleep(60)
+                    current_time = self.time_utils.now_ist()
+                    if current_time.hour >= 9 and current_time.minute >= 14:
+                        print(f"[OI Collector] Market opened at {current_time.strftime('%H:%M:%S')} IST")
+                        # Resume normal operation
+                        self.data_pause_active = False
+                        self.last_data_pause_reason = None
+                        self.watchdog.touch({"phase": "resumed"})
+                        break
             elif market_status == "MARKET_OPEN":
                 print(f"[OI Collector] Market Open - Collecting OI data")
                 print(f"[OI Collector] Market closes at {market_close.strftime('%H:%M')} IST")
@@ -498,19 +517,46 @@ class OICollector:
             while self.running:
                 current_time = time_module.time()
                 
+                # Market status check
+                if current_time - self.last_market_status_check >= self.market_status_interval:
+                    self._check_market_status()
+                    self.last_market_status_check = current_time
+                
+                # Only proceed if not in data pause
+                if self.data_pause_active:
+                    # Touch watchdog to maintain IDLE status
+                    self.watchdog.touch({"phase": "data_pause", "reason": self.last_data_pause_reason})
+                    time_module.sleep(1)
+                    continue
+                
                 # Track OI changes every minute (hybrid approach)
+                if self.data_pause_active:
+                    # Market closed, skip OI tracking
+                    time_module.sleep(1)
+                    continue
+                    
                 if self._should_track_oi_changes():
                     self._track_oi_changes()
                     self.last_change_tracking = current_time
                     self.watchdog.touch({"phase": "tracking_oi_changes", "dhan_connected": self.dhan_client.connected})
                 
                 # Collect full OI snapshot if due (every 5 minutes)
+                if self.data_pause_active:
+                    # Market closed, skip OI collection
+                    time_module.sleep(1)
+                    continue
+                    
                 if self._should_collect_oi():
                     self._collect_oi_snapshot()
                     self.last_oi_collection = current_time
                     self.watchdog.touch({"phase": "collecting_oi_snapshot", "dhan_connected": self.dhan_client.connected})
                 
                 # Collect option bands if due
+                if self.data_pause_active:
+                    # Market closed, skip option bands collection
+                    time_module.sleep(1)
+                    continue
+                    
                 if self._should_collect_option_bands():
                     self._collect_option_bands()
                     self.last_option_band_collection = current_time

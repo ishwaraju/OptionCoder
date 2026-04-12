@@ -167,28 +167,23 @@ class SignalServiceManager:
                 self.processes = loaded_processes
 
         if not self.processes:
-            print("[Signal Manager] No signal services running")
+            print("⚠️ [Signal Manager] No signal services running")
             return
         
-        print("[Signal Manager] Stopping signal service(s)...")
+        print("🛑 [Signal Manager] Stopping signal service(s)...")
         for entry in self.processes:
             process = entry.get("process")
             pid = entry.get("pid") or (process.pid if process else None)
             if process and process.poll() is not None:
                 continue
             try:
-                print(
-                    f"[Signal Manager] Stopping {entry['instrument']} "
-                    f"(pid={pid})"
-                )
+                print(f"  • {entry['instrument']} (pid={pid})")
                 if process:
                     process.terminate()
                 elif pid:
                     os.kill(pid, signal.SIGTERM)
             except Exception as e:
-                print(
-                    f"[Signal Manager] Error stopping {entry['instrument']}: {e}"
-                )
+                print(f"  ❌ Error stopping {entry['instrument']}: {e}")
 
         deadline = time.time() + 10
         while time.time() < deadline:
@@ -209,10 +204,7 @@ class SignalServiceManager:
             elif pid:
                 still_running = self._pid_is_running(pid)
             if still_running:
-                print(
-                    f"[Signal Manager] Force killing {entry['instrument']} "
-                    f"(pid={pid})"
-                )
+                print(f"  💀 Force killing {entry['instrument']} (pid={pid})")
                 if process:
                     process.kill()
                 elif pid:
@@ -220,7 +212,7 @@ class SignalServiceManager:
         
         self.processes = []
         self._clear_state()
-        print("[Signal Manager] All signal services stopped")
+        print("✅ [Signal Manager] All signal services stopped")
 
     def status(self):
         """Check signal service status"""

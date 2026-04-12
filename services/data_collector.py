@@ -60,6 +60,10 @@ class DataCollector:
         self.market_status_interval = 60  # Check every minute
         self.last_market_status = "UNKNOWN"
         
+        # Data pause tracking
+        self.data_pause_active = False
+        self.last_data_pause_reason = None
+        
         # Initialize with historical data
         self._restore_indicator_state()
 
@@ -166,6 +170,10 @@ class DataCollector:
             elif market_status == "POST_MARKET":
                 print(f"[Data Collector] Post-market - Market closed for today")
                 print(f"[Data Collector] Next market open: Tomorrow {market_open.strftime('%H:%M')} IST")
+                # Set data pause and show IDLE status
+                self.data_pause_active = True
+                self.last_data_pause_reason = "Market closed"
+                self.watchdog.touch({"phase": "data_pause", "reason": "Market closed"})
             elif market_status == "MARKET_OPEN":
                 print(f"[Data Collector] Market Open - Collecting live data")
                 print(f"[Data Collector] Market closes at {market_close.strftime('%H:%M')} IST")
@@ -326,9 +334,21 @@ class DataCollector:
     def run_forever(self):
         """Main data collection loop - runs forever"""
         self.watchdog.start({"phase": "starting"})
-        if not self.connect():
-            print("[Data Collector] Failed to start - connection error")
-            return
+        
+        # Check market status first
+        self._check_market_status()
+        
+        if self.last_market_status in ["POST_MARKET", "WEEKEND"]:
+            print("[Data Collector] Market closed - Entering IDLE mode")
+            self.data_pause_active = True
+            self.last_data_pause_reason = "Market closed"
+            self.running = True
+            self._print_startup_status()
+        else:
+            # Try to connect for market open hours
+            if not self.connect():
+                print("[Data Collector] Failed to start - connection error")
+                return
 
         self.running = True
         self._print_startup_status()
@@ -337,6 +357,30 @@ class DataCollector:
         
         try:
             while self.running:
+                current_time = time_module.time()
+                
+                # Market status check
+                if current_time - self.last_market_status_check >= self.market_status_interval:
+                    self._check_market_status()
+                    self.last_market_status_check = current_time
+                    
+                    # Check if we should resume from data pause (market opened)
+                    if self.data_pause_active:
+                        # Re-check market status
+                        self._check_market_status()
+                        if self.last_market_status == "MARKET_OPEN":
+                            print(f"[Data Collector] Market opened - Resuming data collection")
+                            self.data_pause_active = False
+                            self.last_data_pause_reason = None
+                            self.watchdog.touch({"phase": "resumed", "reason": "Market opened"})
+                
+                # Only proceed if not in data pause
+                if self.data_pause_active:
+                    # Touch watchdog to maintain IDLE status
+                    self.watchdog.touch({"phase": "data_pause", "reason": self.last_data_pause_reason})
+                    time_module.sleep(1)
+                    continue
+                
                 # Get live data
                 live_snapshot = self.live_feed.get_live_data()
                 connection_state = self._handle_connection_events(live_snapshot)

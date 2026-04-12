@@ -482,11 +482,32 @@ class TelegramCommandService:
     def _build_start_preview(self, label, instruments):
         return f"{label} start requested\nInstruments: {', '.join(instruments)}"
 
+    def _check_services_running(self, service_type, instruments):
+        """Check if specified services are already running"""
+        rows = self._service_heartbeat_rows()
+        already_running = []
+        
+        for instrument in instruments:
+            # Check if this service for this instrument is running
+            for row in rows:
+                if (row["service"] == service_type and 
+                    row["instrument"] == instrument and 
+                    row["running"]):
+                    already_running.append(instrument)
+                    break
+        
+        return already_running
+
     def _execute_start_signals(self, instruments, force=False):
         instruments = self._valid_instruments(instruments)
-        if not force and not self.time_utils.is_market_open():
-            now_ist = self.time_utils.now_ist().strftime("%Y-%m-%d %H:%M:%S")
-            return [f"signals: not started (market closed at {now_ist} IST)"]
+        
+        # Check if signal services are already running
+        already_running = self._check_services_running("signal_service", instruments)
+        if already_running:
+            return [f"signals: already running for {', '.join(already_running)}"]
+        
+        # Always allow start - user is in control
+        # Market closed services will automatically enter appropriate mode
         process = self._start_local_tool("tools/run_signals.py", "start", "--instruments", *instruments)
         return [f"signals: started launcher pid={process.pid} for {', '.join(instruments)}"]
 
@@ -495,31 +516,87 @@ class TelegramCommandService:
         try:
             result = self._run_local_tool("tools/run_signals.py", "stop")
             detail = (result.stdout or result.stderr or "").strip()
-            outputs.append(f"signals: {detail or 'stop requested'}")
         except Exception as exc:
-            outputs.append(f"signals: stop failed ({exc})")
+            outputs.append(f"❌ signals: stop failed ({exc})")
+            return outputs
         outputs.extend(self._pkill_patterns(["services/signal_service.py", "tools/run_signals.py monitor"]))
-        return outputs
+        
+        # Build beautiful response like data stop
+        response_lines = ["🛑 signals: stopped successfully ✅"]
+        
+        # Parse signal services from detail or get from running processes
+        signal_services = []
+        if detail and "•" in detail:
+            # Extract instrument names from the detail output
+            import re
+            matches = re.findall(r'• (\w+) \(pid=(\d+)\)', detail)
+            signal_services = [f"{instrument} ({pid})" for instrument, pid in matches]
+        
+        if signal_services:
+            response_lines.append(f"  🚦 {len(signal_services)} signal services terminated:")
+            response_lines.extend([f"    ⚡ {service}" for service in signal_services])
+        else:
+            response_lines.append("  😴 No signal services were running")
+        
+        return response_lines
 
     def _execute_start_data(self, instruments, force=False):
         instruments = self._valid_instruments(instruments)
-        if not force and not self.time_utils.is_market_open():
-            now_ist = self.time_utils.now_ist().strftime("%Y-%m-%d %H:%M:%S")
-            return [f"collectors: not started (market closed at {now_ist} IST)"]
-        extra_args = ["--skip-market-wait"] if force else []
+        
+        # Check if data collector and OI collector services are already running
+        data_running = self._check_services_running("data_collector", instruments)
+        oi_running = self._check_services_running("oi_collector", instruments)
+        
+        if data_running or oi_running:
+            already_msg_parts = []
+            if data_running:
+                already_msg_parts.append(f"data collectors ({', '.join(data_running)})")
+            if oi_running:
+                already_msg_parts.append(f"OI collectors ({', '.join(oi_running)})")
+            return [f"collectors: already running for {' and '.join(already_msg_parts)}"]
+        
+        # Always allow start - user is in control
+        # Market closed services will automatically enter IDLE mode
+        extra_args = ["--skip-market-wait"]
         process = self._start_local_tool("tools/run_collectors.py", "start", "--instruments", *instruments, *extra_args)
         return [f"collectors: started launcher pid={process.pid} for {', '.join(instruments)}"]
 
     def _execute_stop_data(self):
+        # Get current running services before stopping
+        rows = self._service_heartbeat_rows()
+        data_services = []
+        oi_services = []
+        
+        for row in rows:
+            if row["service"] == "data_collector" and row["running"]:
+                data_services.append(f"  {row['instrument']} ({row.get('pids', ['unknown'])[0]})")
+            elif row["service"] == "oi_collector" and row["running"]:
+                oi_services.append(f"  {row['instrument']} ({row.get('pids', ['unknown'])[0]})")
+        
+        # Perform the actual stop
         outputs = []
         try:
             result = self._run_local_tool("tools/run_collectors.py", "stop")
             detail = (result.stdout or result.stderr or "").strip()
-            outputs.append(f"collectors: {detail or 'stop requested'}")
         except Exception as exc:
             outputs.append(f"collectors: stop failed ({exc})")
         outputs.extend(self._pkill_patterns(["services/data_collector.py", "services/oi_collector.py", "tools/run_collectors.py monitor"]))
-        return outputs
+        
+        # Build beautiful response with emojis
+        response_lines = ["🛑 collectors: stopped successfully ✅"]
+        
+        if data_services:
+            response_lines.append(f"  📊 {len(data_services)} data services terminated:")
+            response_lines.extend([f"    ⚡ {service}" for service in data_services])
+        
+        if oi_services:
+            response_lines.append(f"  📈 {len(oi_services)} OI services terminated:")
+            response_lines.extend([f"    🎯 {service}" for service in oi_services])
+        
+        if not data_services and not oi_services:
+            response_lines.append("  😴 No data services were running")
+        
+        return response_lines
 
     def _execute_stop(self):
         outputs = []
@@ -584,12 +661,6 @@ class TelegramCommandService:
                 "reply": self._build_start_preview("Signal", instruments),
                 "post_action": {"type": "start_signal", "instruments": instruments, "force": force},
             }
-        if command == "/start_signal_force":
-            instruments = self._valid_instruments(command_args)
-            return {
-                "reply": self._build_start_preview("Signal", instruments),
-                "post_action": {"type": "start_signal", "instruments": instruments, "force": True},
-            }
         if command == "/stop_signal":
             return {"reply": "Signal stop requested", "post_action": {"type": "stop_signal"}}
         if command == "/start_data":
@@ -598,12 +669,6 @@ class TelegramCommandService:
             return {
                 "reply": self._build_start_preview("Data", instruments),
                 "post_action": {"type": "start_data", "instruments": instruments, "force": force},
-            }
-        if command == "/start_data_force":
-            instruments = self._valid_instruments(command_args)
-            return {
-                "reply": self._build_start_preview("Data", instruments),
-                "post_action": {"type": "start_data", "instruments": instruments, "force": True},
             }
         if command == "/stop_data":
             return {"reply": "Data stop requested", "post_action": {"type": "stop_data"}}
@@ -618,10 +683,8 @@ class TelegramCommandService:
                 "/health\n"
                 "/signals\n"
                 "/start_signal [NIFTY BANKNIFTY SENSEX]\n"
-                "/start_signal_force [NIFTY BANKNIFTY SENSEX]\n"
                 "/stop_signal\n"
                 "/start_data [NIFTY BANKNIFTY SENSEX]\n"
-                "/start_data_force [NIFTY BANKNIFTY SENSEX]\n"
                 "/stop_data\n"
                 "/stop\n"
                 "/shutdown"
