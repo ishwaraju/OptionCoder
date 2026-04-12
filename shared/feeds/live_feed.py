@@ -358,6 +358,7 @@ class LiveFeed:
         with self.reconnect_lock:
             self.reconnect_scheduled = False
 
+        # Check TEST_MODE first - this should override all other logic
         if Config.TEST_MODE:
             print("Running in MOCK Live Feed Mode")
             self.start_mock_feed()

@@ -21,7 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 
 
-LEGACY_HEARTBEAT_FILE = "data/runtime_heartbeat.json"
+LEGACY_HEARTBEAT_FILE = "data/heartbeat/runtime.json"
 LEGACY_WATCHDOG_STATE_FILE = "data/watchdog_state.json"
 
 
@@ -36,12 +36,12 @@ def load_json(path):
 
 
 def discover_service_pairs():
-    heartbeat_files = sorted(glob.glob("data/*_heartbeat.json"))
+    heartbeat_files = sorted(glob.glob("data/heartbeat/*.json"))
     pairs = []
     seen = set()
 
     for heartbeat_file in heartbeat_files:
-        base = heartbeat_file[: -len("_heartbeat.json")]
+        base = heartbeat_file[: -len(".json")]
         state_file = f"{base}_watchdog_state.json"
         service_key = os.path.basename(base)
         pairs.append((service_key, heartbeat_file, state_file))

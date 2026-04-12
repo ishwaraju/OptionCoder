@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
+from shared.utils.log_utils import build_instrument_log_path, cleanup_old_logs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INSTRUMENTS = ["NIFTY", "BANKNIFTY", "SENSEX"]
@@ -36,6 +37,7 @@ class SignalServiceManager:
         self.processes = []
         self.running = False
         self.time_utils = TimeUtils()
+        cleanup_old_logs(retention_days=7)
     
     def _load_state(self):
         if not STATE_FILE.exists():
@@ -105,7 +107,7 @@ class SignalServiceManager:
         return REPO_ROOT / "services" / "signal_service.py"
 
     def _heartbeat_path(self, instrument):
-        return REPO_ROOT / "data" / f"signal_service_{instrument.lower()}_heartbeat.json"
+        return REPO_ROOT / "data" / "heartbeat" / f"signal_service_{instrument.lower()}.json"
 
     def _load_heartbeat(self, instrument):
         heartbeat_path = self._heartbeat_path(instrument)
@@ -137,12 +139,22 @@ class SignalServiceManager:
         for instrument in normalized_instruments:
             command = [
                 self.python_executable,
+                "-u",
                 str(self._service_path()),
                 "--instrument",
                 instrument,
             ]
             print(f"[Signal Manager] Command: {' '.join(command)}")
-            process = subprocess.Popen(command, cwd=str(REPO_ROOT))
+            log_path = build_instrument_log_path("signal_service", instrument)
+            log_handle = open(log_path, "a", encoding="utf-8")
+            process = subprocess.Popen(
+                command,
+                cwd=str(REPO_ROOT),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            )
+            log_handle.close()
             self.processes.append(
                 {
                     "instrument": instrument,
@@ -152,7 +164,7 @@ class SignalServiceManager:
             )
             print(
                 f"[Signal Manager] Signal service started for {instrument} "
-                f"(pid={process.pid})"
+                f"(pid={process.pid}) | log={log_path}"
             )
 
         print("[Signal Manager] Press Ctrl+C to stop all signal services")

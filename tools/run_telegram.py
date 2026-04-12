@@ -3,11 +3,16 @@ Shortcut launcher for the Telegram read-only command service.
 """
 
 import argparse
+import os
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from shared.utils.log_utils import build_log_path, cleanup_old_logs
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -27,15 +32,26 @@ class TelegramLauncher:
     def start(self):
         command = [
             self.python_executable,
+            "-u",
             str(self._service_path()),
             "--instruments",
             *self.instruments,
         ]
+        cleanup_old_logs(retention_days=7)
+        log_path = build_log_path("telegram_bot_service")
+        log_handle = open(log_path, "a", encoding="utf-8")
         print("[Telegram Launcher] Starting Telegram command service...")
         print(f"[Telegram Launcher] Command: {' '.join(command)}")
-        self.process = subprocess.Popen(command, cwd=str(REPO_ROOT))
+        self.process = subprocess.Popen(
+            command,
+            cwd=str(REPO_ROOT),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        log_handle.close()
         self.running = True
-        print(f"[Telegram Launcher] Started (pid={self.process.pid})")
+        print(f"[Telegram Launcher] Started (pid={self.process.pid}) | log={log_path}")
         print("[Telegram Launcher] Press Ctrl+C to stop")
 
     def stop(self):

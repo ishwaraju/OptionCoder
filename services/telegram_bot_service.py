@@ -30,6 +30,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
 from shared.db.reader import DBReader
+from shared.utils.log_utils import build_log_path, build_instrument_log_path, cleanup_old_logs
 from shared.utils.time_utils import TimeUtils
 
 
@@ -49,6 +50,7 @@ class TelegramCommandService:
         self.offset = 0
         self.running = False
         self.python_executable = sys.executable
+        cleanup_old_logs(retention_days=7)
 
     def _validate(self):
         if not Config.TELEGRAM_ENABLED:
@@ -144,27 +146,42 @@ class TelegramCommandService:
             return {"running": True, "pids": [os.getpid()]}
         return {"running": False, "pids": []}
 
+    def _collector_launcher_waiting(self):
+        pids = self._find_running_pids("tools/run_collectors.py start")
+        return {"waiting": bool(pids), "pids": pids}
+
     def _service_heartbeat_rows(self):
         rows = []
         now = time.time()
         seen = set()
-        for heartbeat_file in sorted(glob.glob("data/*_heartbeat.json")):
+        for heartbeat_file in sorted(glob.glob("data/heartbeat/*.json")):
             heartbeat = self._load_json(heartbeat_file)
             if not heartbeat:
                 continue
             status = heartbeat.get("status", {})
-            service_key = status.get("service") or os.path.basename(heartbeat_file).replace("_heartbeat.json", "")
+            service_key = status.get("service") or os.path.basename(heartbeat_file).replace(".json", "")
             instrument = status.get("instrument")
             process_info = self._heartbeat_process_info(service_key, instrument)
+            launcher_wait = (
+                self._collector_launcher_waiting()
+                if service_key in {"data_collector", "oi_collector"}
+                else {"waiting": False, "pids": []}
+            )
+            phase = status.get("phase")
+            if launcher_wait["waiting"] and not process_info["running"]:
+                phase = "waiting"
             seen.add((service_key, instrument))
             rows.append(
                 {
                     "service": service_key,
-                    "phase": status.get("phase"),
+                    "phase": phase,
+                    "status": status,
                     "instrument": instrument,
                     "heartbeat_age": None if heartbeat.get("epoch") is None else max(0.0, now - heartbeat["epoch"]),
                     "running": process_info["running"],
                     "pids": process_info["pids"],
+                    "launcher_waiting": launcher_wait["waiting"],
+                    "launcher_pids": launcher_wait["pids"],
                 }
             )
 
@@ -188,14 +205,22 @@ class TelegramCommandService:
             if (service_key, instrument) in seen:
                 continue
             process_info = self._heartbeat_process_info(service_key, instrument)
+            launcher_wait = (
+                self._collector_launcher_waiting()
+                if service_key in {"data_collector", "oi_collector"}
+                else {"waiting": False, "pids": []}
+            )
             rows.append(
                 {
                     "service": service_key,
-                    "phase": "no_heartbeat",
+                    "phase": "waiting" if launcher_wait["waiting"] and not process_info["running"] else "no_heartbeat",
+                    "status": {},
                     "instrument": instrument,
                     "heartbeat_age": None,
                     "running": process_info["running"],
                     "pids": process_info["pids"],
+                    "launcher_waiting": launcher_wait["waiting"],
+                    "launcher_pids": launcher_wait["pids"],
                 }
             )
         return rows
@@ -219,7 +244,7 @@ class TelegramCommandService:
             # Get status emoji
             if lifecycle == "RUNNING":
                 status_emoji = "💚"
-            elif lifecycle in ["IDLE", "PAUSED", "STALE"]:
+            elif lifecycle in ["IDLE", "PAUSED", "STALE", "WAITING"]:
                 status_emoji = "💛"
             else:
                 status_emoji = "💔"
@@ -276,6 +301,7 @@ class TelegramCommandService:
             "IDLE": "💛",
             "PAUSED": "💛",
             "STALE": "💛",
+            "WAITING": "💛",
             "STOPPED": "💔",
         }
         
@@ -358,11 +384,14 @@ class TelegramCommandService:
         return "\n".join(lines)
 
     def _classify_service_state(self, row, for_health=False):
-        if not row["running"]:
-            return "STOPPED"
-
         age = row["heartbeat_age"]
         phase = row.get("phase") or ""
+
+        if phase == "waiting":
+            return "WAITING"
+
+        if not row["running"]:
+            return "STOPPED"
 
         if row["service"] == "telegram_bot_service":
             return "RUNNING" if for_health else "RUNNING"
@@ -372,6 +401,15 @@ class TelegramCommandService:
 
         if age > Config.WATCHDOG_STALE_SECONDS:
             return "STALE"
+
+        if row["service"] == "oi_collector":
+            status = row.get("status") or {}
+            if (
+                phase == "heartbeat"
+                and (status.get("oi_snapshots_collected") or 0) == 0
+                and (status.get("option_bands_collected") or 0) == 0
+            ):
+                return "IDLE"
 
         if phase in {"data_pause", "no_heartbeat"}:
             return "IDLE"
@@ -427,14 +465,26 @@ class TelegramCommandService:
         )
 
     def _start_local_tool(self, relative_path, *args):
-        command = [self.python_executable, os.path.join(REPO_ROOT, relative_path), *args]
+        command = [self.python_executable, "-u", os.path.join(REPO_ROOT, relative_path), *args]
+        
+        # Use instrument-specific logging for run_collectors and run_signals
+        tool_name = os.path.splitext(os.path.basename(relative_path))[0]
+        if tool_name in ["run_collectors", "run_signals"]:
+            # For these tools, use the main log file (they create instrument-specific logs internally)
+            log_path = build_log_path(tool_name)
+        else:
+            log_path = build_log_path(tool_name)
+            
+        log_handle = open(log_path, "a", encoding="utf-8")
         process = subprocess.Popen(
             command,
             cwd=REPO_ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
+        log_handle.close()
         return process
 
     def _pkill_patterns(self, patterns):
@@ -455,13 +505,51 @@ class TelegramCommandService:
         return outputs
 
     def _build_stop_preview(self):
-        previews = []
-        for label, relative_path in (
-            ("signals", "tools/run_signals.py"),
-            ("collectors", "tools/run_collectors.py"),
-        ):
-            previews.append(f"{label}: stop requested")
-        return "Stop requested\n" + "\n".join(previews)
+        rows = self._service_heartbeat_rows()
+
+        signal_rows = []
+        data_rows = []
+        oi_rows = []
+
+        for row in rows:
+            if not row.get("running"):
+                continue
+            instrument = row.get("instrument") or row["service"]
+            pids = row.get("pids") or []
+            pid_text = f" (pid={pids[0]})" if pids else ""
+            line = f"  {instrument}{pid_text}"
+            if row["service"] == "signal_service":
+                signal_rows.append(line)
+            elif row["service"] == "data_collector":
+                data_rows.append(line)
+            elif row["service"] == "oi_collector":
+                oi_rows.append(line)
+
+        lines = ["🛑 Stop Requested", "================"]
+
+        lines.append("🎯 Signals")
+        if signal_rows:
+            lines.extend(sorted(signal_rows))
+        else:
+            lines.append("  😴 No signal services running")
+        lines.append("")
+
+        lines.append("📈 Data Collection")
+        if data_rows:
+            lines.extend(sorted(data_rows))
+        else:
+            lines.append("  😴 No data collectors running")
+        lines.append("")
+
+        lines.append("🧠 OI Collection")
+        if oi_rows:
+            lines.extend(sorted(oi_rows))
+        else:
+            lines.append("  😴 No OI collectors running")
+
+        total_running = len(signal_rows) + len(data_rows) + len(oi_rows)
+        lines.append(f"\n📉 {total_running} running services will be stopped")
+        return "\n".join(lines)
 
     def _parse_command_args(self, text):
         tokens = (text or "").strip().split()
@@ -481,6 +569,133 @@ class TelegramCommandService:
 
     def _build_start_preview(self, label, instruments):
         return f"{label} start requested\nInstruments: {', '.join(instruments)}"
+
+    def _get_latest_service_row(self, service_name, instrument):
+        instrument_upper = (instrument or "").upper() or None
+        matches = []
+        for row in self._service_heartbeat_rows():
+            if row["service"] != service_name:
+                continue
+            if (row.get("instrument") or None) != instrument_upper:
+                continue
+            matches.append(row)
+
+        if not matches:
+            return None
+
+        matches.sort(
+            key=lambda row: (
+                0 if row.get("running") else 1,
+                row["heartbeat_age"] if row["heartbeat_age"] is not None else 999999,
+            )
+        )
+        return matches[0]
+
+    def _format_verified_status(self, row, for_health=False):
+        if not row:
+            return "💔 STOPPED"
+
+        state = self._classify_service_state(row, for_health=for_health)
+        age = row.get("heartbeat_age")
+        pids = row.get("pids") or []
+        pid_text = f" pid={pids[0]}" if pids else ""
+        age_text = "" if age is None else f" ({age:.0f}s)"
+
+        if state in {"HEALTHY", "RUNNING"}:
+            label = "💚 RUNNING"
+        elif state in {"IDLE", "PAUSED", "WAITING"}:
+            label = "💛 IDLE"
+        elif state == "STALE":
+            label = "💛 STALE"
+        else:
+            label = "💔 STOPPED"
+
+        return f"{label}{pid_text}{age_text}"
+
+    def _verify_started_services(self, service_names, instruments, retries=3, delay_seconds=1.5):
+        verified = {}
+        pending = {(service_name, instrument.upper()) for service_name in service_names for instrument in instruments}
+
+        for attempt in range(retries):
+            if attempt > 0:
+                time.sleep(delay_seconds)
+
+            for service_name, instrument in list(pending):
+                row = self._get_latest_service_row(service_name, instrument)
+                if not row:
+                    continue
+
+                verified[(service_name, instrument)] = row
+                state = self._classify_service_state(row, for_health=True)
+                if row.get("running") or state in {"HEALTHY", "RUNNING", "IDLE", "PAUSED"}:
+                    pending.discard((service_name, instrument))
+
+            if not pending:
+                break
+
+        for service_name, instrument in pending:
+            verified[(service_name, instrument)] = self._get_latest_service_row(service_name, instrument)
+
+        return verified
+
+    def _build_verified_signal_start_response(self, instruments):
+        verified = self._verify_started_services(
+            ["signal_service"],
+            instruments,
+            retries=4,
+            delay_seconds=1.0,
+        )
+        lines = ["🎯 Signal Start Result", "===================="]
+
+        for instrument in instruments:
+            row = verified.get(("signal_service", instrument))
+            lines.append(f"  {instrument} {self._format_verified_status(row, for_health=True)}")
+
+        return "\n".join(lines)
+
+    def _build_verified_data_start_response(self, instruments):
+        # Collectors are launched sequentially with a stagger, so the last
+        # instrument may take ~10s to appear when all three instruments start.
+        verified = self._verify_started_services(
+            ["data_collector", "oi_collector"],
+            instruments,
+            retries=9,
+            delay_seconds=1.5,
+        )
+        lines = ["📊 Service Status", "=================", "📈 Data Collection"]
+
+        for instrument in instruments:
+            row = verified.get(("data_collector", instrument))
+            lines.append(f"  {instrument} {self._format_verified_status(row, for_health=True)}")
+
+        lines.append("")
+        lines.append("🧠 OI Collection")
+        for instrument in instruments:
+            row = verified.get(("oi_collector", instrument))
+            lines.append(f"  {instrument} {self._format_verified_status(row, for_health=True)}")
+
+        return "\n".join(lines)
+
+    def _build_already_running_signal_response(self, instruments):
+        lines = ["🎯 Signal Status", "===================="]
+        for instrument in instruments:
+            row = self._get_latest_service_row("signal_service", instrument)
+            lines.append(f"  {instrument} {self._format_verified_status(row, for_health=True)}")
+        return "\n".join(lines)
+
+    def _build_already_running_data_response(self, instruments):
+        lines = ["📊 Service Status", "=================", "📈 Data Collection"]
+        for instrument in instruments:
+            row = self._get_latest_service_row("data_collector", instrument)
+            lines.append(f"  {instrument} {self._format_verified_status(row, for_health=True)}")
+
+        lines.append("")
+        lines.append("🧠 OI Collection")
+        for instrument in instruments:
+            row = self._get_latest_service_row("oi_collector", instrument)
+            lines.append(f"  {instrument} {self._format_verified_status(row, for_health=True)}")
+
+        return "\n".join(lines)
 
     def _check_services_running(self, service_type, instruments):
         """Check if specified services are already running"""
@@ -504,12 +719,12 @@ class TelegramCommandService:
         # Check if signal services are already running
         already_running = self._check_services_running("signal_service", instruments)
         if already_running:
-            return [f"signals: already running for {', '.join(already_running)}"]
+            return [self._build_already_running_signal_response(instruments)]
         
         # Always allow start - user is in control
         # Market closed services will automatically enter appropriate mode
-        process = self._start_local_tool("tools/run_signals.py", "start", "--instruments", *instruments)
-        return [f"signals: started launcher pid={process.pid} for {', '.join(instruments)}"]
+        self._start_local_tool("tools/run_signals.py", "start", "--instruments", *instruments)
+        return [self._build_verified_signal_start_response(instruments)]
 
     def _execute_stop_signals(self):
         outputs = []
@@ -548,18 +763,17 @@ class TelegramCommandService:
         oi_running = self._check_services_running("oi_collector", instruments)
         
         if data_running or oi_running:
-            already_msg_parts = []
-            if data_running:
-                already_msg_parts.append(f"data collectors ({', '.join(data_running)})")
-            if oi_running:
-                already_msg_parts.append(f"OI collectors ({', '.join(oi_running)})")
-            return [f"collectors: already running for {' and '.join(already_msg_parts)}"]
+            return [self._build_already_running_data_response(instruments)]
         
-        # Always allow start - user is in control
-        # Market closed services will automatically enter IDLE mode
-        extra_args = ["--skip-market-wait"]
-        process = self._start_local_tool("tools/run_collectors.py", "start", "--instruments", *instruments, *extra_args)
-        return [f"collectors: started launcher pid={process.pid} for {', '.join(instruments)}"]
+        extra_args = ["--skip-market-wait"] if force else []
+        self._start_local_tool(
+            "tools/run_collectors.py",
+            "start",
+            "--instruments",
+            *instruments,
+            *extra_args,
+        )
+        return [self._build_verified_data_start_response(instruments)]
 
     def _execute_stop_data(self):
         # Get current running services before stopping
@@ -580,7 +794,7 @@ class TelegramCommandService:
             detail = (result.stdout or result.stderr or "").strip()
         except Exception as exc:
             outputs.append(f"collectors: stop failed ({exc})")
-        outputs.extend(self._pkill_patterns(["services/data_collector.py", "services/oi_collector.py", "tools/run_collectors.py monitor"]))
+        outputs.extend(self._pkill_patterns(["services/data_collector.py", "services/oi_collector.py", "tools/run_collectors.py monitor", "tools/run_collectors.py start"]))
         
         # Build beautiful response with emojis
         response_lines = ["🛑 collectors: stopped successfully ✅"]

@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
+from shared.utils.log_utils import build_instrument_log_path, cleanup_old_logs
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ class CollectorLauncher:
         self.processes = []
         self.running = False
         self.time_utils = TimeUtils()
+        cleanup_old_logs(retention_days=7)
 
     def _load_state(self):
         if not STATE_FILE.exists():
@@ -123,11 +125,21 @@ class CollectorLauncher:
     def _spawn(self, service_name, instrument):
         command = [
             self.python_executable,
+            "-u",
             str(self._service_path(service_name)),
             "--instrument",
             instrument,
         ]
-        process = subprocess.Popen(command, cwd=str(REPO_ROOT))
+        log_path = build_instrument_log_path(service_name, instrument)
+        log_handle = open(log_path, "a", encoding="utf-8")
+        process = subprocess.Popen(
+            command,
+            cwd=str(REPO_ROOT),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        log_handle.close()
         self.processes.append(
             {
                 "service": service_name,
@@ -138,7 +150,7 @@ class CollectorLauncher:
         )
         print(
             f"[Launcher] Started {service_name} for {instrument} "
-            f"(pid={process.pid})"
+            f"(pid={process.pid}) | log={log_path}"
         )
 
     def start(self):
@@ -173,11 +185,11 @@ class CollectorLauncher:
         self._save_state()
 
     def _wait_for_market_open(self):
-        """Wait for market to open at 9:14 AM"""
+        """Wait for market to open at 9:15 AM"""
         while not self.time_utils.is_market_open():
             current_time = self.time_utils.now_ist()
             current_time_str = current_time.strftime('%H:%M:%S')
-            market_open_time = current_time.replace(hour=9, minute=14, second=0, microsecond=0)
+            market_open_time = current_time.replace(hour=9, minute=15, second=0, microsecond=0)
             market_open_str = market_open_time.strftime('%H:%M:%S')
             
             print(f"[Launcher] Current time: {current_time_str} IST")
@@ -378,16 +390,21 @@ def main():
     )
 
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
-
-    if args.action == "start":
-        launcher.start()
-        launcher.monitor()
-    elif args.action == "stop":
-        launcher.stop()
-    elif args.action == "status":
-        launcher.status()
-    elif args.action == "monitor":
-        launcher.monitor()
+    try:
+        if args.action == "start":
+            launcher.start()
+            launcher.monitor()
+        elif args.action == "stop":
+            launcher.stop()
+        elif args.action == "status":
+            launcher.status()
+        elif args.action == "monitor":
+            launcher.monitor()
+    except KeyboardInterrupt:
+        print("\n[Launcher] Shutdown requested.")
+        launcher.running = False
+        if args.action in {"start", "monitor"}:
+            launcher.stop()
 
 
 if __name__ == "__main__":

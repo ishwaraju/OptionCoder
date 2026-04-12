@@ -25,6 +25,7 @@ from shared.market.option_chain import OptionChain
 from shared.market.oi_analyzer import OIAnalyzer
 from shared.utils.instrument_profile import get_instrument_profile
 from shared.utils.service_watchdog import ServiceWatchdog
+from shared.utils.log_utils import build_instrument_log_path
 
 
 class OICollector:
@@ -607,6 +608,11 @@ def main():
     parser.add_argument("--instrument", default=Config.SYMBOL)
     args = parser.parse_args()
     oi_collector = OICollector(instrument=args.instrument)
+    
+    # Set up direct logging to individual log files
+    import sys
+    sys.stdout = open(build_instrument_log_path("oi_collector", args.instrument), "a", encoding="utf-8")
+    sys.stderr = sys.stdout
     
     try:
         oi_collector.run_forever()

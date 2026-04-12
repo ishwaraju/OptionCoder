@@ -11,7 +11,7 @@ class ServiceWatchdog:
         self.service_name = service_name
         self.instrument = instrument
         base_name = f"{service_name.lower()}_{instrument.lower()}"
-        self.heartbeat_file = os.path.join("data", f"{base_name}_heartbeat.json")
+        self.heartbeat_file = os.path.join("data", "heartbeat", f"{base_name}.json")
         self.state_file = os.path.join("data", f"{base_name}_watchdog_state.json")
         self.watchdog = None
 
