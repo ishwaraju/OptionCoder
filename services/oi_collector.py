@@ -612,10 +612,34 @@ def main():
     args = parser.parse_args()
     oi_collector = OICollector(instrument=args.instrument)
     
-    # Set up direct logging to individual log files
+    # Set up logging to both console and file
+    import logging
     import sys
-    sys.stdout = open(build_instrument_log_path("oi_collector", args.instrument), "a", encoding="utf-8")
-    sys.stderr = sys.stdout
+    
+    log_file = build_instrument_log_path("oi_collector", args.instrument)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    
+    # Redirect print to logging
+    class LoggerWriter:
+        def __init__(self, logger):
+            self.logger = logger
+            
+        def write(self, message):
+            if message.strip():
+                self.logger.info(message.strip())
+                
+        def flush(self):
+            pass
+    
+    sys.stdout = LoggerWriter(logging.getLogger('oi_collector'))
+    sys.stderr = LoggerWriter(logging.getLogger('oi_collector'))
     
     try:
         oi_collector.run_forever()

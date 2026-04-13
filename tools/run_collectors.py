@@ -30,10 +30,11 @@ STATE_FILE = REPO_ROOT / "data" / "run_collectors_state.json"
 class CollectorLauncher:
     def __init__(self, instruments, stagger_seconds=2.0, python_executable=None, skip_market_wait=False):
         self.instruments = [instrument.upper() for instrument in instruments]
-        self.stagger_seconds = float(stagger_seconds) if stagger_seconds else 0.0
+        self.stagger_seconds = float(stagger_seconds) if stagger_seconds else 3.0
         self.python_executable = python_executable or sys.executable
         self.skip_market_wait = bool(skip_market_wait)
         self.processes = []
+        self.log_handles = []
         self.running = False
         self.time_utils = TimeUtils()
         cleanup_old_logs(retention_days=7)
@@ -139,13 +140,15 @@ class CollectorLauncher:
             stderr=subprocess.STDOUT,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
-        log_handle.close()
+        # Store log handle to keep it open
+        self.log_handles.append(log_handle)
         self.processes.append(
             {
                 "service": service_name,
                 "instrument": instrument,
                 "process": process,
                 "pid": process.pid,
+                "log_handle": log_handle,
             }
         )
         print(
