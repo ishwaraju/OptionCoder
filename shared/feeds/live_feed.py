@@ -115,31 +115,18 @@ class LiveFeed:
         self._debug_print(f"Connection stability score: {self.connection_stability_score}/100")
         self.reconnect_delay = 5
 
-        ticker_instruments = [
-            inst for inst in self.instruments if inst.get("ExchangeSegment") == "IDX_I"
-        ]
-        full_instruments = [
-            inst for inst in self.instruments if inst.get("ExchangeSegment") != "IDX_I"
-        ]
-
-        if ticker_instruments:
-            ticker_msg = {
-                "RequestCode": 15,
-                "InstrumentCount": len(ticker_instruments),
-                "InstrumentList": ticker_instruments,
-            }
-            ws.send(json.dumps(ticker_msg))
-
-        if full_instruments:
+        # Subscribe ALL instruments in FULL mode (RequestCode 21) to get volume data
+        # Previously used ticker mode (15) for IDX_I but that doesn't include volume
+        if self.instruments:
             full_msg = {
                 "RequestCode": 21,
-                "InstrumentCount": len(full_instruments),
-                "InstrumentList": full_instruments,
+                "InstrumentCount": len(self.instruments),
+                "InstrumentList": self.instruments,
             }
             ws.send(json.dumps(full_msg))
 
         print(
-            f"Subscribed {len(ticker_instruments)} ticker instruments and {len(full_instruments)} full instruments"
+            f"Subscribed {len(self.instruments)} instruments in FULL mode (with volume)"
         )
 
     # =========================

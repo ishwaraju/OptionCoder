@@ -10,6 +10,7 @@ import subprocess
 import os
 from datetime import datetime
 from shared.utils.time_utils import TimeUtils
+import pytz
 
 class AutoScheduler:
     def __init__(self):
@@ -103,38 +104,85 @@ class AutoScheduler:
         print("=" * 50)
         print(f"🎉 All services started successfully!")
     
+    def _get_ist_now(self):
+        """Get current time in IST (India timezone)"""
+        ist = pytz.timezone('Asia/Kolkata')
+        return datetime.now(ist)
+    
+    def _check_timezone(self):
+        """Check if system timezone is set to IST"""
+        import time
+        system_tz_offset = time.timezone if not time.daylight else time.altzone
+        ist_offset = -19800  # IST is UTC+5:30 = -19800 seconds
+        
+        if system_tz_offset != ist_offset:
+            print("⚠️  WARNING: System timezone is NOT set to IST (India Time)!")
+            print(f"   Current offset: {system_tz_offset} seconds")
+            print(f"   IST offset should be: {ist_offset} seconds (-05:30)")
+            print("   Fix: System Preferences → Date & Time → Time Zone → Kolkata")
+            print("   OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata")
+            print("")
+            return False
+        return True
+    
     def run_scheduler(self):
         """Run the scheduler"""
+        ist_now = self._get_ist_now()
+        
         print("🤖 Auto Scheduler Started")
-        print("⏰ Services will auto-start at 9:14 AM on weekdays")
-        print("🛑 Services will auto-stop at 3:40 PM on weekdays")
+        self._check_timezone()
+        print(f"⏰ Current IST Time: {ist_now.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("⏰ Services will auto-start at 9:14 AM IST on weekdays")
+        print("🛑 Services will auto-stop at 3:40 PM IST on weekdays")
         print("📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST")
         print("🛑 Press Ctrl+C to stop scheduler")
         
-        # Schedule daily at 9:14 AM (start)
+        # Schedule daily at 9:14 AM IST (start)
         schedule.every().monday.at("09:14").do(self.start_all_services)
         schedule.every().tuesday.at("09:14").do(self.start_all_services)
         schedule.every().wednesday.at("09:14").do(self.start_all_services)
         schedule.every().thursday.at("09:14").do(self.start_all_services)
         schedule.every().friday.at("09:14").do(self.start_all_services)
         
-        # Schedule daily at 3:40 PM (stop)
+        # Schedule daily at 3:40 PM IST (stop)
         schedule.every().monday.at("15:40").do(self.stop_all_services)
         schedule.every().tuesday.at("15:40").do(self.stop_all_services)
         schedule.every().wednesday.at("15:40").do(self.stop_all_services)
         schedule.every().thursday.at("15:40").do(self.stop_all_services)
         schedule.every().friday.at("15:40").do(self.stop_all_services)
         
-        # Also start immediately if it's past 9:14 AM on weekday
-        now = datetime.now()
-        if (now.weekday() < 5 and now.hour >= 9 and now.minute >= 14):
-            print(f"🚀 Current time is past 9:14 AM - Starting services now!")
-            self.start_all_services()
+        # Also start immediately if it's past 9:14 AM IST on weekday
+        if (ist_now.weekday() < 5 and ist_now.hour >= 9 and (ist_now.hour > 9 or ist_now.minute >= 14)):
+            if ist_now.hour < 15 or (ist_now.hour == 15 and ist_now.minute < 40):
+                print(f"🚀 Current IST time is past 9:14 AM and before 3:40 PM - Starting services now!")
+                self.start_all_services()
         
-        # Run scheduler loop
+        # Track last run dates to prevent duplicate runs
+        last_start_date = None
+        last_stop_date = None
+        
+        # Run scheduler loop with IST timezone check
         while True:
-            schedule.run_pending()
-            time.sleep(60)  # Check every minute
+            ist_now = self._get_ist_now()
+            current_date = ist_now.date()
+            
+            # Check for 9:14 AM IST start (Monday-Friday)
+            if (ist_now.weekday() < 5 and 
+                ist_now.hour == 9 and ist_now.minute == 14 and
+                current_date != last_start_date):
+                print(f"🚀 Trigger: 9:14 AM IST - Starting services...")
+                self.start_all_services()
+                last_start_date = current_date
+            
+            # Check for 3:40 PM IST stop (Monday-Friday)
+            if (ist_now.weekday() < 5 and 
+                ist_now.hour == 15 and ist_now.minute == 40 and
+                current_date != last_stop_date):
+                print(f"🛑 Trigger: 3:40 PM IST - Stopping services...")
+                self.stop_all_services()
+                last_stop_date = current_date
+            
+            time.sleep(30)  # Check every 30 seconds
 
 def main():
     scheduler = AutoScheduler()

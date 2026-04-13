@@ -480,9 +480,22 @@ def main():
     parser.add_argument("--instrument", default=Config.SYMBOL)
     args = parser.parse_args()
     profile = get_instrument_profile(args.instrument)
+    
+    # Subscribe to both index (for price) and futures (for volume/OI)
     instruments = [
-        {"ExchangeSegment": "IDX_I", "SecurityId": str(profile["security_id"])},
+        {"ExchangeSegment": "IDX_I", "SecurityId": str(profile["security_id"])},  # Index for price
     ]
+    
+    # Add futures if future_id is available
+    if profile.get("future_id"):
+        instruments.append({
+            "ExchangeSegment": "NSE_FNO", 
+            "SecurityId": str(profile["future_id"])
+        })
+        print(f"[Data Collector] Subscribing to Index (ID: {profile['security_id']}) and Futures (ID: {profile['future_id']})")
+    else:
+        print(f"[Data Collector] Subscribing to Index only (ID: {profile['security_id']}) - No futures ID cached")
+    
     collector = DataCollector(instruments=instruments, instrument=args.instrument)
     
     # Set up direct logging to individual log files

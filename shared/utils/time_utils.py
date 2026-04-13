@@ -68,3 +68,7 @@ class TimeUtils:
         s = datetime.strptime(start, "%H:%M").time()
         e = datetime.strptime(end, "%H:%M").time()
         return s <= now <= e
+
+    def is_weekday(self):
+        """Check if today is a weekday (Monday=0 to Friday=4)"""
+        return self.now_ist().weekday() < 5
