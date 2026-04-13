@@ -176,14 +176,17 @@ class OICollector:
             if not security_id:
                 return None
             
+            # SENSEX futures trade on BSE, others on NSE
+            exchange_segment = "BSE_FNO" if self.instrument == "SENSEX" else "NSE_FNO"
+            
             # Use dhan client's quote_data method
-            securities = {"NSE_FNO": [int(security_id)]}
+            securities = {exchange_segment: [int(security_id)]}
             result = self.dhan_client.dhan.quote_data(securities)
             
             if result.get("status") == "success":
-                # Navigate to correct path: data.data.NSE_FNO.{security_id}.volume
+                # Navigate to correct path: data.data.{exchange_segment}.{security_id}.volume
                 data = result.get("data", {}).get("data", {})
-                fno_data = data.get("NSE_FNO", {})
+                fno_data = data.get(exchange_segment, {})
                 instrument_data = fno_data.get(str(security_id), {})
                 volume = instrument_data.get("volume", 0)
                 return volume if volume else None
@@ -689,8 +692,9 @@ def main():
         def flush(self):
             pass
     
-    sys.stdout = LoggerWriter(logging.getLogger('oi_collector'))
-    sys.stderr = LoggerWriter(logging.getLogger('oi_collector'))
+    # Commented out logging redirection - causing process to hang
+    # sys.stdout = LoggerWriter(logging.getLogger('oi_collector'))
+    # sys.stderr = LoggerWriter(logging.getLogger('oi_collector'))
     
     try:
         oi_collector.run_forever()

@@ -117,10 +117,11 @@ class LiveFeed:
 
         # Subscribe instruments in different modes:
         # - Index: Ticker mode (15) for LTP
-        # - Futures: Quote mode (4) for LTP + Volume
+        # - Futures: Quote mode (4) for LTP + Volume (both NSE_FNO and BSE_FNO)
         if self.instruments:
             index_instruments = [i for i in self.instruments if i.get("ExchangeSegment") == "IDX_I"]
-            futures_instruments = [i for i in self.instruments if i.get("ExchangeSegment") == "NSE_FNO"]
+            nse_futures_instruments = [i for i in self.instruments if i.get("ExchangeSegment") == "NSE_FNO"]
+            bse_futures_instruments = [i for i in self.instruments if i.get("ExchangeSegment") == "BSE_FNO"]
             
             # Subscribe Index in Ticker mode
             if index_instruments:
@@ -131,14 +132,23 @@ class LiveFeed:
                 }))
                 print(f"Subscribed {len(index_instruments)} INDEX instruments in TICKER mode")
             
-            # Subscribe Futures in Quote mode (for volume)
-            if futures_instruments:
+            # Subscribe NSE Futures in Quote mode (for volume)
+            if nse_futures_instruments:
                 ws.send(json.dumps({
                     "RequestCode": 4,
-                    "InstrumentCount": len(futures_instruments),
-                    "InstrumentList": futures_instruments,
+                    "InstrumentCount": len(nse_futures_instruments),
+                    "InstrumentList": nse_futures_instruments,
                 }))
-                print(f"Subscribed {len(futures_instruments)} FUTURES instruments in QUOTE mode (with volume)")
+                print(f"Subscribed {len(nse_futures_instruments)} NSE FUTURES instruments in QUOTE mode (with volume)")
+            
+            # Subscribe BSE Futures in Quote mode (for volume) - for SENSEX
+            if bse_futures_instruments:
+                ws.send(json.dumps({
+                    "RequestCode": 4,
+                    "InstrumentCount": len(bse_futures_instruments),
+                    "InstrumentList": bse_futures_instruments,
+                }))
+                print(f"Subscribed {len(bse_futures_instruments)} BSE FUTURES instruments in QUOTE mode (with volume)")
 
     # =========================
     # WebSocket Message

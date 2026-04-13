@@ -590,8 +590,10 @@ def main():
         profile = get_instrument_profile(managed_instrument)
         subscriptions.append({"ExchangeSegment": "IDX_I", "SecurityId": str(profile["security_id"])})
         if profile.get("future_id"):
-            subscriptions.append({"ExchangeSegment": "NSE_FNO", "SecurityId": str(profile["future_id"])})
-            print(f"[Data Collector] {managed_instrument}: Index {profile['security_id']} + Futures {profile['future_id']}")
+            # SENSEX futures trade on BSE, others on NSE
+            exchange_segment = "BSE_FNO" if managed_instrument == "SENSEX" else "NSE_FNO"
+            subscriptions.append({"ExchangeSegment": exchange_segment, "SecurityId": str(profile["future_id"])})
+            print(f"[Data Collector] {managed_instrument}: Index {profile['security_id']} + Futures {profile['future_id']} ({exchange_segment})")
         else:
             print(f"[Data Collector] {managed_instrument}: Index only {profile['security_id']} (no futures ID cached)")
     
