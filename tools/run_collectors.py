@@ -158,6 +158,34 @@ class CollectorLauncher:
             f"(pid={process.pid}) | log={log_path}"
         )
 
+    def _update_future_ids_cache(self):
+        """Ensure future IDs are cached for all instruments"""
+        try:
+            from shared.utils.future_id_cache import FutureIdCache
+            cache = FutureIdCache()
+            
+            # Known future IDs (update these with actual values from Dhan)
+            known_ids = {
+                "NIFTY": 66688,
+                "BANKNIFTY": 66689,  # TODO: Update with actual BANKNIFTY future ID
+                "SENSEX": 999001,    # TODO: Update with actual SENSEX future ID
+            }
+            
+            existing = cache.load_all()
+            updated = False
+            
+            for instrument in self.instruments:
+                instrument_upper = instrument.upper()
+                if instrument_upper not in existing and instrument_upper in known_ids:
+                    cache.set(instrument_upper, known_ids[instrument_upper])
+                    print(f"[Launcher] Cached future ID for {instrument_upper}: {known_ids[instrument_upper]}")
+                    updated = True
+            
+            if updated:
+                print(f"[Launcher] Future IDs cache updated")
+        except Exception as e:
+            print(f"[Launcher] Warning: Could not update future IDs cache: {e}")
+
     def _create_initial_heartbeat(self, service_name, instrument, pid):
         """Create initial heartbeat file so status commands can see the PID immediately"""
         try:
@@ -208,6 +236,9 @@ class CollectorLauncher:
         self.running = True
         print("[Launcher] Starting collectors for:", ", ".join(self.instruments))
         print("[Launcher] Signal service is intentionally not started here.")
+
+        # Update future IDs cache for all instruments
+        self._update_future_ids_cache()
 
         # Check market status for info only - collectors will handle market closed state themselves
         if not self.time_utils.is_market_open():
