@@ -23,8 +23,8 @@ class DBPool:
 
         try:
             cls._pool = ThreadedConnectionPool(
-                minconn=1,
-                maxconn=10,
+                minconn=3,
+                maxconn=20,
                 dsn=Config.get_db_dsn(),
             )
             cls._enabled = True

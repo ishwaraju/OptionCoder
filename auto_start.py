@@ -83,24 +83,63 @@ class AutoScheduler:
         print("=" * 50)
         print(f"🎉 All services stopped successfully!")
 
+    def _preflight_checks(self):
+        """Validate before starting services"""
+        checks = []
+        # Check DB connectivity
+        try:
+            from shared.db.pool import DBPool
+            if not DBPool.initialize():
+                checks.append("❌ Database not accessible")
+            else:
+                checks.append("✅ Database connected")
+        except Exception as e:
+            checks.append(f"❌ DB check failed: {e}")
+
+        # Check future IDs cached
+        try:
+            from shared.utils.future_id_cache import FutureIdCache
+            cache = FutureIdCache()
+            future_ids = cache.load_all()
+            for inst in self.instruments:
+                if inst not in future_ids or not future_ids.get(inst):
+                    checks.append(f"❌ {inst} future ID not cached")
+                else:
+                    checks.append(f"✅ {inst} future ID: {future_ids[inst]}")
+        except Exception as e:
+            checks.append(f"❌ Future ID check failed: {e}")
+
+        print("\n🔍 Pre-flight Checks:")
+        for check in checks:
+            print(f"   {check}")
+        print()
+
+        # Return False if any critical check failed
+        return not any("❌" in c for c in checks)
+
     def start_all_services(self):
         """Start all services in correct order"""
         if not self.time_utils.is_weekday():
             print(f"📅 Weekend detected - Skipping auto start")
             return
-            
+
+        # Run pre-flight checks
+        if not self._preflight_checks():
+            print("🛑 Pre-flight checks failed - Not starting services")
+            return
+
         print(f"\n🌅 Auto Starting All Services - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 50)
-        
+
         # Start in order
         self.start_collectors()
         time.sleep(5)  # Wait for collectors to initialize
-        
+
         self.start_signals()
         time.sleep(4 * 60)  # Wait 4 minutes until 9:18 AM IST
 
         self.start_telegram_bot()
-        
+
         print("=" * 50)
         print(f"🎉 All services started successfully!")
     
