@@ -128,6 +128,19 @@ class TelegramCommandService:
         except Exception:
             return []
 
+    def _pid_is_running(self, pid):
+        """Check if a specific PID is still running"""
+        try:
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "pid="],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.returncode == 0 and str(pid) in result.stdout
+        except Exception:
+            return False
+
     def _heartbeat_process_info(self, service_key, instrument=None):
         instrument_upper = (instrument or "").upper()
         if service_key == "runtime":
@@ -310,6 +323,12 @@ class TelegramCommandService:
         global_services = []
         
         for row in rows:
+            # Apply same PID verification as _format_verified_status
+            pids = row.get("pids") or []
+            actual_pids = [pid for pid in pids if self._pid_is_running(pid)]
+            row["pids"] = actual_pids
+            row["running"] = len(actual_pids) > 0
+            
             instrument = row.get("instrument")
             if instrument:
                 if instrument not in instrument_groups:
@@ -598,8 +617,16 @@ class TelegramCommandService:
         state = self._classify_service_state(row, for_health=for_health)
         age = row.get("heartbeat_age")
         pids = row.get("pids") or []
-        pid_text = f" pid={pids[0]}" if pids else ""
-        age_text = "" if age is None else f" ({age:.0f}s)"
+        
+        # Check if actual PIDs are running
+        actual_pids = [pid for pid in pids if self._pid_is_running(pid)]
+        
+        pid_text = f" pid={actual_pids[0]}" if actual_pids else ""
+        age_text = "" if age is None else f" ({age:.0f}s"
+
+        # If no actual PIDs are running, show STOPPED regardless of heartbeat state
+        if not actual_pids:
+            return f"💔 STOPPED{age_text}"
 
         if state in {"HEALTHY", "RUNNING"}:
             label = "💚 RUNNING"
@@ -625,9 +652,21 @@ class TelegramCommandService:
                 if not row:
                     continue
 
+                # Verify actual process is running
+                pids = row.get("pids") or []
+                actual_pids = []
+                if pids:
+                    for pid in pids:
+                        if self._pid_is_running(pid):
+                            actual_pids.append(pid)
+                
+                # Update row with actual PIDs
+                row["pids"] = actual_pids
+                row["running"] = len(actual_pids) > 0
+
                 verified[(service_name, instrument)] = row
                 state = self._classify_service_state(row, for_health=True)
-                if row.get("running") or state in {"HEALTHY", "RUNNING", "IDLE", "PAUSED"}:
+                if len(actual_pids) > 0 or state in {"HEALTHY", "RUNNING", "IDLE", "PAUSED"}:
                     pending.discard((service_name, instrument))
 
             if not pending:
