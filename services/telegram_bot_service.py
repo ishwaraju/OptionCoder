@@ -269,7 +269,21 @@ class TelegramCommandService:
             else:
                 status_emoji = "💔"
             
-            service_line = f"  {label} {status_emoji} {lifecycle} ({age})"
+            # Add PID if available
+            pids = row.get("pids") or []
+            
+            # Always try to get PID from heartbeat status first
+            status = row.get("status") or {}
+            heartbeat_pid = status.get("pid")
+            
+            if lifecycle == "WAITING":
+                # For waiting services, show heartbeat PID
+                pid_text = f" pid={heartbeat_pid}" if heartbeat_pid else ""
+            else:
+                # For running services, show only verified PIDs
+                actual_pids = [pid for pid in pids if self._pid_is_running(pid)]
+                pid_text = f" pid={actual_pids[0]}" if actual_pids else ""
+            service_line = f"  {label} {status_emoji} {lifecycle}{pid_text} ({age})"
             
             if row["service"] == "signal_service":
                 signal_services.append(service_line)
@@ -624,27 +638,33 @@ class TelegramCommandService:
         state = self._classify_service_state(row, for_health=for_health)
         age = row.get("heartbeat_age")
         pids = row.get("pids") or []
-        
+
         # Check if actual PIDs are running
         actual_pids = [pid for pid in pids if self._pid_is_running(pid)]
-        
-        pid_text = f" pid={actual_pids[0]}" if actual_pids else ""
-        age_text = "" if age is None else f" ({age:.0f}s"
 
-        # If no actual PIDs are running, show STOPPED regardless of heartbeat state
-        if not actual_pids:
-            return f"💔 STOPPED{age_text}"
+        age_text = "" if age is None else f" ({age:.0f}s)"
+        pid_text = f" pid={actual_pids[0]}" if actual_pids else ""
+
+        # Respect lifecycle state first
+        if state == "WAITING":
+            # For waiting services, show heartbeat PID
+            status = row.get("status") or {}
+            heartbeat_pid = status.get("pid")
+            pid_text = f" pid={heartbeat_pid}" if heartbeat_pid else ""
+            return f"ß WAITING{pid_text}{age_text}"
+
+        if state in {"IDLE", "PAUSED"}:
+            return f"💛 IDLE{pid_text}{age_text}"
+
+        if state == "STALE":
+            return f"💛 STALE{pid_text}{age_text}"
 
         if state in {"HEALTHY", "RUNNING"}:
-            label = "💚 RUNNING"
-        elif state in {"IDLE", "PAUSED", "WAITING"}:
-            label = "💛 IDLE"
-        elif state == "STALE":
-            label = "💛 STALE"
-        else:
-            label = "💔 STOPPED"
+            if actual_pids:
+                return f"💚 RUNNING{pid_text}{age_text}"
+            return f"💛 WAITING{age_text}"
 
-        return f"{label}{pid_text}{age_text}"
+        return f"💔 STOPPED{age_text}"
 
     def _verify_started_services(self, service_names, instruments, retries=3, delay_seconds=1.5):
         verified = {}
@@ -673,7 +693,7 @@ class TelegramCommandService:
 
                 verified[(service_name, instrument)] = row
                 state = self._classify_service_state(row, for_health=True)
-                if len(actual_pids) > 0 or state in {"HEALTHY", "RUNNING", "IDLE", "PAUSED"}:
+                if len(actual_pids) > 0 or state in {"HEALTHY", "RUNNING", "IDLE", "PAUSED", "WAITING"}:
                     pending.discard((service_name, instrument))
 
             if not pending:
