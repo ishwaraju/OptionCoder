@@ -25,10 +25,6 @@ def build_log_path(name: str, instrument: Optional[str] = None, when: Optional[d
     """
     Create log file path with YYYYMMDD folder structure.
     Format: logs/YYYYMMDD/service_name[_instrument].log
-    Examples:
-    - logs/20260412/run_collectors.log
-    - logs/20260412/run_signals.log
-    - logs/20260412/telegram_bot_service.log
     """
     stamp = when or datetime.now()
     date_folder_str = stamp.strftime("%Y%m%d")  # YYYYMMDD format
