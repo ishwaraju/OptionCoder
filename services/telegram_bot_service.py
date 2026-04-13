@@ -141,6 +141,25 @@ class TelegramCommandService:
         except Exception:
             return False
 
+    def _cleanup_stopped_heartbeats(self):
+        """Remove heartbeat files for processes that are no longer running"""
+        import glob
+        cleaned = 0
+        for heartbeat_file in glob.glob(os.path.join(REPO_ROOT, "data", "heartbeat", "*.json")):
+            try:
+                heartbeat = self._load_json(heartbeat_file)
+                if not heartbeat:
+                    continue
+                status = heartbeat.get("status", {})
+                pid = status.get("pid")
+                if pid and not self._pid_is_running(pid):
+                    # Process is not running, remove stale heartbeat
+                    os.remove(heartbeat_file)
+                    cleaned += 1
+            except Exception:
+                pass
+        return cleaned
+
     def _heartbeat_process_info(self, service_key, instrument=None):
         instrument_upper = (instrument or "").upper()
         if service_key == "runtime":
@@ -158,7 +177,10 @@ class TelegramCommandService:
                 # Verify if the PID is actually running
                 if self._pid_is_running(pid):
                     return {"running": True, "pids": [pid]}
-            
+                else:
+                    # PID exists in heartbeat but process not running yet - still return the PID
+                    return {"running": False, "pids": [pid]}
+
             # Fallback to process list search
             pids = self._find_running_pids(f"services/{service_key}.py --instrument {instrument_upper}")
             return {"running": bool(pids), "pids": pids}
@@ -246,6 +268,8 @@ class TelegramCommandService:
         return rows
 
     def _format_status(self):
+        # Clean up stale heartbeats first to ensure accurate status
+        self._cleanup_stopped_heartbeats()
         rows = self._service_heartbeat_rows()
         if not rows:
             return "📊 Service Status\n=================\n\nNo service heartbeat files found."
@@ -271,18 +295,24 @@ class TelegramCommandService:
             
             # Add PID if available
             pids = row.get("pids") or []
-            
+
             # Always try to get PID from heartbeat status first
             status = row.get("status") or {}
             heartbeat_pid = status.get("pid")
-            
-            if lifecycle == "WAITING":
-                # For waiting services, show heartbeat PID
-                pid_text = f" pid={heartbeat_pid}" if heartbeat_pid else ""
+
+            # Check which PIDs are actually running
+            actual_pids = [pid for pid in pids if self._pid_is_running(pid)]
+
+            # Only show PID if process is actually running or in waiting/starting state
+            # Don't show PID for stopped services (stale heartbeat data)
+            if actual_pids:
+                pid_text = f" pid={actual_pids[0]}"
+            elif heartbeat_pid and lifecycle not in {"STOPPED", "💔 STOPPED"}:
+                # Only show heartbeat PID for non-stopped states
+                pid_text = f" pid={heartbeat_pid}"
             else:
-                # For running services, show only verified PIDs
-                actual_pids = [pid for pid in pids if self._pid_is_running(pid)]
-                pid_text = f" pid={actual_pids[0]}" if actual_pids else ""
+                pid_text = ""
+
             service_line = f"  {label} {status_emoji} {lifecycle}{pid_text} ({age})"
             
             if row["service"] == "signal_service":
@@ -325,6 +355,8 @@ class TelegramCommandService:
         return "\n".join(lines)
 
     def _format_health(self):
+        # Clean up stale heartbeats first to ensure accurate status
+        self._cleanup_stopped_heartbeats()
         rows = self._service_heartbeat_rows()
         if not rows:
             return "📊 Health Status\n==============\n\nNo heartbeat data available."
@@ -429,6 +461,10 @@ class TelegramCommandService:
 
         if phase == "waiting":
             return "WAITING"
+
+        # Check phases that indicate service is starting/initializing even if not fully running
+        if phase in {"starting", "boot"}:
+            return "WAITING" if for_health else "WAITING"
 
         if not row["running"]:
             return "STOPPED"
@@ -643,14 +679,23 @@ class TelegramCommandService:
         actual_pids = [pid for pid in pids if self._pid_is_running(pid)]
 
         age_text = "" if age is None else f" ({age:.0f}s)"
-        pid_text = f" pid={actual_pids[0]}" if actual_pids else ""
+
+        # Get heartbeat PID from status if available
+        status = row.get("status") or {}
+        heartbeat_pid = status.get("pid")
+
+        # Only show PID for non-stopped states
+        if state == "STOPPED":
+            pid_text = ""
+        elif actual_pids:
+            pid_text = f" pid={actual_pids[0]}"
+        elif heartbeat_pid:
+            pid_text = f" pid={heartbeat_pid}"
+        else:
+            pid_text = ""
 
         # Respect lifecycle state first
         if state == "WAITING":
-            # For waiting services, show heartbeat PID
-            status = row.get("status") or {}
-            heartbeat_pid = status.get("pid")
-            pid_text = f" pid={heartbeat_pid}" if heartbeat_pid else ""
             return f"💛 WAITING{pid_text}{age_text}"
 
         if state in {"IDLE", "PAUSED"}:
@@ -662,17 +707,22 @@ class TelegramCommandService:
         if state in {"HEALTHY", "RUNNING"}:
             if actual_pids:
                 return f"💚 RUNNING{pid_text}{age_text}"
-            return f"💛 WAITING{age_text}"
+            return f"💛 WAITING{pid_text}{age_text}"
 
         return f"💔 STOPPED{age_text}"
 
-    def _verify_started_services(self, service_names, instruments, retries=3, delay_seconds=1.5):
+    def _verify_started_services(self, service_names, instruments, retries=3, delay_seconds=1.5, require_all_pids=False):
         verified = {}
         pending = {(service_name, instrument.upper()) for service_name in service_names for instrument in instruments}
+        total_services = len(pending)
 
         for attempt in range(retries):
             if attempt > 0:
                 time.sleep(delay_seconds)
+
+            # Log progress if still waiting
+            if pending and require_all_pids:
+                print(f"[TelegramBot] Waiting for {len(pending)}/{total_services} services to start... ({attempt}/{retries})")
 
             for service_name, instrument in list(pending):
                 row = self._get_latest_service_row(service_name, instrument)
@@ -686,15 +736,34 @@ class TelegramCommandService:
                     for pid in pids:
                         if self._pid_is_running(pid):
                             actual_pids.append(pid)
-                
-                # Update row with actual PIDs
-                row["pids"] = actual_pids
+
+                # Also get heartbeat PID from status if available
+                status = row.get("status") or {}
+                heartbeat_pid = status.get("pid")
+                if heartbeat_pid and heartbeat_pid not in actual_pids:
+                    # Keep heartbeat PID for display even if process state is waiting
+                    pass  # We'll handle this below
+
+                # Update row with actual PIDs, but also include heartbeat PID if no running PIDs
+                # This ensures we show the PID even when service is WAITING
+                if actual_pids:
+                    row["pids"] = actual_pids
+                elif heartbeat_pid:
+                    row["pids"] = [heartbeat_pid]
+                else:
+                    row["pids"] = []
                 row["running"] = len(actual_pids) > 0
 
                 verified[(service_name, instrument)] = row
-                state = self._classify_service_state(row, for_health=True)
-                if len(actual_pids) > 0 or state in {"HEALTHY", "RUNNING", "IDLE", "PAUSED", "WAITING"}:
-                    pending.discard((service_name, instrument))
+
+                # If require_all_pids is True, wait for heartbeat PID to be present
+                if require_all_pids:
+                    if heartbeat_pid:
+                        pending.discard((service_name, instrument))
+                else:
+                    state = self._classify_service_state(row, for_health=True)
+                    if len(actual_pids) > 0 or state in {"HEALTHY", "RUNNING", "IDLE", "PAUSED", "WAITING"}:
+                        pending.discard((service_name, instrument))
 
             if not pending:
                 break
@@ -720,13 +789,15 @@ class TelegramCommandService:
         return "\n".join(lines)
 
     def _build_verified_data_start_response(self, instruments):
-        # Collectors are launched sequentially with a stagger, so the last
-        # instrument may take ~10s to appear when all three instruments start.
+        # Collectors are launched sequentially with a stagger (2s between each).
+        # With 6 services (3 instruments x 2 services), it takes ~10s to spawn all.
+        # We wait longer to ensure all heartbeat files are created with PIDs.
         verified = self._verify_started_services(
             ["data_collector", "oi_collector"],
             instruments,
-            retries=9,
+            retries=20,  # Wait up to 30 seconds (20 x 1.5s)
             delay_seconds=1.5,
+            require_all_pids=True,  # Don't return until ALL services have PIDs
         )
         lines = ["📊 Service Status", "=================", "📈 Data Collection"]
 
@@ -875,6 +946,13 @@ class TelegramCommandService:
         
         if not data_services and not oi_services:
             response_lines.append("  😴 No data services were running")
+        
+        # Clean up stale heartbeat files for stopped processes
+        import time
+        time.sleep(1)  # Give processes time to fully terminate
+        cleaned = self._cleanup_stopped_heartbeats()
+        if cleaned > 0:
+            response_lines.append(f"  🧹 Cleaned up {cleaned} stale heartbeat files")
         
         return response_lines
 

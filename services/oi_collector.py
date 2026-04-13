@@ -483,24 +483,18 @@ class OICollector:
                 print(f"[OI Collector] Next market open: Monday {market_open.strftime('%H:%M')} IST")
             elif market_status == "PRE_MARKET":
                 print(f"[OI Collector] Pre-market - Waiting for market open at {market_open.strftime('%H:%M')} IST")
+                # Set data pause for pre-market (will auto-resume when market opens)
+                self.data_pause_active = True
+                self.last_data_pause_reason = "Pre-market"
+                self.watchdog.touch({"phase": "data_pause", "reason": "Pre-market", "pid": self.pid})
             elif market_status == "POST_MARKET":
                 print(f"[OI Collector] Post-market - Market closed for today")
                 print(f"[OI Collector] Next market open: Tomorrow {market_open.strftime('%H:%M')} IST")
                 # Set data pause and show IDLE status
                 self.data_pause_active = True
                 self.last_data_pause_reason = "Market closed"
-                self.watchdog.touch({"phase": "data_pause", "reason": "Market closed"})
-                # Wait for next day instead of stopping
-                while True:
-                    time_module.sleep(60)
-                    current_time = self.time_utils.now_ist()
-                    if current_time.hour >= 9 and current_time.minute >= 14:
-                        print(f"[OI Collector] Market opened at {current_time.strftime('%H:%M:%S')} IST")
-                        # Resume normal operation
-                        self.data_pause_active = False
-                        self.last_data_pause_reason = None
-                        self.watchdog.touch({"phase": "resumed"})
-                        break
+                self.watchdog.touch({"phase": "data_pause", "reason": "Market closed", "pid": self.pid})
+                # Note: The main loop will auto-resume when market opens (handled in run_forever)
             elif market_status == "MARKET_OPEN":
                 print(f"[OI Collector] Market Open - Collecting OI data")
                 print(f"[OI Collector] Market closes at {market_close.strftime('%H:%M')} IST")
@@ -516,10 +510,17 @@ class OICollector:
     def run_forever(self):
         """Main OI collection loop"""
         self.running = True
-        self.watchdog.start({"phase": "starting", "dhan_connected": self.dhan_client.connected})
+        self.watchdog.start({"phase": "starting", "dhan_connected": self.dhan_client.connected, "pid": self.pid})
         self._print_startup_status()
         
         print("[OI Collector] Starting OI data collection...")
+        
+        # Check market status first
+        self._check_market_status()
+        if self.last_market_status in ["POST_MARKET", "WEEKEND", "PRE_MARKET"]:
+            print("[OI Collector] Market closed - Entering IDLE mode")
+            self.data_pause_active = True
+            self.last_data_pause_reason = "Market closed" if self.last_market_status != "PRE_MARKET" else "Pre-market"
         
         try:
             while self.running:
@@ -529,11 +530,20 @@ class OICollector:
                 if current_time - self.last_market_status_check >= self.market_status_interval:
                     self._check_market_status()
                     self.last_market_status_check = current_time
+                    
+                    # Check if we should resume from data pause (market opened)
+                    if self.data_pause_active:
+                        self._check_market_status()
+                        if self.last_market_status == "MARKET_OPEN":
+                            print(f"[OI Collector] Market opened - Resuming OI collection")
+                            self.data_pause_active = False
+                            self.last_data_pause_reason = None
+                            self.watchdog.touch({"phase": "resumed", "reason": "Market opened", "pid": self.pid})
                 
                 # Only proceed if not in data pause
                 if self.data_pause_active:
                     # Touch watchdog to maintain IDLE status
-                    self.watchdog.touch({"phase": "data_pause", "reason": self.last_data_pause_reason})
+                    self.watchdog.touch({"phase": "data_pause", "reason": self.last_data_pause_reason, "pid": self.pid})
                     time_module.sleep(1)
                     continue
                 
@@ -546,7 +556,7 @@ class OICollector:
                 if self._should_track_oi_changes():
                     self._track_oi_changes()
                     self.last_change_tracking = current_time
-                    self.watchdog.touch({"phase": "tracking_oi_changes", "dhan_connected": self.dhan_client.connected})
+                    self.watchdog.touch({"phase": "tracking_oi_changes", "dhan_connected": self.dhan_client.connected, "pid": self.pid})
                 
                 # Collect full OI snapshot if due (every 5 minutes)
                 if self.data_pause_active:
@@ -557,7 +567,7 @@ class OICollector:
                 if self._should_collect_oi():
                     self._collect_oi_snapshot()
                     self.last_oi_collection = current_time
-                    self.watchdog.touch({"phase": "collecting_oi_snapshot", "dhan_connected": self.dhan_client.connected})
+                    self.watchdog.touch({"phase": "collecting_oi_snapshot", "dhan_connected": self.dhan_client.connected, "pid": self.pid})
                 
                 # Collect option bands if due
                 if self.data_pause_active:
@@ -568,7 +578,7 @@ class OICollector:
                 if self._should_collect_option_bands():
                     self._collect_option_bands()
                     self.last_option_band_collection = current_time
-                    self.watchdog.touch({"phase": "collecting_option_bands", "dhan_connected": self.dhan_client.connected})
+                    self.watchdog.touch({"phase": "collecting_option_bands", "dhan_connected": self.dhan_client.connected, "pid": self.pid})
                 
                 # Periodic heartbeat
                 if current_time - self.last_heartbeat >= self.heartbeat_interval:

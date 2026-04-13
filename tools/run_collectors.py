@@ -151,10 +151,35 @@ class CollectorLauncher:
                 "log_handle": log_handle,
             }
         )
+        # Create initial heartbeat file immediately so telegram bot can see the PID
+        self._create_initial_heartbeat(service_name, instrument, process.pid)
         print(
             f"[Launcher] Started {service_name} for {instrument} "
             f"(pid={process.pid}) | log={log_path}"
         )
+
+    def _create_initial_heartbeat(self, service_name, instrument, pid):
+        """Create initial heartbeat file so status commands can see the PID immediately"""
+        try:
+            heartbeat_file = REPO_ROOT / "data" / "heartbeat" / f"{service_name}_{instrument.upper()}.json"
+            heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+            import pytz
+            from datetime import datetime
+            now = datetime.now(pytz.timezone("Asia/Kolkata"))
+            heartbeat_data = {
+                "epoch": time.time(),
+                "status": {
+                    "instrument": instrument.upper(),
+                    "phase": "starting",
+                    "pid": pid,
+                    "service": service_name,
+                },
+                "timestamp": now.isoformat(),
+            }
+            with open(heartbeat_file, "w", encoding="utf-8") as f:
+                json.dump(heartbeat_data, f, indent=2, sort_keys=True)
+        except Exception as e:
+            print(f"[Launcher] Warning: Could not create initial heartbeat: {e}")
 
     def start(self):
         existing = self._load_processes_from_state()
@@ -184,11 +209,9 @@ class CollectorLauncher:
         print("[Launcher] Starting collectors for:", ", ".join(self.instruments))
         print("[Launcher] Signal service is intentionally not started here.")
 
-        # Wait for market to open if before market hours
-        if not self.skip_market_wait:
-            self._wait_for_market_open()
-        else:
-            print("[Launcher] Skipping market-open wait (forced start).")
+        # Check market status for info only - collectors will handle market closed state themselves
+        if not self.time_utils.is_market_open():
+            print("[Launcher] Market is closed. Collectors will start in IDLE mode and auto-resume at 9:15 AM IST.")
 
         for instrument in self.instruments:
             for service_name in SERVICE_ORDER:

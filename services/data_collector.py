@@ -175,6 +175,10 @@ class DataCollector:
                 print(f"[Data Collector] Next market open: Monday {market_open.strftime('%H:%M')} IST")
             elif market_status == "PRE_MARKET":
                 print(f"[Data Collector] Pre-market - Waiting for market open at {market_open.strftime('%H:%M')} IST")
+                # Set data pause for pre-market (will auto-resume when market opens)
+                self.data_pause_active = True
+                self.last_data_pause_reason = "Pre-market"
+                self.watchdog.touch({"phase": "data_pause", "reason": "Pre-market", "pid": self.pid})
             elif market_status == "POST_MARKET":
                 print(f"[Data Collector] Post-market - Market closed for today")
                 print(f"[Data Collector] Next market open: Tomorrow {market_open.strftime('%H:%M')} IST")
@@ -365,10 +369,11 @@ class DataCollector:
         # Check market status first
         self._check_market_status()
         
-        if self.last_market_status in ["POST_MARKET", "WEEKEND"]:
-            print("[Data Collector] Market closed - Entering IDLE mode")
+        if self.last_market_status in ["POST_MARKET", "WEEKEND", "PRE_MARKET"]:
+            reason = "Market closed" if self.last_market_status != "PRE_MARKET" else "Pre-market"
+            print(f"[Data Collector] {reason} - Entering IDLE mode")
             self.data_pause_active = True
-            self.last_data_pause_reason = "Market closed"
+            self.last_data_pause_reason = reason
             self.running = True
             self._print_startup_status()
         else:
