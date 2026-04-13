@@ -168,6 +168,18 @@ class CollectorLauncher:
             print("[Launcher] Stop them first if you want a fresh restart.")
             return
 
+        # Clean up old heartbeat files to prevent PID inconsistency
+        import glob
+        heartbeat_files = glob.glob(str(REPO_ROOT / "data" / "heartbeat" / "*.json"))
+        if heartbeat_files:
+            print(f"[Launcher] Cleaning up {len(heartbeat_files)} old heartbeat files...")
+            for heartbeat_file in heartbeat_files:
+                try:
+                    os.remove(heartbeat_file)
+                except Exception as e:
+                    print(f"[Launcher] Warning: Could not delete {heartbeat_file}: {e}")
+            print("[Launcher] Heartbeat cleanup completed.")
+
         self.running = True
         print("[Launcher] Starting collectors for:", ", ".join(self.instruments))
         print("[Launcher] Signal service is intentionally not started here.")
