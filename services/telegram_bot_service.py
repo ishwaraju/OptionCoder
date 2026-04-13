@@ -651,7 +651,7 @@ class TelegramCommandService:
             status = row.get("status") or {}
             heartbeat_pid = status.get("pid")
             pid_text = f" pid={heartbeat_pid}" if heartbeat_pid else ""
-            return f"ß WAITING{pid_text}{age_text}"
+            return f"💛 WAITING{pid_text}{age_text}"
 
         if state in {"IDLE", "PAUSED"}:
             return f"💛 IDLE{pid_text}{age_text}"
