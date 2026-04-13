@@ -18,7 +18,7 @@ from datetime import timedelta, time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
-from config import Config
+from config import Config, get_config_for_instrument
 from shared.indicators.candle_manager import CandleManager
 from shared.db.writer import DBWriter
 from shared.feeds.live_feed import LiveFeed
@@ -35,6 +35,9 @@ class DataCollector:
         self.profile = get_instrument_profile(instrument)
         self.instrument = self.profile["instrument"]
         self.instruments = instruments or []
+        
+        # Get instrument-specific config
+        self.config = get_config_for_instrument(self.instrument)
         
         # Core data components
         self.candle_manager = CandleManager()
@@ -75,13 +78,13 @@ class DataCollector:
 
         recent_candles = self.db.fetch_recent_candles_5m(
             instrument=self.instrument,
-            limit=Config.STATE_RECOVERY_5M_BARS,
+            limit=self.config.STATE_RECOVERY_5M_BARS,
         )
         if not recent_candles:
             # Try historical backfill if DB has no data
             print("No DB candles found, trying historical backfill for warmup")
             warmup_candles = self.historical_backfill.warmup_indicators_on_startup(
-                num_bars=Config.STATE_RECOVERY_5M_BARS
+                num_bars=self.config.STATE_RECOVERY_5M_BARS
             )
             if warmup_candles:
                 for candle in warmup_candles:

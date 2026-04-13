@@ -18,7 +18,7 @@ from datetime import timedelta, datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
-from config import Config
+from config import Config, get_config_for_instrument
 from shared.db.reader import DBReader
 from shared.db.writer import DBWriter
 from shared.indicators.candle_manager import CandleManager
@@ -41,6 +41,9 @@ class RecoveryService:
         self.profile = get_instrument_profile(instrument)
         self.instrument = self.profile["instrument"]
         self.security_id = self.profile["security_id"]
+        
+        # Get instrument-specific config
+        self.config = get_config_for_instrument(self.instrument)
 
     def _print_status(self, message):
         """Print status message with timestamp"""
@@ -211,7 +214,7 @@ class RecoveryService:
         self._print_status("Recovering indicator state")
         
         # Get recent candles for indicator warmup
-        start_time = end_time - timedelta(minutes=Config.STATE_RECOVERY_5M_BARS * 5)
+        start_time = end_time - timedelta(minutes=self.config.STATE_RECOVERY_5M_BARS * 5)
         recent_candles = self._fetch_historical_candles(start_time, end_time, "5m")
         
         if not recent_candles:

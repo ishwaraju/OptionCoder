@@ -17,7 +17,7 @@ from datetime import timedelta, time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
-from config import Config
+from config import Config, get_config_for_instrument
 from shared.db.writer import DBWriter
 from shared.db.reader import DBReader
 from dhan_client import DhanClient
@@ -44,6 +44,9 @@ class OICollector:
         self.profile = get_instrument_profile(instrument)
         self.instrument = self.profile["instrument"]
         self.watchdog = ServiceWatchdog("oi_collector", self.instrument)
+        
+        # Get instrument-specific config
+        self.config = get_config_for_instrument(self.instrument)
         self.running = False
         self.last_oi_collection = 0
         self.oi_collection_interval = 300  # Every 5 minutes (full data)

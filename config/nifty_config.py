@@ -80,6 +80,11 @@ class NiftyConfig:
     # ORB Timing
     ORB_START = os.getenv('NIFTY_ORB_START', '09:15')
     ORB_END = os.getenv('NIFTY_ORB_END', '09:30')
+    
+    # ==============================
+    # STATE RECOVERY SETTINGS
+    # ==============================
+    STATE_RECOVERY_5M_BARS = int(os.getenv('NIFTY_STATE_RECOVERY_5M_BARS', '24'))
 
     @classmethod
     def get_instrument_config(cls):

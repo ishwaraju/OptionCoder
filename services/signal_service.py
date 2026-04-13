@@ -18,7 +18,7 @@ from datetime import timedelta, time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
-from config import Config
+from config import Config, get_config_for_instrument
 from shared.db.reader import DBReader
 from shared.db.writer import DBWriter
 from shared.indicators.vwap import VWAPCalculator
@@ -43,7 +43,11 @@ class SignalService:
     def __init__(self, instrument=None):
         self.time_utils = TimeUtils()
         self.profile = get_instrument_profile(instrument)
-        self.watchdog = ServiceWatchdog("signal_service", self.profile["instrument"])
+        self.instrument = self.profile["instrument"]
+        self.watchdog = ServiceWatchdog("signal_service", self.instrument)
+        
+        # Get instrument-specific config
+        self.config = get_config_for_instrument(self.instrument)
         
         # Database access
         self.db_reader = DBReader()
@@ -296,7 +300,7 @@ class SignalService:
 
         recent_candles = self.db_writer.fetch_recent_candles_5m(
             instrument=self.instrument,
-            limit=Config.STATE_RECOVERY_5M_BARS,
+            limit=self.config.STATE_RECOVERY_5M_BARS,
         )
         if not recent_candles:
             print("[Signal Service] No recent candles found for indicator warmup")
