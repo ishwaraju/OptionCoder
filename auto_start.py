@@ -97,8 +97,8 @@ class AutoScheduler:
         time.sleep(5)  # Wait for collectors to initialize
         
         self.start_signals()
-        time.sleep(5)  # Wait for signals to initialize
-        
+        time.sleep(4 * 60)  # Wait 4 minutes until 9:18 AM IST
+
         self.start_telegram_bot()
         
         print("=" * 50)

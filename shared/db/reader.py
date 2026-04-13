@@ -133,13 +133,13 @@ class DBReader:
     def fetch_strategy_decisions(self, instrument, limit=10):
         """Fetch recent strategy decisions"""
         query = """
-        SELECT ts, signal, reason, strategy_score, confidence, strike
+        SELECT ts, signal, reason, strategy_score, signal_quality, strike
         FROM strategy_decisions_5m
         WHERE instrument = %s
         ORDER BY ts DESC
         LIMIT %s;
         """
-        
+
         rows = self._execute(query, (instrument, limit))
         return [
             {
@@ -147,7 +147,7 @@ class DBReader:
                 "signal": row[1],
                 "reason": row[2],
                 "score": row[3],
-                "confidence": row[4],
+                "signal_quality": row[4],
                 "strike": row[5],
             }
             for row in rows
