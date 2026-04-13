@@ -61,7 +61,7 @@ class SignalService:
         self.oi = OIAnalyzer()
         
         # Market data
-        self.option_chain = OptionChain()
+        self.option_chain = OptionChain(self.instrument)
         self.oi_ladder = OILadder()
         self.pressure = PressureAnalyzer()
         self.spread_filter = SpreadFilter()
@@ -76,7 +76,6 @@ class SignalService:
         self.notifier = Notifier()
         
         # State tracking
-        self.instrument = self.profile["instrument"]
         self.running = False
         self.last_option_fetch = 0
         self.last_signal_time = 0
@@ -631,6 +630,10 @@ class SignalService:
         resistance = oi_ladder_data["resistance"] if oi_ladder_data else None
         base_bias = self._classify_base_bias(price, vwap_value, oi_bias, oi_ladder_data)
 
+        # Get ATM options volume for advanced confirmation
+        atm_ce_volume = self.option_data.get("ce_volume") if self.option_data else None
+        atm_pe_volume = self.option_data.get("pe_volume") if self.option_data else None
+        
         # Generate signal
         signal, reason = self.strategy.generate_signal(
             price=price,
@@ -655,6 +658,8 @@ class SignalService:
             candle_time=candle_5m["time"],
             candle_volume=candle_5m["volume"],
             expiry=self.option_data.get("expiry") if self.option_data else None,
+            atm_ce_volume=atm_ce_volume,
+            atm_pe_volume=atm_pe_volume,
         )
         
         signal, reason = self._apply_signal_cooldowns(signal, reason)

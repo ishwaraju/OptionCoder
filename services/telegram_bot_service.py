@@ -204,6 +204,14 @@ class TelegramCommandService:
             service_key = status.get("service") or os.path.basename(heartbeat_file).replace(".json", "")
             instrument = status.get("instrument")
             process_info = self._heartbeat_process_info(service_key, instrument)
+            heartbeat_pid = status.get("pid")
+            if heartbeat_pid and not process_info["running"]:
+                try:
+                    heartbeat_pid = int(heartbeat_pid)
+                    if self._pid_is_running(heartbeat_pid):
+                        process_info = {"running": True, "pids": [heartbeat_pid]}
+                except Exception:
+                    pass
             launcher_wait = (
                 self._collector_launcher_waiting()
                 if service_key in {"data_collector", "oi_collector"}

@@ -8,73 +8,94 @@ class LiveData:
 
     def __init__(self):
         self.time_utils = TimeUtils()
+        self.instrument_data = {}
 
-        # Live values
-        self.price = None
-        self.volume = 0
-        self.oi = 0
+    def _ensure_instrument(self, instrument):
+        if instrument not in self.instrument_data:
+            self.instrument_data[instrument] = {
+                "price": None,
+                "volume": 0,
+                "oi": 0,
+                "open_price": None,
+                "high_price": None,
+                "low_price": None,
+                "ce_oi": 0,
+                "pe_oi": 0,
+                "fut_volume": 0,
+                "last_update_time": None,
+                "last_update_dt": None,
+            }
+        return self.instrument_data[instrument]
 
-        self.open_price = None
-        self.high_price = None
-        self.low_price = None
+    def update_index_data(self, instrument, price, open_p, high_p, low_p, volume):
+        data = self._ensure_instrument(instrument)
+        data["price"] = price
+        data["open_price"] = open_p
+        data["high_price"] = high_p
+        data["low_price"] = low_p
+        data["volume"] = volume
+        data["last_update_time"] = self.time_utils.current_time_str()
+        data["last_update_dt"] = self.time_utils.now_ist()
 
-        # Option OI
-        self.ce_oi = 0
-        self.pe_oi = 0
+    def update_futures_data(self, instrument, volume, oi):
+        data = self._ensure_instrument(instrument)
+        data["fut_volume"] = volume
+        data["oi"] = oi
+        data["last_update_time"] = self.time_utils.current_time_str()
+        data["last_update_dt"] = self.time_utils.now_ist()
 
-        # Futures volume
-        self.fut_volume = 0
-
-        # Timestamp
-        self.last_update_time = None
-        self.last_update_dt = None
-
-    def update_index_data(self, price, open_p, high_p, low_p, volume):
-        """Update NIFTY index data"""
-        self.price = price
-        self.open_price = open_p
-        self.high_price = high_p
-        self.low_price = low_p
-        self.volume = volume
-        self.last_update_time = self.time_utils.current_time_str()
-        self.last_update_dt = self.time_utils.now_ist()
-
-    def update_futures_data(self, volume, oi):
-        """Update Futures data"""
-        self.fut_volume = volume
-        self.oi = oi
-        self.last_update_time = self.time_utils.current_time_str()
-        self.last_update_dt = self.time_utils.now_ist()
-
-    def update_option_data(self, ce_oi=None, pe_oi=None):
-        """Update Option OI data"""
+    def update_option_data(self, instrument, ce_oi=None, pe_oi=None):
+        data = self._ensure_instrument(instrument)
         if ce_oi is not None:
-            self.ce_oi = ce_oi
-
+            data["ce_oi"] = ce_oi
         if pe_oi is not None:
-            self.pe_oi = pe_oi
+            data["pe_oi"] = pe_oi
+        data["last_update_time"] = self.time_utils.current_time_str()
+        data["last_update_dt"] = self.time_utils.now_ist()
 
-        self.last_update_time = self.time_utils.current_time_str()
-        self.last_update_dt = self.time_utils.now_ist()
+    def get_snapshot(self, instrument=None):
+        if instrument is None:
+            if not self.instrument_data:
+                return {
+                    "time": None,
+                    "last_update_dt": None,
+                    "data_age_seconds": None,
+                    "price": None,
+                    "open": None,
+                    "high": None,
+                    "low": None,
+                    "volume": 0,
+                    "futures_volume": 0,
+                    "oi": 0,
+                    "ce_oi": 0,
+                    "pe_oi": 0,
+                }
+            instrument = next(iter(self.instrument_data.keys()))
 
-    def get_snapshot(self):
-        """Return current market snapshot"""
+        data = self._ensure_instrument(instrument)
         now = self.time_utils.now_ist()
         data_age_seconds = None
-        if self.last_update_dt is not None:
-            data_age_seconds = max(0.0, (now - self.last_update_dt).total_seconds())
+        if data["last_update_dt"] is not None:
+            data_age_seconds = max(0.0, (now - data["last_update_dt"]).total_seconds())
 
         return {
-            "time": self.last_update_time,
-            "last_update_dt": self.last_update_dt,
+            "instrument": instrument,
+            "time": data["last_update_time"],
+            "last_update_dt": data["last_update_dt"],
             "data_age_seconds": data_age_seconds,
-            "price": self.price,
-            "open": self.open_price,
-            "high": self.high_price,
-            "low": self.low_price,
-            "volume": self.volume,
-            "futures_volume": self.fut_volume,
-            "oi": self.oi,
-            "ce_oi": self.ce_oi,
-            "pe_oi": self.pe_oi
+            "price": data["price"],
+            "open": data["open_price"],
+            "high": data["high_price"],
+            "low": data["low_price"],
+            "volume": data["volume"],
+            "futures_volume": data["fut_volume"],
+            "oi": data["oi"],
+            "ce_oi": data["ce_oi"],
+            "pe_oi": data["pe_oi"],
+        }
+
+    def get_all_snapshots(self):
+        return {
+            instrument: self.get_snapshot(instrument)
+            for instrument in self.instrument_data.keys()
         }

@@ -26,23 +26,24 @@ from shared.market.oi_analyzer import OIAnalyzer
 from shared.utils.instrument_profile import get_instrument_profile
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.log_utils import build_instrument_log_path
+from shared.utils.volume_cache import VolumeCache
 
 
 class OICollector:
     """OI and option band data collection service"""
     
     def __init__(self, instrument=None):
+        # State tracking (set first)
+        self.profile = get_instrument_profile(instrument)
+        self.instrument = self.profile["instrument"]
+        
         # Core components
         self.time_utils = TimeUtils()
         self.db_writer = DBWriter()
         self.db_reader = DBReader()
         self.dhan_client = DhanClient()
-        self.option_chain = OptionChain()
+        self.option_chain = OptionChain(self.instrument)
         self.oi_analyzer = OIAnalyzer()
-        
-        # State tracking
-        self.profile = get_instrument_profile(instrument)
-        self.instrument = self.profile["instrument"]
         self.watchdog = ServiceWatchdog("oi_collector", self.instrument)
         
         # Get instrument-specific config
@@ -78,6 +79,11 @@ class OICollector:
         self.last_data_pause_reason = None
         self.oi_snapshots_collected = 0
         self.option_bands_collected = 0
+        
+        # Volume cache for data collector
+        self.volume_cache = VolumeCache()
+        self.last_volume_fetch = 0
+        self.volume_fetch_interval = 60  # Fetch volume every 60 seconds
         
         # Instrument configuration
         self.security_id = self.profile["security_id"]
@@ -162,6 +168,29 @@ class OICollector:
         print(f"Option Band Collection: Every {self.option_band_interval//60} minutes")
         print(f"Dhan Client: {'CONNECTED' if self.dhan_client.connected else 'DISCONNECTED'}")
     
+    def _fetch_futures_volume(self):
+        """Fetch futures volume from Dhan API using quote_data"""
+        try:
+            # Get futures security ID
+            security_id = self.profile.get("future_id")
+            if not security_id:
+                return None
+            
+            # Use dhan client's quote_data method
+            securities = {"NSE_FNO": [int(security_id)]}
+            result = self.dhan_client.dhan.quote_data(securities)
+            
+            if result.get("status") == "success":
+                # Navigate to correct path: data.data.NSE_FNO.{security_id}.volume
+                data = result.get("data", {}).get("data", {})
+                fno_data = data.get("NSE_FNO", {})
+                instrument_data = fno_data.get(str(security_id), {})
+                volume = instrument_data.get("volume", 0)
+                return volume if volume else None
+            return None
+        except Exception as e:
+            return None
+
     def _collect_oi_snapshot(self):
         """Collect OI snapshot from Dhan API"""
         try:
@@ -568,6 +597,14 @@ class OICollector:
                     self._collect_oi_snapshot()
                     self.last_oi_collection = current_time
                     self.watchdog.touch({"phase": "collecting_oi_snapshot", "dhan_connected": self.dhan_client.connected, "pid": self.pid})
+                
+                # Fetch and cache futures volume for data collector
+                if current_time - self.last_volume_fetch >= self.volume_fetch_interval:
+                    futures_volume = self._fetch_futures_volume()
+                    if futures_volume is not None:
+                        self.volume_cache.set(self.instrument, futures_volume)
+                        print(f"[OI Collector] Volume cached | {self.instrument}: {futures_volume:,}")
+                    self.last_volume_fetch = current_time
                 
                 # Collect option bands if due
                 if self.data_pause_active:

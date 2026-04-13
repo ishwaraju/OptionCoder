@@ -23,7 +23,6 @@ from shared.utils.log_utils import build_instrument_log_path, cleanup_old_logs
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INSTRUMENTS = ["NIFTY", "BANKNIFTY", "SENSEX"]
-SERVICE_ORDER = ("data_collector", "oi_collector")
 STATE_FILE = REPO_ROOT / "data" / "run_collectors_state.json"
 
 
@@ -123,15 +122,19 @@ class CollectorLauncher:
     def _service_path(self, service_name):
         return REPO_ROOT / "services" / f"{service_name}.py"
 
-    def _spawn(self, service_name, instrument):
+    def _spawn(self, service_name, instrument, extra_args=None):
         command = [
             self.python_executable,
             "-u",
             str(self._service_path(service_name)),
-            "--instrument",
-            instrument,
         ]
-        log_path = build_instrument_log_path(service_name, instrument)
+        if extra_args:
+            command.extend(extra_args)
+        elif instrument:
+            command.extend(["--instrument", instrument])
+
+        log_target = instrument or "shared"
+        log_path = build_instrument_log_path(service_name, log_target)
         log_handle = open(log_path, "a", encoding="utf-8")
         process = subprocess.Popen(
             command,
@@ -145,16 +148,14 @@ class CollectorLauncher:
         self.processes.append(
             {
                 "service": service_name,
-                "instrument": instrument,
+                "instrument": instrument or "ALL",
                 "process": process,
                 "pid": process.pid,
                 "log_handle": log_handle,
             }
         )
-        # Create initial heartbeat file immediately so telegram bot can see the PID
-        self._create_initial_heartbeat(service_name, instrument, process.pid)
         print(
-            f"[Launcher] Started {service_name} for {instrument} "
+            f"[Launcher] Started {service_name} for {instrument or 'ALL'} "
             f"(pid={process.pid}) | log={log_path}"
         )
 
@@ -186,29 +187,6 @@ class CollectorLauncher:
         except Exception as e:
             print(f"[Launcher] Warning: Could not update future IDs cache: {e}")
 
-    def _create_initial_heartbeat(self, service_name, instrument, pid):
-        """Create initial heartbeat file so status commands can see the PID immediately"""
-        try:
-            heartbeat_file = REPO_ROOT / "data" / "heartbeat" / f"{service_name}_{instrument.upper()}.json"
-            heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
-            import pytz
-            from datetime import datetime
-            now = datetime.now(pytz.timezone("Asia/Kolkata"))
-            heartbeat_data = {
-                "epoch": time.time(),
-                "status": {
-                    "instrument": instrument.upper(),
-                    "phase": "starting",
-                    "pid": pid,
-                    "service": service_name,
-                },
-                "timestamp": now.isoformat(),
-            }
-            with open(heartbeat_file, "w", encoding="utf-8") as f:
-                json.dump(heartbeat_data, f, indent=2, sort_keys=True)
-        except Exception as e:
-            print(f"[Launcher] Warning: Could not create initial heartbeat: {e}")
-
     def start(self):
         existing = self._load_processes_from_state()
         if existing:
@@ -221,18 +199,6 @@ class CollectorLauncher:
             print("[Launcher] Stop them first if you want a fresh restart.")
             return
 
-        # Clean up old heartbeat files to prevent PID inconsistency
-        import glob
-        heartbeat_files = glob.glob(str(REPO_ROOT / "data" / "heartbeat" / "*.json"))
-        if heartbeat_files:
-            print(f"[Launcher] Cleaning up {len(heartbeat_files)} old heartbeat files...")
-            for heartbeat_file in heartbeat_files:
-                try:
-                    os.remove(heartbeat_file)
-                except Exception as e:
-                    print(f"[Launcher] Warning: Could not delete {heartbeat_file}: {e}")
-            print("[Launcher] Heartbeat cleanup completed.")
-
         self.running = True
         print("[Launcher] Starting collectors for:", ", ".join(self.instruments))
         print("[Launcher] Signal service is intentionally not started here.")
@@ -244,11 +210,14 @@ class CollectorLauncher:
         if not self.time_utils.is_market_open():
             print("[Launcher] Market is closed. Collectors will start in IDLE mode and auto-resume at 9:15 AM IST.")
 
+        self._spawn("data_collector", None, extra_args=["--instruments", *self.instruments])
+        if self.stagger_seconds > 0:
+            time.sleep(self.stagger_seconds)
+
         for instrument in self.instruments:
-            for service_name in SERVICE_ORDER:
-                self._spawn(service_name, instrument)
-                if self.stagger_seconds > 0:
-                    time.sleep(self.stagger_seconds)
+            self._spawn("oi_collector", instrument)
+            if self.stagger_seconds > 0:
+                time.sleep(self.stagger_seconds)
 
         print("[Launcher] All collector services started.")
         print("[Launcher] Press Ctrl+C to stop all collectors.")

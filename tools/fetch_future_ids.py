@@ -17,6 +17,9 @@ import requests
 def fetch_future_id_from_dhan(instrument):
     """Fetch future security ID from Dhan API"""
     try:
+        # Get security ID for instrument
+        security_id = Config.SECURITY_IDS.get(instrument, 13)
+        
         # Get expiry list first
         base_url = "https://api.dhan.co/v2/optionchain/expirylist"
         headers = {
@@ -25,16 +28,10 @@ def fetch_future_id_from_dhan(instrument):
             "client-id": Config.DHAN_CLIENT_ID
         }
         
-        # Determine exchange segment and instrument type
-        if instrument == "SENSEX":
-            exchange_segment = "BSE_FNO"
-        else:
-            exchange_segment = "NSE_FNO"
-        
+        # Use IDX_I segment with integer security ID (correct format)
         payload = {
-            "UnderlyingScrip": instrument,
-            "UnderlyingSeg": exchange_segment,
-            "Instrument": "FUTIDX"  # Futures on Index
+            "UnderlyingScrip": security_id,
+            "UnderlyingSeg": "IDX_I"
         }
         
         response = requests.post(base_url, headers=headers, json=payload, timeout=10)
@@ -47,9 +44,8 @@ def fetch_future_id_from_dhan(instrument):
             if data.get('expiryList') and len(data['expiryList']) > 0:
                 expiry = data['expiryList'][0]
                 oc_payload = {
-                    "UnderlyingScrip": instrument,
-                    "UnderlyingSeg": exchange_segment,
-                    "Instrument": "FUTIDX",
+                    "UnderlyingScrip": security_id,
+                    "UnderlyingSeg": "IDX_I",
                     "Expiry": expiry
                 }
                 

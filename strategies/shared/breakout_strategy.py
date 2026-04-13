@@ -270,6 +270,41 @@ class BreakoutStrategy:
             return True
         return candle_open == candle_high == candle_low == candle_close
 
+    def _analyze_options_volume(self, atm_ce_volume, atm_pe_volume, signal_direction):
+        """
+        Analyze ATM options volume for additional confirmation
+        Returns: (options_volume_signal, boost_score, reason)
+        """
+        if atm_ce_volume is None or atm_pe_volume is None:
+            return "NEUTRAL", 0, "no_options_volume_data"
+        
+        total_volume = atm_ce_volume + atm_pe_volume
+        if total_volume == 0:
+            return "NEUTRAL", 0, "zero_options_volume"
+        
+        ce_ratio = atm_ce_volume / total_volume
+        pe_ratio = atm_pe_volume / total_volume
+        
+        # CE Signal: Need strong CE volume
+        if signal_direction == "CE":
+            if ce_ratio >= 0.6 and total_volume > 100000:  # CE dominating with high volume
+                return "STRONG", 8, f"ce_volume_dominant({atm_ce_volume:,})"
+            elif ce_ratio >= 0.55:  # CE slightly dominating
+                return "NORMAL", 4, f"ce_volume_lead({atm_ce_volume:,})"
+            elif pe_ratio >= 0.6:  # PE dominating - opposite
+                return "WEAK", -5, f"pe_volume_opposite({atm_pe_volume:,})"
+        
+        # PE Signal: Need strong PE volume
+        elif signal_direction == "PE":
+            if pe_ratio >= 0.6 and total_volume > 100000:  # PE dominating with high volume
+                return "STRONG", 8, f"pe_volume_dominant({atm_pe_volume:,})"
+            elif pe_ratio >= 0.55:  # PE slightly dominating
+                return "NORMAL", 4, f"pe_volume_lead({atm_pe_volume:,})"
+            elif ce_ratio >= 0.6:  # CE dominating - opposite
+                return "WEAK", -5, f"ce_volume_opposite({atm_ce_volume:,})"
+        
+        return "NEUTRAL", 0, "balanced_options_volume"
+
     def _score_signal(
             self,
             price,
@@ -408,10 +443,12 @@ class BreakoutStrategy:
             candle_tick_count=None,
             candle_time=None,
             candle_volume=None,
+            atm_ce_volume=None,
+            atm_pe_volume=None,
     ):
         """
         Generate CE/PE signal using:
-        VWAP + ORB + Volume + OI Bias + OI Trend + Build-up + Support/Resistance
+        VWAP + ORB + Volume + OI Bias + OI Trend + Build-up + Support/Resistance + ATM Options Volume
         """
 
         # =============================
@@ -567,8 +604,16 @@ class BreakoutStrategy:
         # =============================
         # TEST MODE LOGIC (NO ORB)
         # =============================
+        # Analyze ATM options volume for both directions
+        ce_options_vol, ce_vol_boost, ce_vol_reason = self._analyze_options_volume(atm_ce_volume, atm_pe_volume, "CE")
+        pe_options_vol, pe_vol_boost, pe_vol_reason = self._analyze_options_volume(atm_ce_volume, atm_pe_volume, "PE")
+        
         if Config.TEST_MODE:
-            # CE Condition
+            # CE Condition with Options Volume
+            ce_options_ok = ce_options_vol in ["STRONG", "NORMAL", "NEUTRAL"]  # Don't block if WEAK
+            if ce_options_vol == "WEAK":
+                cautions.append(f"ce_{ce_vol_reason}")
+            
             if (
                     price > vwap
                     and volume_signal in ["STRONG", "NORMAL"]
@@ -577,12 +622,18 @@ class BreakoutStrategy:
                     and build_up in ["LONG_BUILDUP", "SHORT_COVERING"]
                     and (not pressure_metrics or pressure_metrics["pressure_bias"] in ["BULLISH", "NEUTRAL"])
                     and score >= 55
+                    and ce_options_ok
             ):
-                confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
+                adjusted_score = score + ce_vol_boost
+                confidence = self._confidence_from_score(adjusted_score, volume_signal, pressure_metrics, cautions)
                 self._set_diagnostics(blockers=blockers, cautions=cautions, confidence=confidence, regime=regime, signal_type="CONTINUATION")
-                return "CE", f"VWAP + Volume + OI + Long Build-up | score={score}"
+                return "CE", f"VWAP + Vol + OI + OptVol({ce_vol_reason}) | score={adjusted_score}"
 
-            # PE Condition
+            # PE Condition with Options Volume
+            pe_options_ok = pe_options_vol in ["STRONG", "NORMAL", "NEUTRAL"]
+            if pe_options_vol == "WEAK":
+                cautions.append(f"pe_{pe_vol_reason}")
+            
             elif (
                     price < vwap
                     and volume_signal in ["STRONG", "NORMAL"]
@@ -591,10 +642,12 @@ class BreakoutStrategy:
                     and build_up in ["SHORT_BUILDUP", "LONG_UNWINDING"]
                     and (not pressure_metrics or pressure_metrics["pressure_bias"] in ["BEARISH", "NEUTRAL"])
                     and score >= 55
+                    and pe_options_ok
             ):
-                confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
+                adjusted_score = score + pe_vol_boost
+                confidence = self._confidence_from_score(adjusted_score, volume_signal, pressure_metrics, cautions)
                 self._set_diagnostics(blockers=blockers, cautions=cautions, confidence=confidence, regime=regime, signal_type="CONTINUATION")
-                return "PE", f"VWAP + Volume + OI + Short Build-up | score={score}"
+                return "PE", f"VWAP + Vol + OI + OptVol({pe_vol_reason}) | score={adjusted_score}"
 
             blockers.append("test_mode_filters_incomplete")
             self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")

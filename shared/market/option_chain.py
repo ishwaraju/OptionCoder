@@ -6,7 +6,7 @@ from shared.utils.time_utils import TimeUtils
 
 
 class OptionChain:
-    def __init__(self):
+    def __init__(self, instrument=None):
         self.time_utils = TimeUtils()
         self.base_url = "https://api.dhan.co/v2/optionchain"
         self.expiry_url = "https://api.dhan.co/v2/optionchain/expirylist"
@@ -19,6 +19,10 @@ class OptionChain:
             "access-token": self.access_token,
             "client-id": self.client_id
         }
+
+        # Get security ID for instrument
+        self.instrument = (instrument or Config.SYMBOL).upper()
+        self.security_id = Config.SECURITY_IDS.get(self.instrument, 13)
 
         self.cached_data = None
         self.last_fetch_time = 0
@@ -248,7 +252,7 @@ class OptionChain:
             return self.cached_expiry
 
         payload = {
-            "UnderlyingScrip": 13,
+            "UnderlyingScrip": self.security_id,
             "UnderlyingSeg": "IDX_I"
         }
 
@@ -296,7 +300,7 @@ class OptionChain:
             return None
 
         payload = {
-            "UnderlyingScrip": 13,
+            "UnderlyingScrip": self.security_id,
             "UnderlyingSeg": "IDX_I",
             "Expiry": expiry
         }

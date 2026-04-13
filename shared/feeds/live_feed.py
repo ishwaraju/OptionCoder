@@ -115,19 +115,30 @@ class LiveFeed:
         self._debug_print(f"Connection stability score: {self.connection_stability_score}/100")
         self.reconnect_delay = 5
 
-        # Subscribe ALL instruments in FULL mode (RequestCode 21) to get volume data
-        # Previously used ticker mode (15) for IDX_I but that doesn't include volume
+        # Subscribe instruments in different modes:
+        # - Index: Ticker mode (15) for LTP
+        # - Futures: Quote mode (4) for LTP + Volume
         if self.instruments:
-            full_msg = {
-                "RequestCode": 21,
-                "InstrumentCount": len(self.instruments),
-                "InstrumentList": self.instruments,
-            }
-            ws.send(json.dumps(full_msg))
-
-        print(
-            f"Subscribed {len(self.instruments)} instruments in FULL mode (with volume)"
-        )
+            index_instruments = [i for i in self.instruments if i.get("ExchangeSegment") == "IDX_I"]
+            futures_instruments = [i for i in self.instruments if i.get("ExchangeSegment") == "NSE_FNO"]
+            
+            # Subscribe Index in Ticker mode
+            if index_instruments:
+                ws.send(json.dumps({
+                    "RequestCode": 15,
+                    "InstrumentCount": len(index_instruments),
+                    "InstrumentList": index_instruments,
+                }))
+                print(f"Subscribed {len(index_instruments)} INDEX instruments in TICKER mode")
+            
+            # Subscribe Futures in Quote mode (for volume)
+            if futures_instruments:
+                ws.send(json.dumps({
+                    "RequestCode": 4,
+                    "InstrumentCount": len(futures_instruments),
+                    "InstrumentList": futures_instruments,
+                }))
+                print(f"Subscribed {len(futures_instruments)} FUTURES instruments in QUOTE mode (with volume)")
 
     # =========================
     # WebSocket Message
@@ -144,6 +155,7 @@ class LiveFeed:
         # INDEX
         if security_id in self.index_security_map:
             self.live_data.update_index_data(
+                self.index_security_map[security_id],
                 data.get("price"),
                 data.get("open"),
                 data.get("high"),
@@ -153,7 +165,9 @@ class LiveFeed:
 
         # FUTURES
         elif security_id in self.future_security_map or security_id == getattr(Config, "NIFTY_FUTURE_ID", 0):
+            instrument = self.future_security_map.get(security_id) or self.index_security_map.get(getattr(Config, "NIFTY_FUTURE_ID", 0), "NIFTY")
             self.live_data.update_futures_data(
+                instrument,
                 data.get("volume", 0),
                 data.get("oi", 0)
             )
@@ -393,18 +407,22 @@ class LiveFeed:
                 price += random.randint(-20, 20)
                 self.last_tick_epoch = time.time()
 
-                self.live_data.update_index_data(
-                    price,
-                    price - 20,
-                    price + 20,
-                    price - 40,
-                    random.randint(1000, 5000)
-                )
-
-                self.live_data.update_futures_data(
-                    random.randint(1000, 5000),
-                    random.randint(100000, 200000)
-                )
+                instrument_names = sorted(set(self.index_security_map.values()) | set(self.future_security_map.values()) or {"NIFTY"})
+                for instrument in instrument_names:
+                    instrument_price = price + random.randint(-10, 10)
+                    self.live_data.update_index_data(
+                        instrument,
+                        instrument_price,
+                        instrument_price - 20,
+                        instrument_price + 20,
+                        instrument_price - 40,
+                        random.randint(1000, 5000)
+                    )
+                    self.live_data.update_futures_data(
+                        instrument,
+                        random.randint(1000, 5000),
+                        random.randint(100000, 200000)
+                    )
 
                 time.sleep(1)
 
@@ -489,8 +507,8 @@ class LiveFeed:
             'current_delay': self.reconnect_delay
         }
 
-    def get_live_data(self):
-        snapshot = self.live_data.get_snapshot()
+    def get_live_data(self, instrument=None):
+        snapshot = self.live_data.get_snapshot(instrument)
 
         snapshot["ce_oi_ladder"] = self.ce_oi
         snapshot["pe_oi_ladder"] = self.pe_oi
