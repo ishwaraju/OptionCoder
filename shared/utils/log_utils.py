@@ -3,9 +3,18 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def log_with_timestamp(message: str, file=sys.stdout):
+    """Print message with HH:mm:ss timestamp prefix"""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {message}", file=file)
+
+
 LOGS_DIR = REPO_ROOT / "logs"
 
 

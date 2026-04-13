@@ -12,12 +12,13 @@ import time as time_module
 import sys
 import os
 import argparse
-from datetime import timedelta, time
+from datetime import timedelta, time, datetime
 
 # Add current directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
+from shared.utils.log_utils import log_with_timestamp
 from config import Config, get_config_for_instrument
 from shared.db.reader import DBReader
 from shared.db.writer import DBWriter
@@ -110,6 +111,10 @@ class SignalService:
         
         # Initialize with historical data
         self._restore_indicator_state()
+
+    def _log(self, message):
+        """Log with HH:mm:ss timestamp prefix"""
+        log_with_timestamp(f"[Signal Service] {message}")
 
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
         """Start 1-minute manual trade monitor after a signal."""

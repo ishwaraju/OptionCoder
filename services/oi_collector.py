@@ -11,12 +11,13 @@ import time as time_module
 import sys
 import os
 import argparse
-from datetime import timedelta, time
+from datetime import timedelta, time, datetime
 
 # Add current directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils.time_utils import TimeUtils
+from shared.utils.log_utils import log_with_timestamp
 from config import Config, get_config_for_instrument
 from shared.db.writer import DBWriter
 from shared.db.reader import DBReader
@@ -94,6 +95,10 @@ class OICollector:
         print(f"[OI Collector] Security ID: {self.security_id}")
         print(f"[OI Collector] Hybrid Mode: Change tracking every {self.change_tracking_interval}s, Full OI every {self.oi_collection_interval}s")
         print(f"[OI Collector] Change threshold: {self.significant_change_threshold:,} OI units")
+
+    def _log(self, message):
+        """Log with HH:mm:ss timestamp prefix"""
+        log_with_timestamp(f"[OI Collector] {message}")
 
     def _is_collection_window_open(self):
         return Config.TEST_MODE or self.time_utils.is_market_open()
