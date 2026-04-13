@@ -149,11 +149,18 @@ class TelegramCommandService:
         if service_key == "signal_service":
             pids = self._find_running_pids(f"services/signal_service.py --instrument {instrument_upper}")
             return {"running": bool(pids), "pids": pids}
-        if service_key == "data_collector":
-            pids = self._find_running_pids(f"services/data_collector.py --instrument {instrument_upper}")
-            return {"running": bool(pids), "pids": pids}
-        if service_key == "oi_collector":
-            pids = self._find_running_pids(f"services/oi_collector.py --instrument {instrument_upper}")
+        if service_key in {"data_collector", "oi_collector"}:
+            # Try to get PID from heartbeat data first
+            heartbeat_file = f"data/heartbeat/{service_key}_{instrument_upper}.json"
+            heartbeat = self._load_json(heartbeat_file)
+            if heartbeat and "status" in heartbeat and "pid" in heartbeat["status"]:
+                pid = heartbeat["status"]["pid"]
+                # Verify if the PID is actually running
+                if self._pid_is_running(pid):
+                    return {"running": True, "pids": [pid]}
+            
+            # Fallback to process list search
+            pids = self._find_running_pids(f"services/{service_key}.py --instrument {instrument_upper}")
             return {"running": bool(pids), "pids": pids}
         if service_key == "telegram_bot_service":
             return {"running": True, "pids": [os.getpid()]}

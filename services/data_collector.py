@@ -39,6 +39,9 @@ class DataCollector:
         # Get instrument-specific config
         self.config = get_config_for_instrument(self.instrument)
         
+        # Store PID for heartbeat
+        self.pid = os.getpid()
+        
         # Core data components
         self.candle_manager = CandleManager()
         self.db = DBWriter()
@@ -120,6 +123,7 @@ class DataCollector:
                 "price": live_snapshot.get("price"),
                 "reconnect_attempts": diagnostics.get("reconnect_attempts", 0),
                 "stability_score": diagnostics.get("stability_score"),
+                "pid": self.pid,
             }
         )
         print(
@@ -177,7 +181,7 @@ class DataCollector:
                 # Set data pause and show IDLE status
                 self.data_pause_active = True
                 self.last_data_pause_reason = "Market closed"
-                self.watchdog.touch({"phase": "data_pause", "reason": "Market closed"})
+                self.watchdog.touch({"phase": "data_pause", "reason": "Market closed", "pid": self.pid})
             elif market_status == "MARKET_OPEN":
                 print(f"[Data Collector] Market Open - Collecting live data")
                 print(f"[Data Collector] Market closes at {market_close.strftime('%H:%M')} IST")
@@ -395,12 +399,12 @@ class DataCollector:
                             print(f"[Data Collector] Market opened - Resuming data collection")
                             self.data_pause_active = False
                             self.last_data_pause_reason = None
-                            self.watchdog.touch({"phase": "resumed", "reason": "Market opened"})
+                            self.watchdog.touch({"phase": "resumed", "reason": "Market opened", "pid": self.pid})
                 
                 # Only proceed if not in data pause
                 if self.data_pause_active:
                     # Touch watchdog to maintain IDLE status
-                    self.watchdog.touch({"phase": "data_pause", "reason": self.last_data_pause_reason})
+                    self.watchdog.touch({"phase": "data_pause", "reason": self.last_data_pause_reason, "pid": self.pid})
                     time_module.sleep(1)
                     continue
                 
@@ -418,6 +422,7 @@ class DataCollector:
                             "feed_connected": live_snapshot.get("feed_connected"),
                             "data_age_seconds": live_snapshot.get("data_age_seconds"),
                             "price": live_snapshot.get("price"),
+                            "pid": self.pid,
                         }
                     )
                 
@@ -475,34 +480,11 @@ def main():
     ]
     collector = DataCollector(instruments=instruments, instrument=args.instrument)
     
-    # Set up logging to both console and file
-    import logging
+    # Set up direct logging to individual log files
     import sys
-    
     log_file = build_instrument_log_path("data_collector", args.instrument)
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    
-    # Redirect print to logging
-    class LoggerWriter:
-        def __init__(self, logger):
-            self.logger = logger
-            
-        def write(self, message):
-            if message.strip():
-                self.logger.info(message.strip())
-                
-        def flush(self):
-            pass
-    
-    sys.stdout = LoggerWriter(logging.getLogger('data_collector'))
-    sys.stderr = LoggerWriter(logging.getLogger('data_collector'))
+    sys.stdout = open(log_file, "a", encoding="utf-8")
+    sys.stderr = sys.stdout
     
     try:
         collector.run_forever()

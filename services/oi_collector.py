@@ -47,6 +47,9 @@ class OICollector:
         
         # Get instrument-specific config
         self.config = get_config_for_instrument(self.instrument)
+        
+        # Store PID for heartbeat
+        self.pid = os.getpid()
         self.running = False
         self.last_oi_collection = 0
         self.oi_collection_interval = 300  # Every 5 minutes (full data)
@@ -434,6 +437,7 @@ class OICollector:
                 "dhan_connected": self.dhan_client.connected,
                 "oi_snapshots_collected": self.oi_snapshots_collected,
                 "option_bands_collected": self.option_bands_collected,
+                "pid": self.pid,
             }
         )
         
