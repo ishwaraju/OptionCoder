@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Fetch and cache future security IDs for all instruments.
+Fetch and cache future security IDs for all instruments (NSE + BSE).
 Run this to populate data/future_ids.json with NIFTY, BANKNIFTY, SENSEX futures IDs.
+
+- NIFTY, BANKNIFTY: NSE indices (fetched from NSE_FNO)
+- SENSEX: BSE index (fetched from BSE_FNO)
 """
 
 import sys
@@ -10,100 +13,94 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
 from shared.utils.future_id_cache import FutureIdCache
-from shared.utils.time_utils import TimeUtils
 import requests
 
 
-def fetch_future_id_from_dhan(instrument):
-    """Fetch future security ID from Dhan API"""
+# Segment mapping for each instrument
+INSTRUMENT_SEGMENTS = {
+    "NIFTY": "NSE_FNO",
+    "BANKNIFTY": "NSE_FNO",
+    "SENSEX": "BSE_FNO"
+}
+
+
+def fetch_from_instrument_list(segment: str, instrument_name: str):
+    """Fetch future ID from Dhan instrument CSV endpoint"""
+    url = f'https://api.dhan.co/v2/instrument/{segment}'
+    headers = {
+        'Content-Type': 'application/json',
+        'access-token': Config.DHAN_ACCESS_TOKEN,
+        'client-id': Config.DHAN_CLIENT_ID
+    }
+
     try:
-        # Get security ID for instrument
-        security_id = Config.SECURITY_IDS.get(instrument, 13)
-        
-        # Get expiry list first
-        base_url = "https://api.dhan.co/v2/optionchain/expirylist"
-        headers = {
-            "Content-Type": "application/json",
-            "access-token": Config.DHAN_ACCESS_TOKEN,
-            "client-id": Config.DHAN_CLIENT_ID
-        }
-        
-        # Use IDX_I segment with integer security ID (correct format)
-        payload = {
-            "UnderlyingScrip": security_id,
-            "UnderlyingSeg": "IDX_I"
-        }
-        
-        response = requests.post(base_url, headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            # The future ID is usually the first expiry's underlying or we need to fetch option chain
-            # Let's fetch option chain to get the future security ID
-            
-            oc_url = "https://api.dhan.co/v2/optionchain"
-            if data.get('expiryList') and len(data['expiryList']) > 0:
-                expiry = data['expiryList'][0]
-                oc_payload = {
-                    "UnderlyingScrip": security_id,
-                    "UnderlyingSeg": "IDX_I",
-                    "Expiry": expiry
-                }
-                
-                oc_response = requests.post(oc_url, headers=headers, json=oc_payload, timeout=10)
-                if oc_response.status_code == 200:
-                    oc_data = oc_response.json()
-                    # Future ID is typically in the underlying or we need to parse it differently
-                    # For now, let's use a known mapping
-                    known_ids = {
-                        "NIFTY": 66688,      # Known NIFTY future ID
-                        "BANKNIFTY": 66689,  # Approximate - need to verify
-                        "SENSEX": 999001     # Approximate - need to verify
-                    }
-                    return known_ids.get(instrument)
-                    
-        print(f"Could not fetch future ID for {instrument} from API, using known values")
-        
-        # Fallback to known values
-        known_ids = {
-            "NIFTY": 66688,
-            "BANKNIFTY": 66689,  # Update this with actual value
-            "SENSEX": 999001     # Update this with actual value
-        }
-        return known_ids.get(instrument)
-        
-    except Exception as e:
-        print(f"Error fetching future ID for {instrument}: {e}")
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            print(f"  ❌ API Error {response.status_code} for {segment}")
+            return None
+
+        lines = response.text.strip().split('\n')
+        if len(lines) < 2:
+            return None
+
+        # Parse CSV - columns: 0=EXCH_ID, 1=SEGMENT, 2=SECURITY_ID, 4=INSTRUMENT,
+        # 6=UNDERLYING_SYMBOL, 7=SYMBOL_NAME, 8=DISPLAY_NAME, 9=INSTRUMENT_TYPE
+        for line in lines[1:]:
+            values = line.split(',')
+            if len(values) < 10:
+                continue
+
+            symbol_name = values[7]
+            instrument_type = values[9]
+
+            # Match instrument name and future type
+            if instrument_name.upper() in symbol_name.upper():
+                if 'FUT' in instrument_type.upper() or 'FUTIDX' in instrument_type.upper():
+                    return int(values[2])  # SECURITY_ID
+
         return None
+
+    except Exception as e:
+        print(f"  ❌ Error fetching from {segment}: {e}")
+        return None
+
+
+def fetch_future_id(instrument: str):
+    """Fetch future security ID for any instrument (NSE or BSE)"""
+    segment = INSTRUMENT_SEGMENTS.get(instrument, "NSE_FNO")
+    return fetch_from_instrument_list(segment, instrument)
 
 
 def main():
     """Fetch and cache future IDs for all instruments"""
     print("=" * 60)
-    print("🔍 Fetching Future Security IDs")
+    print("🔍 Fetching Future Security IDs (NSE + BSE)")
     print("=" * 60)
-    
+
     cache = FutureIdCache()
     instruments = ["NIFTY", "BANKNIFTY", "SENSEX"]
-    
+
     # Load existing cached IDs
     existing = cache.load_all()
-    print(f"\n📋 Existing cached IDs: {existing}")
-    
-    print("\n🌐 Fetching from Dhan API...")
+    print(f"\n📋 Existing cached IDs: {existing if existing else 'None'}")
+
+    print("\n🌐 Fetching from Dhan Instrument API...")
     for instrument in instruments:
-        future_id = fetch_future_id_from_dhan(instrument)
+        segment = INSTRUMENT_SEGMENTS[instrument]
+        print(f"\n  [{instrument}] from {segment}...")
+        future_id = fetch_future_id(instrument)
         if future_id:
             cache.set(instrument, future_id)
             print(f"  ✅ {instrument}: {future_id}")
         else:
-            print(f"  ❌ {instrument}: Failed to fetch")
-    
+            print(f"  ❌ {instrument}: Not found")
+
     # Show final cached values
     final = cache.load_all()
     print(f"\n📊 Final cached IDs:")
     for instrument, future_id in sorted(final.items()):
         print(f"  {instrument}: {future_id}")
-    
+
     print(f"\n💾 Saved to: {cache.path}")
     print("=" * 60)
 
