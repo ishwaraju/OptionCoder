@@ -91,14 +91,15 @@ class OICollector:
         self.exchange_segment = "NSE_FNO"
         self.instrument_type = "FUTIDX"
         
-        print(f"[OI Collector] Initialized for {self.instrument}")
-        print(f"[OI Collector] Security ID: {self.security_id}")
-        print(f"[OI Collector] Hybrid Mode: Change tracking every {self.change_tracking_interval}s, Full OI every {self.oi_collection_interval}s")
-        print(f"[OI Collector] Change threshold: {self.significant_change_threshold:,} OI units")
+        self._log(f"Initialized for {self.instrument}")
+        self._log(f"Security ID: {self.security_id}")
+        self._log(f"Hybrid Mode: Change tracking every {self.change_tracking_interval}s, Full OI every {self.oi_collection_interval}s")
+        self._log(f"Change threshold: {self.significant_change_threshold:,} OI units")
 
     def _log(self, message):
-        """Log with HH:mm:ss timestamp prefix"""
-        log_with_timestamp(f"[OI Collector] {message}")
+        """Log with HH:mm:ss IST timestamp prefix"""
+        ts = self.time_utils.now_ist().strftime('%H:%M:%S')
+        print(f"[{ts}] [OI Collector] {message}")
 
     def _is_collection_window_open(self):
         return Config.TEST_MODE or self.time_utils.is_market_open()
@@ -209,7 +210,7 @@ class OICollector:
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:
-                print(f"[OI Collector] No option chain data available")
+                self._log("No option chain data available")
                 return False
 
             band_snapshots = option_data["band_snapshots"]
@@ -258,7 +259,7 @@ class OICollector:
             return True
             
         except Exception as e:
-            print(f"[OI Collector] Error collecting OI snapshot: {e}")
+            self._log(f"Error collecting OI snapshot: {e}")
             return False
     
     def _collect_option_bands(self):
@@ -271,7 +272,7 @@ class OICollector:
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:
-                print(f"[OI Collector] No option chain data for bands")
+                self._log("No option chain data for bands")
                 return False
 
             current_price = option_data.get("underlying_price") or self._get_current_price()
@@ -318,7 +319,7 @@ class OICollector:
             return True
             
         except Exception as e:
-            print(f"[OI Collector] Error collecting option bands: {e}")
+            self._log(f"Error collecting option bands: {e}")
             return False
     
     def _get_current_price(self):
@@ -335,7 +336,7 @@ class OICollector:
             return None
             
         except Exception as e:
-            print(f"[OI Collector] Error getting current price: {e}")
+            self._log(f"Error getting current price: {e}")
             return None
     
     def _should_collect_oi(self):
@@ -408,7 +409,7 @@ class OICollector:
             return True
             
         except Exception as e:
-            print(f"[OI Collector] Error tracking OI changes: {e}")
+            self._log(f"Error tracking OI changes: {e}")
             return False
     
     def _save_oi_change_snapshot(self, timestamp, ce_oi_change, pe_oi_change, ce_volume_change, pe_volume_change, total_ce_oi, total_pe_oi):
@@ -463,7 +464,7 @@ class OICollector:
             self.db_writer.insert_oi_1m(change_data)
             
         except Exception as e:
-            print(f"[OI Collector] Error saving OI change snapshot: {e}")
+            self._log(f"Error saving OI change snapshot: {e}")
     
     def _print_heartbeat(self):
         """Print periodic heartbeat status"""
@@ -572,7 +573,7 @@ class OICollector:
                     if self.data_pause_active:
                         self._check_market_status()
                         if self.last_market_status == "MARKET_OPEN":
-                            print(f"[OI Collector] Market opened - Resuming OI collection")
+                            self._log("Market opened - Resuming OI collection")
                             self.data_pause_active = False
                             self.last_data_pause_reason = None
                             self.watchdog.touch({"phase": "resumed", "reason": "Market opened", "pid": self.pid})
@@ -611,7 +612,7 @@ class OICollector:
                     futures_volume = self._fetch_futures_volume()
                     if futures_volume is not None:
                         self.volume_cache.set(self.instrument, futures_volume)
-                        print(f"[OI Collector] Volume cached | {self.instrument}: {futures_volume:,}")
+                        self._log(f"Volume cached | {self.instrument}: {futures_volume:,}")
                     self.last_volume_fetch = current_time
                 
                 # Collect option bands if due

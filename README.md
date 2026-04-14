@@ -138,8 +138,11 @@ launchctl start com.optioncoder.autostart
 launchctl list | grep optioncoder
 launchctl print gui/501/com.optioncoder.autostart
 
-# View logs
-tail -f auto_start.log
+# View logs (date-based: logs/YYYYMMDD/auto_start.log)
+tail -f logs/$(date +%Y%m%d)/auto_start.log
+
+# Or use the check status script
+./tools/check_autostart_status.sh
 ```
 
 ### 📝 Requirements
@@ -167,6 +170,22 @@ You can still manually control services via Telegram:
 - `/start_signal` - Start signal services
 - `/stop_signal` - Stop signal services
 - `/status` - Check all service status
+
+**Stop All Services (Emergency):**
+```bash
+# Stop all services immediately:
+pkill -9 -f "data_collector.py"; pkill -9 -f "oi_collector.py"; pkill -9 -f "signal_service.py"; pkill -9 -f "auto_start.py"; pkill -9 -f "telegram_bot"
+
+# Or use the tools:
+python3 /Users/ishwar/Documents/OptionCoder/tools/run_collectors.py stop
+python3 /Users/ishwar/Documents/OptionCoder/tools/run_signals.py stop
+```
+
+**Verify All Services Stopped:**
+```bash
+ps aux | grep -E "collector|signal_service|auto_start" | grep -v grep
+# Output should be empty (0 lines) = all stopped
+```
 
 **The auto-start system ensures your trading is always ready without manual intervention!** 🚀
 

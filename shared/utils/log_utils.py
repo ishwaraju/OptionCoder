@@ -10,8 +10,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def log_with_timestamp(message: str, file=sys.stdout):
-    """Print message with HH:mm:ss timestamp prefix"""
-    timestamp = datetime.now().strftime("%H:%M:%S")
+    """Print message with HH:mm:ss IST timestamp prefix"""
+    import pytz
+    ist = pytz.timezone('Asia/Kolkata')
+    timestamp = datetime.now(ist).strftime("%H:%M:%S")
     print(f"[{timestamp}] {message}", file=file)
 
 

@@ -30,13 +30,15 @@ class LiveFeed:
         self.is_connected = False
         self.last_tick_epoch = 0
         
-        # Enhanced reconnection strategy
-        self.max_reconnect_delay = 30
-        self.min_reconnect_delay = 2
+        # Enhanced reconnection strategy with rate limit protection
+        self.max_reconnect_delay = 300  # 5 minutes max
+        self.min_reconnect_delay = 10   # 10 seconds min
+        self.reconnect_delay = 10
         self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 50
+        self.max_reconnect_attempts = 20
         self.connection_stability_score = 100
         self.last_successful_connect_time = 0
+        self.rate_limited_until = None  # Circuit breaker for 429 errors
 
         self.force_reconnect_enabled = True
         self.reconnect_lock = Lock()
@@ -95,6 +97,7 @@ class LiveFeed:
         self.last_successful_connect_time = connect_time
         self.reconnect_attempts = 0
         self.reconnect_delay = self.min_reconnect_delay
+        self.rate_limited_until = None  # Reset circuit breaker on success
         
         # Update diagnostics
         self.connection_diagnostics['total_connections'] += 1
@@ -236,7 +239,14 @@ class LiveFeed:
         self.connection_diagnostics['error_codes'][error_str] = self.connection_diagnostics['error_codes'].get(error_str, 0) + 1
         
         # Specific error handling for common issues
-        if "Errno 54" in error_str:
+        if "429" in error_str or "Too many requests" in error_str or "blocked" in error_str.lower():
+            print("🚨 RATE LIMITED (429) - Client ID blocked by Dhan!")
+            print("🚨 Stopping reconnection attempts for 5 minutes...")
+            self.connection_stability_score = 0
+            # Set circuit breaker - don't reconnect for 5 minutes
+            self.rate_limited_until = time.time() + 300
+            self.reconnect_delay = 300  # 5 minutes
+        elif "Errno 54" in error_str:
             print("Connection reset by peer detected - possible network issue or server timeout")
             self.connection_stability_score = max(0, self.connection_stability_score - 8)
         elif "Errno 61" in error_str:
@@ -273,18 +283,31 @@ class LiveFeed:
         with self.reconnect_lock:
             if self.reconnect_scheduled:
                 return
+
+            # Check circuit breaker for rate limiting
+            if self.rate_limited_until and time.time() < self.rate_limited_until:
+                remaining = int(self.rate_limited_until - time.time())
+                print(f"🚫 Reconnection blocked due to rate limiting. Retry in {remaining}s")
+                return
+
             self.reconnect_scheduled = True
 
         def run():
             try:
+                # Check circuit breaker again before waiting
+                if self.rate_limited_until and time.time() < self.rate_limited_until:
+                    remaining = int(self.rate_limited_until - time.time())
+                    print(f"🚫 Rate limited - waiting {remaining}s before reconnect...")
+                    time.sleep(remaining)
+
                 # Adaptive reconnection delay based on connection stability
                 if self.connection_stability_score < 50:
-                    self.reconnect_delay = min(self.reconnect_delay * 1.5, self.max_reconnect_delay)
+                    self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
                 elif self.connection_stability_score > 80:
-                    self.reconnect_delay = max(self.min_reconnect_delay, self.reconnect_delay * 0.8)
+                    self.reconnect_delay = max(self.min_reconnect_delay, self.reconnect_delay * 0.9)
                 else:
-                    self.reconnect_delay = min(self.reconnect_delay * 1.2, self.max_reconnect_delay)
-                
+                    self.reconnect_delay = min(self.reconnect_delay * 1.5, self.max_reconnect_delay)
+
                 print(f"WebSocket reconnect scheduled: {reason} | delay: {self.reconnect_delay:.1f}sec | stability: {self.connection_stability_score}/100")
                 time.sleep(self.reconnect_delay)
 

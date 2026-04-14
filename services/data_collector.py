@@ -104,6 +104,10 @@ class DataCollector:
         """Log with HH:mm:ss timestamp prefix"""
         log_with_timestamp(f"[Data Collector] {message}")
 
+    def _get_ist_timestamp(self):
+        """Get current timestamp in IST (HH:mm:ss)"""
+        return self.time_utils.now_ist().strftime('%H:%M:%S')
+
     def _restore_indicator_state(self):
         """Restore indicator state from database on startup"""
         if not self.db.enabled:
@@ -120,21 +124,21 @@ class DataCollector:
             for candle in recent_candles:
                 self.candle_managers[managed_instrument].ingest_completed_5m(candle)
             restored_any = True
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Restored {len(recent_candles)} historical 5m candles for {managed_instrument} warmup")
+            print(f"[{self._get_ist_timestamp()}] Restored {len(recent_candles)} historical 5m candles for {managed_instrument} warmup")
 
         if not restored_any:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] No DB candles found, trying historical backfill for warmup")
+            print(f"[{self._get_ist_timestamp()}] No DB candles found, trying historical backfill for warmup")
             warmup_candles = self.historical_backfill.warmup_indicators_on_startup(
                 num_bars=self.config.STATE_RECOVERY_5M_BARS
             )
             if warmup_candles:
                 for candle in warmup_candles:
                     self.candle_managers[self.instrument].ingest_completed_5m(candle)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Warmed up with {len(warmup_candles)} historical 5m bars for {self.instrument}")
+                print(f"[{self._get_ist_timestamp()}] Warmed up with {len(warmup_candles)} historical 5m bars for {self.instrument}")
 
     def _print_startup_status(self):
         """Print startup status"""
-        ts = datetime.now().strftime('%H:%M:%S')
+        ts = self._get_ist_timestamp()
         live_snapshot = self.live_feed.get_live_data(self.instrument)
         diagnostics = live_snapshot.get("connection_diagnostics", {})
         print(f"[{ts}] Data Collector Started:")
@@ -162,7 +166,7 @@ class DataCollector:
                     "pid": self.pid,
                 }
             )
-        ts = datetime.now().strftime('%H:%M:%S')
+        ts = self._get_ist_timestamp()
         print(f"[{ts}] [Data Collector] Heartbeat | IST: {self.time_utils.current_time()} | feed_connected: {live_snapshot.get('feed_connected')} | data_age: {live_snapshot.get('data_age_seconds')} | reconnects: {diagnostics.get('reconnect_attempts', 0)} | stability: {diagnostics.get('stability_score')}")
     
     def _check_market_status(self):
@@ -193,7 +197,7 @@ class DataCollector:
         
         # Report status change
         if market_status != self.last_market_status:
-            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] [Data Collector] Market Status Update: {status_msg}")
+            print(f"\n[{self._get_ist_timestamp()}] [Data Collector] Market Status Update: {status_msg}")
             self._log(f" Current Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} IST")
             
             if market_status == "WEEKEND":
@@ -235,12 +239,12 @@ class DataCollector:
 
     def _print_completed_1m_summary(self, instrument, candle_1m):
         """Print completed 1-minute candle summary"""
-        ts = datetime.now().strftime('%H:%M:%S')
+        ts = self._get_ist_timestamp()
         print(f"[{ts}] [Data Collector] Completed 1m | {instrument} | {candle_1m['datetime']} | O:{candle_1m['open']} H:{candle_1m['high']} L:{candle_1m['low']} C:{candle_1m['close']} | vol:{candle_1m['volume']} | ticks:{candle_1m.get('tick_count', 0)}")
 
     def _print_completed_5m_summary(self, instrument, candle_5m):
         """Print completed 5-minute candle summary"""
-        ts = datetime.now().strftime('%H:%M:%S')
+        ts = self._get_ist_timestamp()
         print(f"[{ts}] [Data Collector] 5m Closed | {instrument} | {candle_5m['time']} | O:{candle_5m['open']} H:{candle_5m['high']} L:{candle_5m['low']} C:{candle_5m['close']} | vol:{candle_5m['volume']} | ticks:{candle_5m.get('tick_count', 0)}")
 
     def _safe_save_1m_candle(self, instrument, candle_1m):
@@ -550,6 +554,10 @@ def main():
     args = parser.parse_args()
     managed_instruments = [item.upper() for item in (args.instruments or [args.instrument])]
     subscriptions = []
+    # Get IST timestamp for main function
+    from shared.utils.time_utils import TimeUtils
+    _main_time_utils = TimeUtils()
+    _main_ts = lambda: _main_time_utils.now_ist().strftime('%H:%M:%S')
     for managed_instrument in managed_instruments:
         profile = get_instrument_profile(managed_instrument)
         subscriptions.append({"ExchangeSegment": "IDX_I", "SecurityId": str(profile["security_id"])})
@@ -557,23 +565,23 @@ def main():
             # SENSEX futures trade on BSE, others on NSE
             exchange_segment = "BSE_FNO" if managed_instrument == "SENSEX" else "NSE_FNO"
             subscriptions.append({"ExchangeSegment": exchange_segment, "SecurityId": str(profile["future_id"])})
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Data Collector] {managed_instrument}: Index {profile['security_id']} + Futures {profile['future_id']} ({exchange_segment})")
+            print(f"[{_main_ts()}] [Data Collector] {managed_instrument}: Index {profile['security_id']} + Futures {profile['future_id']} ({exchange_segment})")
         else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [Data Collector] {managed_instrument}: Index only {profile['security_id']} (no futures ID cached)")
-    
+            print(f"[{_main_ts()}] [Data Collector] {managed_instrument}: Index only {profile['security_id']} (no futures ID cached)")
+
     collector = DataCollector(
         instruments=subscriptions,
         instrument=managed_instruments[0],
         managed_instruments=managed_instruments,
     )
-    
+
     try:
         collector.run_forever()
     except KeyboardInterrupt:
-        print("\n[Data Collector] Shutting down...")
+        print(f"\n[{_main_ts()}] [Data Collector] Shutting down...")
         collector.stop()
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [Data Collector] Fatal error: {e}")
+        print(f"[{_main_ts()}] [Data Collector] Fatal error: {e}")
         sys.exit(1)
 
 

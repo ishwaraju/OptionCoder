@@ -4,6 +4,17 @@ from config import Config
 
 
 class TimeUtils:
+    # NSE/BSE Market Holidays 2026
+    MARKET_HOLIDAYS_2026 = [
+        "2026-01-26",  # Republic Day
+        "2026-03-25",  # Holi
+        "2026-04-14",  # Ambedkar Jayanti / Dr. Baba Saheb Ambedkar Jayanti
+        "2026-05-01",  # Maharashtra Day
+        "2026-08-15",  # Independence Day
+        "2026-10-02",  # Gandhi Jayanti
+        "2026-11-05",  # Diwali Laxmi Puja
+    ]
+
     def __init__(self):
         self.ist = pytz.timezone('Asia/Kolkata')
 
@@ -24,6 +35,9 @@ class TimeUtils:
         return self.now_ist().time()
 
     def is_market_open(self):
+        """Check if market is open (weekday, not holiday, market hours)"""
+        if not self.is_trading_day():
+            return False
         now = self.current_time()
         return self._parse_clock(Config.ORB_START) <= now <= time(15, 30)
 
@@ -72,3 +86,12 @@ class TimeUtils:
     def is_weekday(self):
         """Check if today is a weekday (Monday=0 to Friday=4)"""
         return self.now_ist().weekday() < 5
+
+    def is_market_holiday(self):
+        """Check if today is a market holiday"""
+        today_str = self.today_str()
+        return today_str in self.MARKET_HOLIDAYS_2026
+
+    def is_trading_day(self):
+        """Check if today is a trading day (weekday AND not holiday)"""
+        return self.is_weekday() and not self.is_market_holiday()

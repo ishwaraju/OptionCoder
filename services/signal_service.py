@@ -113,8 +113,9 @@ class SignalService:
         self._restore_indicator_state()
 
     def _log(self, message):
-        """Log with HH:mm:ss timestamp prefix"""
-        log_with_timestamp(f"[Signal Service] {message}")
+        """Log with HH:mm:ss IST timestamp prefix"""
+        ts = self.time_utils.now_ist().strftime('%H:%M:%S')
+        print(f"[{ts}] [Signal Service] {message}")
 
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
         """Start 1-minute manual trade monitor after a signal."""
@@ -307,7 +308,7 @@ class SignalService:
             limit=self.config.STATE_RECOVERY_5M_BARS,
         )
         if not recent_candles:
-            print("[Signal Service] No recent candles found for indicator warmup")
+            self._log("No recent candles found for indicator warmup")
             return
 
         for candle in recent_candles:
@@ -319,15 +320,15 @@ class SignalService:
         if not self.orb.is_orb_ready():
             self.orb.calculate_orb()
 
-        print(f"[Signal Service] Restored {len(recent_candles)} candles for indicator warmup")
+        self._log(f"Restored {len(recent_candles)} candles for indicator warmup")
 
     def _print_startup_status(self):
         """Print startup status"""
-        print("[Signal Service] Started:")
-        print("Instrument:", self.instrument)
-        print("Strategy:", self.strategy.__class__.__name__)
-        print("DB Enabled:", self.db_writer.enabled)
-        print("Notifications:", "ENABLED" if Config.ENABLE_ALERTS else "DISABLED")
+        self._log("Started:")
+        self._log(f"Instrument: {self.instrument}")
+        self._log(f"Strategy: {self.strategy.__class__.__name__}")
+        self._log(f"DB Enabled: {self.db_writer.enabled}")
+        self._log(f"Notifications: {'ENABLED' if Config.ENABLE_ALERTS else 'DISABLED'}")
 
     def _is_debug_enabled(self):
         """Check if debug mode is enabled"""
@@ -397,7 +398,7 @@ class SignalService:
 
         now_ts = time_module.time()
         if now_ts - self.last_oi_fallback_notice > 60:
-            print("[Signal Service] OI-only fallback active (option band snapshots unavailable)")
+            self._log("OI-only fallback active (option band snapshots unavailable)")
             self.last_oi_fallback_notice = now_ts
 
         return {
@@ -533,7 +534,7 @@ class SignalService:
             )
             self.db_writer.insert_strategy_decision_5m(row)
         except Exception as e:
-            print("[Signal Service] DB save error (strategy decision):", e)
+            self._log(f"DB save error (strategy decision): {e}")
 
     def _safe_save_trade_monitor_event(self, ts, monitor_data):
         """Persist trade monitor guidance to DB."""
@@ -554,7 +555,7 @@ class SignalService:
             )
             self.db_writer.insert_trade_monitor_event_1m(row)
         except Exception as e:
-            print("[Signal Service] DB save error (trade monitor):", e)
+            self._log(f"DB save error (trade monitor): {e}")
 
     def _safe_save_signal_issued(self, ts, signal, price, strike, reason, balanced_pro, oi_mode, telegram_sent=True, monitor_started=True, entry_window_end=None):
         """Persist only actual fired actionable signals to DB."""
@@ -578,7 +579,7 @@ class SignalService:
             )
             self.db_writer.insert_signal_issued(row)
         except Exception as e:
-            print("[Signal Service] DB save error (signal issued):", e)
+            self._log(f"DB save error (signal issued): {e}")
 
     def _process_5m_candle(self, candle_5m):
         """Process 5-minute candle and generate signal"""
@@ -808,14 +809,14 @@ class SignalService:
         self.watchdog.start({"phase": "starting"})
         self._print_startup_status()
         
-        print("[Signal Service] Starting signal analysis...")
+        self._log("Starting signal analysis...")
         
         try:
             while self.running:
                 data_ok, pause_reason = self._get_data_health_status()
                 if not data_ok:
                     if self.last_data_pause_reason != pause_reason:
-                        print(f"[Signal Service] Pausing signal generation: {pause_reason}")
+                        self._log(f"Pausing signal generation: {pause_reason}")
                         self.last_data_pause_reason = pause_reason
                     self.data_pause_active = True
                     self.watchdog.touch({"phase": "data_pause", "reason": pause_reason})
@@ -823,7 +824,7 @@ class SignalService:
                     continue
 
                 if self.data_pause_active:
-                    print("[Signal Service] Data stream healthy again. Resuming signal generation.")
+                    self._log("Data stream healthy again. Resuming signal generation.")
                     self.data_pause_active = False
                     self.last_data_pause_reason = None
                     self.watchdog.touch({"phase": "resumed"})
@@ -835,7 +836,7 @@ class SignalService:
                 )
                 
                 if not latest_candles:
-                    print("[Signal Service] No candles found in database, waiting...")
+                    self._log("No candles found in database, waiting...")
                     time_module.sleep(30)
                     continue
                 
@@ -872,18 +873,18 @@ class SignalService:
                 time_module.sleep(60)  # Check every minute
                 
         except KeyboardInterrupt:
-            print("\n[Signal Service] Shutdown requested by user")
+            print(f"\n[{self.time_utils.now_ist().strftime('%H:%M:%S')}] [Signal Service] Shutdown requested by user")
         except Exception as e:
-            print(f"[Signal Service] Unexpected error: {e}")
+            self._log(f"Unexpected error: {e}")
         finally:
             self.running = False
             self.watchdog.stop()
-            print("[Signal Service] Signal service stopped")
+            self._log("Signal service stopped")
 
     def stop(self):
         """Stop signal service"""
         self.running = False
-        print("[Signal Service] Stop signal sent")
+        self._log("Stop signal sent")
 
     def _print_heartbeat(self):
         """Print periodic heartbeat status"""

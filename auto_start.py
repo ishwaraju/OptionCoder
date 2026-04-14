@@ -8,80 +8,89 @@ import time
 import schedule
 import subprocess
 import os
+import sys
 from datetime import datetime
 from shared.utils.time_utils import TimeUtils
+from shared.utils.log_utils import log_with_timestamp
 import pytz
 
 class AutoScheduler:
     def __init__(self):
         self.time_utils = TimeUtils()
         self.instruments = ["NIFTY", "BANKNIFTY", "SENSEX"]
+
+    def _log(self, message):
+        """Log with HH:mm:ss IST timestamp prefix"""
+        ist_now = self.time_utils.now_ist()
+        ts = ist_now.strftime('%H:%M:%S')
+        print(f"[{ts}] {message}")
         
     def start_collectors(self):
         """Start data collectors"""
         try:
-            print(f"🚀 Starting Data Collectors at {datetime.now().strftime('%H:%M:%S')}")
+            self._log("🚀 Starting Data Collectors")
             cmd = ["python3", "tools/run_collectors.py", "start", "--instruments"] + self.instruments
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-            print(f"✅ Collectors started: {result.stdout}")
+            self._log(f"✅ Collectors started: {result.stdout}")
         except Exception as e:
-            print(f"❌ Error starting collectors: {e}")
+            self._log(f"❌ Error starting collectors: {e}")
     
     def start_signals(self):
         """Start signal services"""
         try:
-            print(f"🚀 Starting Signal Services at {datetime.now().strftime('%H:%M:%S')}")
+            self._log("🚀 Starting Signal Services")
             cmd = ["python3", "tools/run_signals.py", "start", "--instruments"] + self.instruments
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-            print(f"✅ Signals started: {result.stdout}")
+            self._log(f"✅ Signals started: {result.stdout}")
         except Exception as e:
-            print(f"❌ Error starting signals: {e}")
+            self._log(f"❌ Error starting signals: {e}")
     
     def start_telegram_bot(self):
         """Start telegram bot"""
         try:
-            print(f"🚀 Starting Telegram Bot at {datetime.now().strftime('%H:%M:%S')}")
+            self._log("🚀 Starting Telegram Bot")
             cmd = ["python3", "services/telegram_bot_service.py"]
             # Run telegram bot in background
             subprocess.Popen(cmd, cwd=os.getcwd())
-            print(f"✅ Telegram Bot started in background")
+            self._log("✅ Telegram Bot started in background")
         except Exception as e:
-            print(f"❌ Error starting telegram bot: {e}")
+            self._log(f"❌ Error starting telegram bot: {e}")
     
     def stop_all_services(self):
         """Stop all services at market close"""
-        print(f"\n🌅 Auto Stopping All Services - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("=" * 50)
+        ts = self.time_utils.now_ist().strftime('%H:%M:%S')
+        self._log(f"🌅 Auto Stopping All Services")
+        self._log("=" * 50)
         
         try:
             # Stop collectors
-            print("🛑 Stopping Data Collectors...")
+            self._log("🛑 Stopping Data Collectors...")
             cmd = ["python3", "tools/run_collectors.py", "stop"]
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-            print(f"✅ Collectors stopped: {result.stdout}")
+            self._log(f"✅ Collectors stopped: {result.stdout}")
         except Exception as e:
-            print(f"❌ Error stopping collectors: {e}")
+            self._log(f"❌ Error stopping collectors: {e}")
         
         try:
             # Stop signals
-            print("🛑 Stopping Signal Services...")
+            self._log("🛑 Stopping Signal Services...")
             cmd = ["python3", "tools/run_signals.py", "stop"]
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-            print(f"✅ Signals stopped: {result.stdout}")
+            self._log(f"✅ Signals stopped: {result.stdout}")
         except Exception as e:
-            print(f"❌ Error stopping signals: {e}")
+            self._log(f"❌ Error stopping signals: {e}")
         
         try:
             # Stop telegram bot
-            print("🛑 Stopping Telegram Bot...")
+            self._log("🛑 Stopping Telegram Bot...")
             cmd = ["pkill", "-f", "telegram_bot_service.py"]
             subprocess.run(cmd, capture_output=True, text=True)
-            print(f"✅ Telegram Bot stopped")
+            self._log("✅ Telegram Bot stopped")
         except Exception as e:
-            print(f"❌ Error stopping telegram bot: {e}")
+            self._log(f"❌ Error stopping telegram bot: {e}")
         
-        print("=" * 50)
-        print(f"🎉 All services stopped successfully!")
+        self._log("=" * 50)
+        self._log("🎉 All services stopped successfully!")
 
     def _preflight_checks(self):
         """Validate before starting services"""
@@ -109,10 +118,10 @@ class AutoScheduler:
         except Exception as e:
             checks.append(f"❌ Future ID check failed: {e}")
 
-        print("\n🔍 Pre-flight Checks:")
+        self._log("🔍 Pre-flight Checks:")
         for check in checks:
-            print(f"   {check}")
-        print()
+            self._log(f"   {check}")
+        self._log("")
 
         # Return False if any critical check failed
         return not any("❌" in c for c in checks)
@@ -120,16 +129,16 @@ class AutoScheduler:
     def start_all_services(self):
         """Start all services in correct order"""
         if not self.time_utils.is_weekday():
-            print(f"📅 Weekend detected - Skipping auto start")
+            self._log("📅 Weekend detected - Skipping auto start")
             return
 
         # Run pre-flight checks
         if not self._preflight_checks():
-            print("🛑 Pre-flight checks failed - Not starting services")
+            self._log("🛑 Pre-flight checks failed - Not starting services")
             return
 
-        print(f"\n🌅 Auto Starting All Services - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("=" * 50)
+        self._log("🌅 Auto Starting All Services")
+        self._log("=" * 50)
 
         # Start in order
         self.start_collectors()
@@ -140,8 +149,8 @@ class AutoScheduler:
 
         self.start_telegram_bot()
 
-        print("=" * 50)
-        print(f"🎉 All services started successfully!")
+        self._log("=" * 50)
+        self._log("🎉 All services started successfully!")
     
     def _get_ist_now(self):
         """Get current time in IST (India timezone)"""
@@ -155,12 +164,12 @@ class AutoScheduler:
         ist_offset = -19800  # IST is UTC+5:30 = -19800 seconds
         
         if system_tz_offset != ist_offset:
-            print("⚠️  WARNING: System timezone is NOT set to IST (India Time)!")
-            print(f"   Current offset: {system_tz_offset} seconds")
-            print(f"   IST offset should be: {ist_offset} seconds (-05:30)")
-            print("   Fix: System Preferences → Date & Time → Time Zone → Kolkata")
-            print("   OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata")
-            print("")
+            self._log("⚠️  WARNING: System timezone is NOT set to IST (India Time)!")
+            self._log(f"   Current offset: {system_tz_offset} seconds")
+            self._log(f"   IST offset should be: {ist_offset} seconds (-05:30)")
+            self._log("   Fix: System Preferences → Date & Time → Time Zone → Kolkata")
+            self._log("   OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata")
+            self._log("")
             return False
         return True
     
@@ -168,13 +177,13 @@ class AutoScheduler:
         """Run the scheduler"""
         ist_now = self._get_ist_now()
         
-        print("🤖 Auto Scheduler Started")
+        self._log("🤖 Auto Scheduler Started")
         self._check_timezone()
-        print(f"⏰ Current IST Time: {ist_now.strftime('%Y-%m-%d %H:%M:%S')}")
-        print("⏰ Services will auto-start at 9:14 AM IST on weekdays")
-        print("🛑 Services will auto-stop at 3:40 PM IST on weekdays")
-        print("📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST")
-        print("🛑 Press Ctrl+C to stop scheduler")
+        self._log(f"⏰ Current IST Time: {ist_now.strftime('%Y-%m-%d %H:%M:%S')}")
+        self._log("⏰ Services will auto-start at 9:14 AM IST on weekdays")
+        self._log("🛑 Services will auto-stop at 3:40 PM IST on weekdays")
+        self._log("📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST")
+        self._log("🛑 Press Ctrl+C to stop scheduler")
         
         # Schedule daily at 9:14 AM IST (start)
         schedule.every().monday.at("09:14").do(self.start_all_services)
@@ -193,7 +202,7 @@ class AutoScheduler:
         # Also start immediately if it's past 9:14 AM IST on weekday
         if (ist_now.weekday() < 5 and ist_now.hour >= 9 and (ist_now.hour > 9 or ist_now.minute >= 14)):
             if ist_now.hour < 15 or (ist_now.hour == 15 and ist_now.minute < 40):
-                print(f"🚀 Current IST time is past 9:14 AM and before 3:40 PM - Starting services now!")
+                self._log("🚀 Current IST time is past 9:14 AM and before 3:40 PM - Starting services now!")
                 self.start_all_services()
         
         # Track last run dates to prevent duplicate runs
@@ -209,7 +218,7 @@ class AutoScheduler:
             if (ist_now.weekday() < 5 and 
                 ist_now.hour == 9 and ist_now.minute == 14 and
                 current_date != last_start_date):
-                print(f"🚀 Trigger: 9:14 AM IST - Starting services...")
+                self._log("🚀 Trigger: 9:14 AM IST - Starting services...")
                 self.start_all_services()
                 last_start_date = current_date
             
@@ -217,7 +226,7 @@ class AutoScheduler:
             if (ist_now.weekday() < 5 and 
                 ist_now.hour == 15 and ist_now.minute == 40 and
                 current_date != last_stop_date):
-                print(f"🛑 Trigger: 3:40 PM IST - Stopping services...")
+                self._log("🛑 Trigger: 3:40 PM IST - Stopping services...")
                 self.stop_all_services()
                 last_stop_date = current_date
             
@@ -228,7 +237,7 @@ def main():
     try:
         scheduler.run_scheduler()
     except KeyboardInterrupt:
-        print("\n🛑 Auto Scheduler stopped by user")
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🛑 Auto Scheduler stopped by user")
 
 if __name__ == "__main__":
     main()
