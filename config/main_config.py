@@ -159,6 +159,32 @@ class MainConfig:
     STRIKE_MAP = {}
 
     # ==============================
+    # SCALPING SETTINGS (COMMON)
+    # ==============================
+    SCALPING_ENABLED = os.getenv('SCALPING_ENABLED', 'True').lower() == 'true'
+    SCALP_MIN_SCORE = int(os.getenv('SCALP_MIN_SCORE', '45'))
+    SCALP_COOLDOWN_SECONDS = int(os.getenv('SCALP_COOLDOWN_SECONDS', '180'))
+    SCALP_MAX_HOLD_MINUTES = int(os.getenv('SCALP_MAX_HOLD_MINUTES', '4'))
+
+    # ==============================
+    # SCALPING SETTINGS (INSTRUMENT-SPECIFIC)
+    # ==============================
+    # NIFTY - Low volatility
+    NIFTY_SCALP_TARGET = int(os.getenv('NIFTY_SCALP_TARGET', '10'))
+    NIFTY_SCALP_STOP = int(os.getenv('NIFTY_SCALP_STOP', '8'))
+    NIFTY_SCALP_MIN_ATR = int(os.getenv('NIFTY_SCALP_MIN_ATR', '20'))
+
+    # BANKNIFTY - Medium volatility
+    BANKNIFTY_SCALP_TARGET = int(os.getenv('BANKNIFTY_SCALP_TARGET', '20'))
+    BANKNIFTY_SCALP_STOP = int(os.getenv('BANKNIFTY_SCALP_STOP', '15'))
+    BANKNIFTY_SCALP_MIN_ATR = int(os.getenv('BANKNIFTY_SCALP_MIN_ATR', '40'))
+
+    # SENSEX - High volatility
+    SENSEX_SCALP_TARGET = int(os.getenv('SENSEX_SCALP_TARGET', '12'))
+    SENSEX_SCALP_STOP = int(os.getenv('SENSEX_SCALP_STOP', '10'))
+    SENSEX_SCALP_MIN_ATR = int(os.getenv('SENSEX_SCALP_MIN_ATR', '35'))
+
+    # ==============================
     # DATABASE SETTINGS
     # ==============================
     DB_ENABLED = os.getenv('DB_ENABLED', 'True').lower() == 'true'

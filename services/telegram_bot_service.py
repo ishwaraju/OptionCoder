@@ -325,6 +325,10 @@ class TelegramCommandService:
             
             if row["service"] == "signal_service":
                 signal_services.append(service_line)
+            elif row["service"] == "scalp_signal_service":
+                # Add scalp service with ⚡ emoji
+                scalp_line = f"  {label} ⚡ {status_emoji} {lifecycle}{pid_text} ({age})"
+                signal_services.append(scalp_line)
             elif row["service"] in ["data_collector", "runtime"]:
                 data_services.append(service_line)
             elif row["service"] == "oi_collector":
@@ -535,6 +539,50 @@ class TelegramCommandService:
             lines.append(base)
 
         if not found and all(line.endswith("NO SIGNAL") for line in lines[1:]):
+            return "\n".join(lines)
+        return "\n".join(lines)
+
+    def _format_scalp_signals(self):
+        """Format latest scalp signals (1m timeframe)"""
+        lines = ["⚡ Scalp Signals (1m)"]
+        found = False
+
+        try:
+            for instrument in self.instruments:
+                # Fetch latest scalp signal from database
+                latest = self.db_reader.fetch_latest_scalp_signal(instrument)
+                
+                if not latest:
+                    lines.append(f"{instrument}: NO SCALP SIGNAL")
+                    continue
+                
+                found = True
+                signal_time = latest["time"].strftime('%H:%M') if latest["time"] else "unknown"
+                score = f"{latest['score']:.0f}" if latest['score'] is not None else "na"
+                
+                # Format with ⚡ emoji for scalp
+                base = (
+                    f"⚡ {instrument}: {latest['signal']} | {signal_time} | "
+                    f"Score: {score} | "
+                    f"Target: +{latest.get('target_price', 0):.0f} | "
+                    f"SL: -{latest.get('stop_loss', 0):.0f}"
+                )
+                
+                # Add status
+                status = latest.get('status', 'ACTIVE')
+                if status == 'ACTIVE':
+                    base += " | 🟢 ACTIVE"
+                elif status == 'EXITED':
+                    pnl = latest.get('pnl', 0)
+                    pnl_emoji = "🟢" if pnl > 0 else "🔴"
+                    base += f" | {pnl_emoji} P&L: {pnl:+.0f}"
+                
+                lines.append(base)
+                
+        except Exception as e:
+            lines.append(f"Error fetching scalp signals: {e}")
+        
+        if not found and all("NO SCALP" in line for line in lines[1:]):
             return "\n".join(lines)
         return "\n".join(lines)
 
@@ -1020,6 +1068,8 @@ class TelegramCommandService:
             return {"reply": self._format_health(), "post_action": None}
         if command == "/signals":
             return {"reply": self._format_signals(), "post_action": None}
+        if command == "/scalp":
+            return {"reply": self._format_scalp_signals(), "post_action": None}
         if command == "/start_signal":
             instruments = self._valid_instruments(command_args)
             force = self._extract_force_flag(command_args)
@@ -1048,6 +1098,7 @@ class TelegramCommandService:
                 "/status\n"
                 "/health\n"
                 "/signals\n"
+                "/scalp\n"
                 "/start_signal [NIFTY BANKNIFTY SENSEX]\n"
                 "/stop_signal\n"
                 "/start_data [NIFTY BANKNIFTY SENSEX]\n"

@@ -264,6 +264,36 @@ class DBReader:
             "reason": row[10],
         }
 
+    def fetch_latest_scalp_signal(self, instrument):
+        """Fetch latest scalp signal for an instrument."""
+        query = """
+        SELECT
+            ts, signal, entry_price, target_price, stop_loss,
+            score, reason, status, exit_ts, exit_price, pnl
+        FROM scalp_signals_1m
+        WHERE instrument = %s
+        ORDER BY ts DESC
+        LIMIT 1;
+        """
+        rows = self._execute(query, (instrument,))
+        if not rows:
+            return None
+
+        row = rows[0]
+        return {
+            "time": row[0],
+            "signal": row[1],
+            "price": float(row[2]) if row[2] is not None else None,
+            "target_price": float(row[3]) if row[3] is not None else None,
+            "stop_loss": float(row[4]) if row[4] is not None else None,
+            "score": float(row[5]) if row[5] is not None else None,
+            "reason": row[6],
+            "status": row[7],
+            "exit_ts": row[8],
+            "exit_price": float(row[9]) if row[9] is not None else None,
+            "pnl": float(row[10]) if row[10] is not None else None,
+        }
+
     def fetch_latest_trade_monitor_event(self, instrument):
         """Fetch latest trade monitor event for an instrument."""
         query = """

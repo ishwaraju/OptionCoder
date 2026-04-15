@@ -47,6 +47,16 @@ class AutoScheduler:
         except Exception as e:
             self._log(f"❌ Error starting signals: {e}")
     
+    def start_scalp_signals(self):
+        """Start scalp signal services (non-blocking)"""
+        try:
+            self._log("🚀 Starting Scalp Signal Services (1m)")
+            cmd = ["python3", "tools/run_scalp.py", "start", "--instruments"] + self.instruments
+            subprocess.Popen(cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._log("✅ Scalp services initiated (3-5 min hold)")
+        except Exception as e:
+            self._log(f"❌ Error starting scalp services: {e}")
+    
     def start_telegram_bot(self):
         """Start telegram bot (non-blocking)"""
         try:
@@ -147,6 +157,7 @@ class AutoScheduler:
         time.sleep(5)  # Wait for collectors to initialize
 
         self.start_signals()
+        self.start_scalp_signals()  # Also start scalping
         time.sleep(4 * 60)  # Wait 4 minutes until 9:18 AM IST
 
         self.start_telegram_bot()

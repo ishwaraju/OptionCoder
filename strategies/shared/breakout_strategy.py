@@ -2,11 +2,32 @@ from shared.utils.time_utils import TimeUtils
 from config import Config
 from strategies.shared.expiry_day_rules import ExpiryDayRules
 
+# New option buyer protection indicators
+from shared.indicators.adx_calculator import ADXCalculator, OPTION_BUYER_MIN_ADX
+from shared.indicators.volume_spike_detector import VolumeSpikeDetector, is_volume_confirmed_for_option_buying
+from shared.indicators.session_rules import SessionRules, is_optimal_trading_time
+from shared.indicators.oi_buildup_analyzer import OIBuildupAnalyzer, is_oi_confirming_trend
+from shared.indicators.multi_timeframe_trend import MultiTimeframeTrend, quick_trend_alignment_check
+
 
 class BreakoutStrategy:
-    def __init__(self):
+    def __init__(self, for_option_buyer=True):
         self.time_utils = TimeUtils()
         self.expiry_rules = ExpiryDayRules(self.time_utils)
+        self.for_option_buyer = for_option_buyer  # Enable strict mode for option buyers
+
+        # New option buyer protection indicators
+        self.adx_calc = ADXCalculator(period=14)
+        self.volume_detector = VolumeSpikeDetector(
+            period=14,
+            spike_threshold=1.5,
+            option_buyer_threshold=1.8 if for_option_buyer else 1.5
+        )
+        self.session_rules = SessionRules(for_option_buyer=for_option_buyer)
+        self.oi_analyzer = OIBuildupAnalyzer(for_option_buyer=for_option_buyer)
+        self.multi_tf_trend = MultiTimeframeTrend()
+
+        # Tracking variables
         self.last_score = 0
         self.last_score_components = []
         self.last_blockers = []
@@ -24,6 +45,10 @@ class BreakoutStrategy:
         self.confirmation_setup = None
         self.retest_bars_max = 3
         self.last_emitted_signal = None
+
+        # Option buyer specific settings
+        self.option_buyer_min_adx = OPTION_BUYER_MIN_ADX  # 28
+        self.min_volume_spike = 1.8 if for_option_buyer else 1.5
 
     def _compute_heikin_ashi(self, candle_open, candle_high, candle_low, candle_close):
         if None in (candle_open, candle_high, candle_low, candle_close):
@@ -74,6 +99,176 @@ class BreakoutStrategy:
     @staticmethod
     def _has_bearish_build_up(build_up):
         return build_up in ["SHORT_BUILDUP", "LONG_UNWINDING"]
+
+    # ============================
+    # OPTION BUYER PROTECTION FILTERS
+    # ============================
+
+    def _check_adx_filter(self, candles_5m, signal):
+        """ADX filter - avoid sideways markets for option buyers"""
+        if not self.for_option_buyer:
+            return True, 0, "ADX check skipped (not option buyer mode)"
+
+        if not candles_5m or len(candles_5m) < 15:
+            return False, 0, "Insufficient candles for ADX"
+
+        # Update ADX calculator
+        for candle in candles_5m[-15:]:
+            self.adx_calc.update(
+                candle.get('high', candle[2] if isinstance(candle, (list, tuple)) else 0),
+                candle.get('low', candle[3] if isinstance(candle, (list, tuple)) else 0),
+                candle.get('close', candle[4] if isinstance(candle, (list, tuple)) else 0)
+            )
+
+        adx_data = self.adx_calc.get_current()
+        if adx_data is None:
+            return False, 0, "ADX calculation failed"
+
+        adx_value = adx_data['adx']
+        di_plus = adx_data['di_plus']
+        di_minus = adx_data['di_minus']
+
+        # Check minimum ADX
+        if adx_value < self.option_buyer_min_adx:
+            return False, 0, f"ADX {adx_value} < {self.option_buyer_min_adx} (sideways market)"
+
+        # Check trend alignment
+        if signal == "CE" and di_plus <= di_minus:
+            return False, adx_value, f"ADX {adx_value} OK but DI+ {di_plus} <= DI- {di_minus}"
+
+        if signal == "PE" and di_minus <= di_plus:
+            return False, adx_value, f"ADX {adx_value} OK but DI- {di_minus} <= DI+ {di_plus}"
+
+        # ADX contribution to score
+        adx_score = 20 if adx_value >= 35 else 15
+
+        return True, adx_score, f"ADX {adx_value} confirmed with trend alignment"
+
+    def _check_volume_filter(self, current_volume):
+        """Volume spike filter - confirm breakout with volume"""
+        if not self.for_option_buyer:
+            return True, 0, "Volume check skipped (not option buyer mode)"
+
+        if current_volume is None or current_volume <= 0:
+            return False, 0, "No volume data"
+
+        confirmed, ratio, reason = self.volume_detector.is_breakout_confirmed(
+            volume=current_volume,
+            for_option_buyer=True
+        )
+
+        # Score calculation based on ratio
+        if ratio >= 2.5:
+            score = 25
+        elif ratio >= 1.8:
+            score = 20
+        elif ratio >= 1.5:
+            score = 15
+        else:
+            score = 0
+
+        if not confirmed:
+            return False, score, f"Volume weak: {reason}"
+
+        return True, score, f"Volume confirmed: {reason}"
+
+    def _check_session_filter(self, timestamp=None):
+        """Session filter - avoid bad trading times"""
+        if not self.for_option_buyer:
+            return True, 0, "Session check skipped (not option buyer mode)"
+
+        is_good, score, reason = self.session_rules.is_tradable(timestamp)
+
+        if not is_good:
+            return False, score, f"Bad session: {reason}"
+
+        return True, score, f"Good session: {reason}"
+
+    def _check_oi_filter(self, oi_data, price, signal):
+        """OI buildup filter - confirm institutional participation"""
+        if not self.for_option_buyer:
+            return True, 0, "OI check skipped (not option buyer mode)"
+
+        if oi_data is None:
+            return False, 0, "No OI data"
+
+        # Update OI analyzer
+        current_oi = oi_data.get('current_oi', oi_data.get('oi', 0))
+        self.oi_analyzer.update(current_oi, price)
+
+        confirmed, score, reason = self.oi_analyzer.confirm_signal(signal)
+
+        if not confirmed:
+            return False, score, f"OI not confirming: {reason}"
+
+        return True, score, f"OI confirming: {reason}"
+
+    def _check_multi_timeframe_filter(self, trend_15m, signal):
+        """Multi-timeframe filter - higher timeframe confirmation"""
+        if not self.for_option_buyer:
+            return True, 0, "Multi-TF check skipped (not option buyer mode)"
+
+        if trend_15m is None:
+            return True, 0, "15m trend unavailable"
+
+        self.multi_tf_trend.update_trends("BULLISH" if signal == "CE" else "BEARISH", trend_15m)
+        aligned, strength, reason = self.multi_tf_trend.check_alignment(signal)
+
+        if not aligned:
+            return False, strength, f"15m against: {reason}"
+
+        return True, strength, f"Timeframes aligned: {reason}"
+
+    def _apply_option_buyer_filters(self, signal, candles_5m, current_volume,
+                                      oi_data, price, trend_15m=None, timestamp=None):
+        """
+        Apply all option buyer protection filters
+        Returns: (pass_all, total_score, blockers)
+        """
+        if not self.for_option_buyer:
+            return True, 0, []
+
+        blockers = []
+        total_score = 0
+
+        # 1. Session Filter (Most Important - avoids time decay in bad periods)
+        session_ok, session_score, session_reason = self._check_session_filter(timestamp)
+        if not session_ok:
+            blockers.append(f"SESSION: {session_reason}")
+        else:
+            total_score += session_score
+
+        # 2. ADX Filter (Critical - avoids sideways market losses)
+        adx_ok, adx_score, adx_reason = self._check_adx_filter(candles_5m, signal)
+        if not adx_ok:
+            blockers.append(f"ADX: {adx_reason}")
+        else:
+            total_score += adx_score
+
+        # 3. Volume Filter (Important - confirms real breakout)
+        vol_ok, vol_score, vol_reason = self._check_volume_filter(current_volume)
+        if not vol_ok:
+            blockers.append(f"VOLUME: {vol_reason}")
+        else:
+            total_score += vol_score
+
+        # 4. OI Filter (Good to have - institutional confirmation)
+        oi_ok, oi_score, oi_reason = self._check_oi_filter(oi_data, price, signal)
+        if not oi_ok:
+            blockers.append(f"OI: {oi_reason}")
+        else:
+            total_score += oi_score
+
+        # 5. Multi-Timeframe Filter
+        tf_ok, tf_score, tf_reason = self._check_multi_timeframe_filter(trend_15m, signal)
+        if not tf_ok:
+            blockers.append(f"TIMEFRAME: {tf_reason}")
+        else:
+            total_score += tf_score
+
+        pass_all = len(blockers) == 0
+
+        return pass_all, total_score, blockers
 
     def _reset_retest_setup(self):
         self.retest_setup = None

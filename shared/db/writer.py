@@ -311,6 +311,29 @@ class DBWriter:
         """
         self._execute(query, row)
 
+    def insert_scalp_signal(self, row):
+        """
+        Insert scalp signal to scalp_signals_1m table
+        row = (
+            ts, instrument, signal, entry_price, target_price, stop_loss,
+            score, reason, status, exit_ts, exit_price, pnl
+        )
+        """
+        query = """
+        INSERT INTO scalp_signals_1m
+        (
+            ts, instrument, signal, entry_price, target_price, stop_loss,
+            score, reason, status, exit_ts, exit_price, pnl
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ts, instrument) DO UPDATE
+        SET status = EXCLUDED.status,
+            exit_ts = EXCLUDED.exit_ts,
+            exit_price = EXCLUDED.exit_price,
+            pnl = EXCLUDED.pnl;
+        """
+        self._execute(query, row)
+
     def fetch_recent_candles_5m(self, instrument, limit=24):
         query = """
         SELECT ts, open, high, low, close, volume
