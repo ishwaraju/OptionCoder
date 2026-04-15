@@ -14,8 +14,8 @@ mkdir -p "$LOG_DIR"
 pkill -f "python3 auto_start.py"
 
 # Start auto scheduler in background with unbuffered output
-# Log file: logs/YYYYMMDD/auto_start.log
-nohup python3 -u auto_start.py > "$LOG_DIR/auto_start.log" 2>&1 &
+# Log file: logs/YYYYMMDD/auto_start.log (handled internally by auto_start.py)
+nohup python3 -u auto_start.py &
 
 echo "✅ OptionCoder Auto Scheduler Started!"
 echo "📝 Logs: $LOG_DIR/auto_start.log"

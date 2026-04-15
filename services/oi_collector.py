@@ -159,20 +159,20 @@ class OICollector:
 
         band_snapshots = option_data.get("band_snapshots") or []
         if not band_snapshots:
-            print("[OI Collector] No option band snapshots available")
+            self._log("No option band snapshots available")
             return None
 
         return option_data
     
     def _print_startup_status(self):
         """Print startup status"""
-        print(f"\n[OI Collector] Started:")
-        print(f"Instrument: {self.instrument}")
-        print(f"Database: {'ENABLED' if self.db_writer.enabled else 'DISABLED'}")
-        print(f"OI Change Tracking: Every {self.change_tracking_interval//60} minute (significant changes only)")
-        print(f"Full OI Collection: Every {self.oi_collection_interval//60} minutes")
-        print(f"Option Band Collection: Every {self.option_band_interval//60} minutes")
-        print(f"Dhan Client: {'CONNECTED' if self.dhan_client.connected else 'DISCONNECTED'}")
+        self._log("Started:")
+        self._log(f"Instrument: {self.instrument}")
+        self._log(f"Database: {'ENABLED' if self.db_writer.enabled else 'DISABLED'}")
+        self._log(f"OI Change Tracking: Every {self.change_tracking_interval//60} minute (significant changes only)")
+        self._log(f"Full OI Collection: Every {self.oi_collection_interval//60} minutes")
+        self._log(f"Option Band Collection: Every {self.option_band_interval//60} minutes")
+        self._log(f"Dhan Client: {'CONNECTED' if self.dhan_client.connected else 'DISCONNECTED'}")
     
     def _fetch_futures_volume(self):
         """Fetch futures volume from Dhan API using quote_data"""
@@ -253,8 +253,8 @@ class OICollector:
             self.db_writer.insert_oi_1m(oi_data)
             self.oi_snapshots_collected += 1
             
-            print(f"[OI Collector] OI Snapshot | Time: {current_time.strftime('%H:%M:%S')} | "
-                  f"CE OI: {total_ce_oi:,} | PE OI: {total_pe_oi:,} | PCR: {pcr:.3f}")
+            self._log(f"OI Snapshot | CE OI: {total_ce_oi:,} | PE OI: {total_pe_oi:,} | PCR: {pcr:.3f}")
+            self._log(f"DEBUG Volume | CE: {total_ce_volume:,} | PE: {total_pe_volume:,} | Total: {total_volume:,}")
             
             return True
             
@@ -313,8 +313,7 @@ class OICollector:
                 self.db_writer.insert_option_band_snapshots_1m(option_band_rows)
                 self.option_bands_collected += len(option_band_rows)
                 
-                print(f"[OI Collector] Option Bands | Time: {current_time.strftime('%H:%M:%S')} | "
-                      f"ATM: {atm_strike} | Bands: {len(option_band_rows)}")
+                self._log(f"Option Bands | ATM: {atm_strike} | Bands: {len(option_band_rows)}")
             
             return True
             
@@ -387,18 +386,17 @@ class OICollector:
             )
             
             if significant_change and (self.last_ce_oi > 0 and self.last_pe_oi > 0):
-                # Save OI change snapshot
+                # Save OI change snapshot (preserve actual volume values)
                 self._save_oi_change_snapshot(
                     current_time, ce_oi_change, pe_oi_change,
                     ce_volume_change, pe_volume_change,
-                    total_ce_oi, total_pe_oi
+                    total_ce_oi, total_pe_oi,
+                    total_ce_volume, total_pe_volume
                 )
                 
                 self.oi_changes_detected += 1
                 
-                print(f"[OI Collector] Significant Change Detected | Time: {current_time.strftime('%H:%M:%S')} | "
-                      f"CE OI Change: {ce_oi_change:+,} | PE OI Change: {pe_oi_change:+,} | "
-                      f"Total Changes: {self.oi_changes_detected}")
+                self._log(f"Significant Change Detected | CE OI Change: {ce_oi_change:+,} | PE OI Change: {pe_oi_change:+,} | Total Changes: {self.oi_changes_detected}")
             
             # Update last values for next comparison
             self.last_ce_oi = total_ce_oi
@@ -412,11 +410,13 @@ class OICollector:
             self._log(f"Error tracking OI changes: {e}")
             return False
     
-    def _save_oi_change_snapshot(self, timestamp, ce_oi_change, pe_oi_change, ce_volume_change, pe_volume_change, total_ce_oi, total_pe_oi):
+    def _save_oi_change_snapshot(self, timestamp, ce_oi_change, pe_oi_change, ce_volume_change, pe_volume_change, total_ce_oi, total_pe_oi, total_ce_volume=0, total_pe_volume=0):
         """Save OI change snapshot to database"""
         try:
             current_price = self._get_current_price()
             pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
+            ce_volume_band = total_ce_volume
+            pe_volume_band = total_pe_volume
             
             # Determine sentiment based on changes
             if ce_oi_change > 0 and pe_oi_change < 0:
@@ -441,10 +441,10 @@ class OICollector:
                 current_price=current_price,
                 total_ce_oi=total_ce_oi,
                 total_pe_oi=total_pe_oi,
-                total_ce_volume=0,
-                total_pe_volume=0,
-                ce_volume_band=0,
-                pe_volume_band=0,
+                total_ce_volume=total_ce_volume,
+                total_pe_volume=total_pe_volume,
+                ce_volume_band=ce_volume_band,
+                pe_volume_band=pe_volume_band,
                 pcr=pcr,
                 ce_oi_change=ce_oi_change,
                 pe_oi_change=pe_oi_change,
@@ -479,8 +479,7 @@ class OICollector:
             }
         )
         
-        print(f"\n[OI Collector] Heartbeat | IST: {current_time.strftime('%H:%M:%S')} | "
-              f"Status: {'RUNNING' if self.running else 'STOPPED'} | "
+        self._log(f"Heartbeat | Status: {'RUNNING' if self.running else 'STOPPED'} | "
               f"OI Snapshots: {self.oi_snapshots_collected} | "
               f"Option Bands: {self.option_bands_collected} | "
               f"Dhan: {'CONNECTED' if self.dhan_client.connected else 'DISCONNECTED'}")
@@ -513,35 +512,35 @@ class OICollector:
         
         # Report status change
         if market_status != self.last_market_status:
-            print(f"\n[OI Collector] Market Status Update: {status_msg}")
-            print(f"[OI Collector] Current Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} IST")
+            self._log(f"Market Status Update: {status_msg}")
+            self._log(f"Current Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} IST")
             
             if market_status == "WEEKEND":
-                print(f"[OI Collector] Weekend Mode - No OI collection expected")
-                print(f"[OI Collector] Next market open: Monday {market_open.strftime('%H:%M')} IST")
+                self._log("Weekend Mode - No OI collection expected")
+                self._log(f"Next market open: Monday {market_open.strftime('%H:%M')} IST")
             elif market_status == "PRE_MARKET":
-                print(f"[OI Collector] Pre-market - Waiting for market open at {market_open.strftime('%H:%M')} IST")
+                self._log(f"Pre-market - Waiting for market open at {market_open.strftime('%H:%M')} IST")
                 # Set data pause for pre-market (will auto-resume when market opens)
                 self.data_pause_active = True
                 self.last_data_pause_reason = "Pre-market"
                 self.watchdog.touch({"phase": "data_pause", "reason": "Pre-market", "pid": self.pid})
             elif market_status == "POST_MARKET":
-                print(f"[OI Collector] Post-market - Market closed for today")
-                print(f"[OI Collector] Next market open: Tomorrow {market_open.strftime('%H:%M')} IST")
+                self._log("Post-market - Market closed for today")
+                self._log(f"Next market open: Tomorrow {market_open.strftime('%H:%M')} IST")
                 # Set data pause and show IDLE status
                 self.data_pause_active = True
                 self.last_data_pause_reason = "Market closed"
                 self.watchdog.touch({"phase": "data_pause", "reason": "Market closed", "pid": self.pid})
                 # Note: The main loop will auto-resume when market opens (handled in run_forever)
             elif market_status == "MARKET_OPEN":
-                print(f"[OI Collector] Market Open - Collecting OI data")
-                print(f"[OI Collector] Market closes at {market_close.strftime('%H:%M')} IST")
+                self._log("Market Open - Collecting OI data")
+                self._log(f"Market closes at {market_close.strftime('%H:%M')} IST")
             
-            print(f"[OI Collector] Status: {'RUNNING' if self.running else 'STOPPED'}")
-            print(f"[OI Collector] Database: {'CONNECTED' if self.db_writer.enabled else 'DISCONNECTED'}")
-            print(f"[OI Collector] Dhan API: {'CONNECTED' if self.dhan_client.connected else 'DISCONNECTED'}")
-            print(f"[OI Collector] Session Stats: {self.oi_snapshots_collected} OI snapshots, {self.option_bands_collected} option bands")
-            print("[OI Collector] " + "="*50)
+            self._log(f"Status: {'RUNNING' if self.running else 'STOPPED'}")
+            self._log(f"Database: {'CONNECTED' if self.db_writer.enabled else 'DISCONNECTED'}")
+            self._log(f"Dhan API: {'CONNECTED' if self.dhan_client.connected else 'DISCONNECTED'}")
+            self._log(f"Session Stats: {self.oi_snapshots_collected} OI snapshots, {self.option_bands_collected} option bands")
+            self._log("="*50)
             
             self.last_market_status = market_status
     
@@ -551,12 +550,12 @@ class OICollector:
         self.watchdog.start({"phase": "starting", "dhan_connected": self.dhan_client.connected, "pid": self.pid})
         self._print_startup_status()
         
-        print("[OI Collector] Starting OI data collection...")
+        self._log("Starting OI data collection...")
         
         # Check market status first
         self._check_market_status()
         if self.last_market_status in ["POST_MARKET", "WEEKEND", "PRE_MARKET"]:
-            print("[OI Collector] Market closed - Entering IDLE mode")
+            self._log("Market closed - Entering IDLE mode")
             self.data_pause_active = True
             self.last_data_pause_reason = "Market closed" if self.last_market_status != "PRE_MARKET" else "Pre-market"
         
@@ -640,18 +639,18 @@ class OICollector:
                 time_module.sleep(1)
                 
         except KeyboardInterrupt:
-            print("\n[OI Collector] Shutdown requested by user")
+            self._log("Shutdown requested by user")
         except Exception as e:
-            print(f"[OI Collector] Unexpected error: {e}")
+            self._log(f"Unexpected error: {e}")
         finally:
             self.running = False
             self.watchdog.stop()
-            print("[OI Collector] OI collection stopped")
+            self._log("OI collection stopped")
     
     def stop(self):
         """Stop OI collection"""
         self.running = False
-        print("[OI Collector] Stop signal sent")
+        self._log("Stop signal sent")
     
     def get_status(self):
         """Get current OI collector status"""

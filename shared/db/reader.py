@@ -38,10 +38,12 @@ class DBReader:
         FROM candles_5m
         WHERE instrument = %s
           AND DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
-        ORDER BY ts ASC
+        ORDER BY ts DESC
         LIMIT %s;
         """
         rows = self._execute(query, (instrument, limit))
+        # Reverse to maintain chronological order (oldest first)
+        rows = list(reversed(rows))
         return [
             {
                 "time": row[0],

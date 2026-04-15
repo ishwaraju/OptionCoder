@@ -812,7 +812,12 @@ class SignalService:
         self._log("Starting signal analysis...")
         
         try:
+            loop_count = 0
             while self.running:
+                loop_count += 1
+                if loop_count % 10 == 0:  # Log every 10th iteration
+                    self._log(f"DEBUG Main loop iteration {loop_count}")
+                
                 data_ok, pause_reason = self._get_data_health_status()
                 if not data_ok:
                     if self.last_data_pause_reason != pause_reason:
@@ -830,10 +835,12 @@ class SignalService:
                     self.watchdog.touch({"phase": "resumed"})
 
                 # Get latest 5-minute candle from database
+                self._log("DEBUG Fetching candles from DB...")
                 latest_candles = self.db_reader.fetch_recent_candles_5m(
                     instrument=self.instrument,
                     limit=1
                 )
+                self._log(f"DEBUG Fetched {len(latest_candles)} candles")
                 
                 if not latest_candles:
                     self._log("No candles found in database, waiting...")
@@ -845,8 +852,16 @@ class SignalService:
                 
                 # Check if this is a new candle (allow 1 minute buffer)
                 candle_time = latest_candle["time"]
-                if current_time - candle_time < timedelta(minutes=6) and candle_time != self.last_processed_5m_ts:
+                time_diff = current_time - candle_time
+                is_new = time_diff < timedelta(minutes=6) and candle_time != self.last_processed_5m_ts
+                
+                # DEBUG logging
+                if not is_new:
+                    self._log(f"DEBUG Candle Check | Time Diff: {time_diff} | Candle TS: {candle_time} | Last Processed: {self.last_processed_5m_ts} | Will Process: {is_new}")
+                
+                if is_new:
                     # Process the candle
+                    self._log(f"Processing new 5m candle | Time: {candle_time} | Price: {latest_candle['close']}")
                     self._refresh_option_data_if_due()
                     self._process_5m_candle(latest_candle)
                     self.last_processed_5m_ts = candle_time

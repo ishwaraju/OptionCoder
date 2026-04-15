@@ -26,27 +26,29 @@ class AutoScheduler:
         print(f"[{ts}] {message}")
         
     def start_collectors(self):
-        """Start data collectors"""
+        """Start data collectors (non-blocking)"""
         try:
             self._log("🚀 Starting Data Collectors")
             cmd = ["python3", "tools/run_collectors.py", "start", "--instruments"] + self.instruments
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-            self._log(f"✅ Collectors started: {result.stdout}")
+            # Use Popen (non-blocking) instead of run (blocking)
+            subprocess.Popen(cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._log("✅ Collectors starter initiated (running in background)")
         except Exception as e:
             self._log(f"❌ Error starting collectors: {e}")
     
     def start_signals(self):
-        """Start signal services"""
+        """Start signal services (non-blocking)"""
         try:
             self._log("🚀 Starting Signal Services")
             cmd = ["python3", "tools/run_signals.py", "start", "--instruments"] + self.instruments
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-            self._log(f"✅ Signals started: {result.stdout}")
+            # Use Popen (non-blocking) instead of run (blocking)
+            subprocess.Popen(cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._log("✅ Signal services initiated (running in background)")
         except Exception as e:
             self._log(f"❌ Error starting signals: {e}")
     
     def start_telegram_bot(self):
-        """Start telegram bot"""
+        """Start telegram bot (non-blocking)"""
         try:
             self._log("🚀 Starting Telegram Bot")
             cmd = ["python3", "services/telegram_bot_service.py"]
@@ -233,6 +235,37 @@ class AutoScheduler:
             time.sleep(30)  # Check every 30 seconds
 
 def main():
+    # Setup logging to file (logs/YYYYMMDD/auto_start.log)
+    import logging
+    from pathlib import Path
+
+    time_utils = TimeUtils()
+    today_str = time_utils.now_ist().strftime('%Y%m%d')
+    log_dir = Path(__file__).parent / "logs" / today_str
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "auto_start.log"
+
+    # Configure logging to file + console
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(message)s',
+        handlers=[
+            logging.FileHandler(log_file, mode='a'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+    # Wrap print to also log to file
+    original_print = print
+    def print_to_file_and_console(*args, **kwargs):
+        message = ' '.join(str(arg) for arg in args)
+        original_print(*args, **kwargs)
+        logging.info(message)
+
+    # Replace global print for this module
+    import builtins
+    builtins.print = print_to_file_and_console
+
     scheduler = AutoScheduler()
     try:
         scheduler.run_scheduler()
