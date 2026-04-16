@@ -32,8 +32,11 @@ from shared.market.oi_ladder import OILadder
 from shared.market.pressure_analyzer import PressureAnalyzer
 from shared.market.spread_filter import SpreadFilter
 from shared.market.oi_quote_confirmation import OIQuoteConfirmation
+from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
 from strategies.shared.breakout_strategy import BreakoutStrategy
 from strategies.shared.strike_selector import StrikeSelector
+from strategies.banknifty import BankNiftyActionableRules
+from strategies.sensex import SensexActionableRules
 from shared.utils.logger import TradeLogger
 from shared.utils.notifier import Notifier
 from shared.utils.instrument_profile import get_instrument_profile
@@ -103,6 +106,10 @@ class SignalService:
         self.data_pause_active = False
         self.last_data_pause_reason = None
         
+        # Sleep detection
+        self.last_loop_time = time_module.time()
+        self.sleep_threshold_seconds = 60  # If loop gap > 60s, system was asleep
+        
         # Previous values for OI build-up
         self.prev_price = None
         self.prev_total_oi = None
@@ -116,6 +123,36 @@ class SignalService:
         """Log with HH:mm:ss IST timestamp prefix"""
         ts = self.time_utils.now_ist().strftime('%H:%M:%S')
         print(f"[{ts}] [Signal Service] {message}")
+
+    def _handle_wake_from_sleep(self):
+        """Handle recovery after system sleep/lock detected."""
+        self._log("🔄 Recovering from system sleep...")
+        
+        # Clear last processed timestamp to allow processing new candles
+        if self.last_processed_5m_ts:
+            self._log(f"   Last processed candle: {self.last_processed_5m_ts}")
+            self.last_processed_5m_ts = None
+            self._log("   ✅ Cleared last_processed timestamp for fresh start")
+        
+        # Reset data pause state
+        if self.data_pause_active:
+            self.data_pause_active = False
+            self.last_data_pause_reason = None
+            self._log("   ✅ Reset data pause state")
+        
+        # Clear active trade monitor (trade may have expired)
+        if self.active_trade_monitor:
+            self._log("   ⚠️  Clearing active trade monitor (may have expired during sleep)")
+            self.active_trade_monitor = None
+        
+        # Refresh indicator state from recent history
+        try:
+            self._restore_indicator_state()
+            self._log("   ✅ Restored indicator state from history")
+        except Exception as e:
+            self._log(f"   ⚠️  Could not restore indicators: {e}")
+        
+        self._log("🔄 Recovery complete. Resuming normal operation...")
 
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
         """Start 1-minute manual trade monitor after a signal."""
@@ -285,11 +322,52 @@ class SignalService:
             return "B"
         return "C"
 
-    def _build_balanced_pro_summary(self, bias, signal, fallback_context, pressure_metrics):
+    def _is_option_buyer_actionable(self, signal, candle_time=None):
+        if not signal:
+            return False
+
+        signal_type = (self.strategy.last_signal_type or "NONE").upper()
+        signal_grade = (self.strategy.last_signal_grade or "SKIP").upper()
+        confidence = (self.strategy.last_confidence or "LOW").upper()
+        regime = (self.strategy.last_regime or "UNKNOWN").upper()
+        score = float(self.strategy.last_score or 0)
+
+        if signal_type == "CONTINUATION" and not Config.ALLOW_CONTINUATION_ENTRY:
+            return False
+        if self.instrument == "SENSEX":
+            return SensexActionableRules.should_allow_signal(
+                signal_type=signal_type,
+                signal_grade=signal_grade,
+                confidence=confidence,
+                regime=regime,
+                candle_time=candle_time,
+            )
+        if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
+            return False
+        if (
+            self.instrument == "BANKNIFTY"
+            and BankNiftyActionableRules.should_allow_b_grade_breakout(
+                signal_type=signal_type,
+                signal_grade=signal_grade,
+                confidence=confidence,
+                regime=regime,
+                candle_time=candle_time,
+            )
+        ):
+            return True
+        if signal_type == "BREAKOUT_CONFIRM" and signal_grade == "B" and confidence in {"MEDIUM", "HIGH"} and score >= 80:
+            return True
+        if signal_grade not in Config.OPTION_BUYER_ALERT_GRADES:
+            return False
+        if confidence not in {"MEDIUM", "HIGH"}:
+            return False
+        return True
+
+    def _build_balanced_pro_summary(self, bias, signal, fallback_context, pressure_metrics, actionable_signal=False):
         """Balanced Pro output summary for logs and saved reasons."""
         setup = self.strategy.last_signal_type or "NONE"
         quality = self._classify_signal_quality(fallback_context, pressure_metrics)
-        tradability = "TRADE" if signal else ("WATCH" if bias != "NEUTRAL" else "NO_TRADE")
+        tradability = "TRADE" if actionable_signal else ("WATCH" if (signal or bias != "NEUTRAL") else "NO_TRADE")
         return {
             "bias": bias,
             "setup": setup,
@@ -297,6 +375,31 @@ class SignalService:
             "tradability": tradability,
             "time_regime": self.strategy.last_time_regime,
         }
+
+    @staticmethod
+    def _derive_15m_trend_from_5m(candles_5m):
+        if not candles_5m or len(candles_5m) < 6:
+            return None
+
+        grouped = []
+        for idx in range(0, len(candles_5m), 3):
+            chunk = candles_5m[idx:idx + 3]
+            if len(chunk) < 3:
+                continue
+            grouped.append(
+                {
+                    "time": chunk[-1]["time"],
+                    "open": chunk[0]["open"],
+                    "high": max(c["high"] for c in chunk),
+                    "low": min(c["low"] for c in chunk),
+                    "close": chunk[-1]["close"],
+                    "volume": sum(c.get("volume", 0) for c in chunk),
+                }
+            )
+
+        if len(grouped) < 2:
+            return None
+        return calculate_trend_from_candles(grouped, lookback=min(5, len(grouped)))
 
     def _restore_indicator_state(self):
         """Restore indicator state from database"""
@@ -460,6 +563,15 @@ class SignalService:
     def _apply_signal_cooldowns(self, signal, reason):
         """Apply signal cooldowns and filters"""
         signal, reason = signal, reason  # No connection manager in signal service
+
+        if signal and not self._is_option_buyer_actionable(signal, candle_time=getattr(self, "_current_candle_time", None)):
+            signal = None
+            reason = (
+                f"Option-buyer filter blocked live alert"
+                f" | candidate_type={self.strategy.last_signal_type}"
+                f" | candidate_grade={self.strategy.last_signal_grade}"
+                f" | score={self.strategy.last_score}"
+            )
 
         if (
                 signal
@@ -639,6 +751,10 @@ class SignalService:
         # Get ATM options volume for advanced confirmation
         atm_ce_volume = self.option_data.get("ce_volume") if self.option_data else None
         atm_pe_volume = self.option_data.get("pe_volume") if self.option_data else None
+        recent_candles_5m = self.db_reader.fetch_recent_candles_5m(self.instrument, limit=24)
+        if not recent_candles_5m or recent_candles_5m[-1]["time"] != candle_5m["time"]:
+            recent_candles_5m = (recent_candles_5m or []) + [candle_5m]
+        trend_15m = self._derive_15m_trend_from_5m(recent_candles_5m)
         
         # Generate signal
         signal, reason = self.strategy.generate_signal(
@@ -666,10 +782,21 @@ class SignalService:
             expiry=self.option_data.get("expiry") if self.option_data else None,
             atm_ce_volume=atm_ce_volume,
             atm_pe_volume=atm_pe_volume,
+            recent_candles_5m=recent_candles_5m,
+            trend_15m=trend_15m,
         )
         
+        candidate_signal = signal
+        candidate_reason = reason
+        self._current_candle_time = candle_5m["time"]
         signal, reason = self._apply_signal_cooldowns(signal, reason)
-        balanced_pro = self._build_balanced_pro_summary(base_bias, signal, fallback_context, pressure_metrics)
+        balanced_pro = self._build_balanced_pro_summary(
+            base_bias,
+            candidate_signal,
+            fallback_context,
+            pressure_metrics,
+            actionable_signal=bool(signal),
+        )
 
         # Strike selection
         selected_strike = None
@@ -713,7 +840,7 @@ class SignalService:
         self._safe_save_strategy_decision(
             ts=candle_5m["time"],
             price=price,
-            signal=signal,
+            signal=candidate_signal,
             reason=enriched_reason,
             volume_signal=volume_signal,
             oi_bias=oi_bias,
@@ -736,7 +863,7 @@ class SignalService:
         self.audit_logger.log_decision(
             instrument=self.instrument,
             price=price,
-            signal=signal or "NO_TRADE",
+            signal=candidate_signal or "NO_TRADE",
             strike=selected_strike,
             score=self.strategy.last_score,
             confidence=self.strategy.last_confidence,
@@ -791,13 +918,35 @@ class SignalService:
             return False, "No 5m candles available in DB"
 
         now = self.time_utils.now_ist()
-        candle_age = max(0.0, (now - latest_5m["time"]).total_seconds())
+        
+        # Fix timezone - ensure candle time is in IST
+        candle_time = latest_5m["time"]
+        if candle_time.tzinfo is None:
+            # If naive, assume UTC and convert to IST
+            from datetime import timezone
+            import pytz
+            candle_time = candle_time.replace(tzinfo=timezone.utc).astimezone(pytz.timezone('Asia/Kolkata'))
+        elif str(candle_time.tzinfo) != 'Asia/Kolkata':
+            # Convert to IST
+            import pytz
+            candle_time = candle_time.astimezone(pytz.timezone('Asia/Kolkata'))
+        
+        candle_age = max(0.0, (now - candle_time).total_seconds())
         if not Config.TEST_MODE and candle_age > 8 * 60:
             return False, f"Latest 5m candle is stale ({int(candle_age)}s old)"
 
         latest_oi_snapshot = self.db_reader.fetch_latest_oi_snapshot(self.instrument)
         if latest_oi_snapshot:
-            oi_age = max(0.0, (now - latest_oi_snapshot["ts"]).total_seconds())
+            oi_time = latest_oi_snapshot["ts"]
+            if oi_time.tzinfo is None:
+                from datetime import timezone
+                import pytz
+                oi_time = oi_time.replace(tzinfo=timezone.utc).astimezone(pytz.timezone('Asia/Kolkata'))
+            elif str(oi_time.tzinfo) != 'Asia/Kolkata':
+                import pytz
+                oi_time = oi_time.astimezone(pytz.timezone('Asia/Kolkata'))
+            
+            oi_age = max(0.0, (now - oi_time).total_seconds())
             if not Config.TEST_MODE and oi_age > max(Config.OI_FETCH_INTERVAL * 2, 420):
                 return False, f"Latest OI snapshot is stale ({int(oi_age)}s old)"
 
@@ -817,6 +966,14 @@ class SignalService:
                 loop_count += 1
                 if loop_count % 10 == 0:  # Log every 10th iteration
                     self._log(f"DEBUG Main loop iteration {loop_count}")
+                
+                # Sleep detection - check if system was asleep/locked
+                current_loop_time = time_module.time()
+                loop_gap = current_loop_time - self.last_loop_time
+                if loop_gap > self.sleep_threshold_seconds:
+                    self._log(f"⚠️  SYSTEM SLEEP DETECTED! Gap: {loop_gap:.1f}s ({loop_gap/60:.1f} min). Recovering...")
+                    self._handle_wake_from_sleep()
+                self.last_loop_time = current_loop_time
                 
                 data_ok, pause_reason = self._get_data_health_status()
                 if not data_ok:

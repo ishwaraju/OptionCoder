@@ -71,6 +71,11 @@ class DataCollector:
         self.last_heartbeat = 0
         self.running = False
         self.feed_stale_logged = False
+        
+        # Sleep detection
+        self.last_loop_time = time_module.time()
+        self.sleep_threshold_seconds = 60  # If loop gap > 60s, system was asleep
+        
         self.watchdogs = {
             item: ServiceWatchdog("data_collector", item)
             for item in self.managed_instruments
@@ -107,6 +112,29 @@ class DataCollector:
     def _get_ist_timestamp(self):
         """Get current timestamp in IST (HH:mm:ss)"""
         return self.time_utils.now_ist().strftime('%H:%M:%S')
+
+    def _handle_wake_from_sleep(self):
+        """Handle recovery after system sleep/lock detected."""
+        self._log("🔄 Recovering from system sleep...")
+        
+        # Reset connection state
+        self._log("   Reconnecting WebSocket...")
+        try:
+            self.connection_manager.force_reconnect()
+            self._log("   ✅ WebSocket reconnected")
+        except Exception as e:
+            self._log(f"   ⚠️  Reconnect failed: {e}")
+        
+        # Reset feed stale flag
+        self.feed_stale_logged = False
+        self._log("   ✅ Reset feed stale flag")
+        
+        # Reset candle managers for fresh start
+        for inst in self.managed_instruments:
+            self.candle_managers[inst] = CandleManager()
+            self._log(f"   ✅ Reset candle manager for {inst}")
+        
+        self._log("🔄 Recovery complete. Resuming data collection...")
 
     def _restore_indicator_state(self):
         """Restore indicator state from database on startup"""
@@ -449,6 +477,13 @@ class DataCollector:
         try:
             while self.running:
                 current_time = time_module.time()
+                
+                # Sleep detection - check if system was asleep/locked
+                loop_gap = current_time - self.last_loop_time
+                if loop_gap > self.sleep_threshold_seconds:
+                    self._log(f"⚠️  SYSTEM SLEEP DETECTED! Gap: {loop_gap:.1f}s ({loop_gap/60:.1f} min). Reconnecting...")
+                    self._handle_wake_from_sleep()
+                self.last_loop_time = current_time
                 
                 # Market status check
                 if current_time - self.last_market_status_check >= self.market_status_interval:

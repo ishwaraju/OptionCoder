@@ -15,6 +15,7 @@ from shared.indicators.atr import ATRCalculator
 from shared.indicators.orb import ORB
 from shared.indicators.volume_analyzer import VolumeAnalyzer
 from shared.indicators.vwap import VWAPCalculator
+from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
 from shared.market.oi_analyzer import OIAnalyzer
 from shared.market.oi_ladder import OILadder
 from shared.market.pressure_analyzer import PressureAnalyzer
@@ -154,6 +155,31 @@ def can_trade_at(ts):
     return trade_start <= now <= trade_end and not (no_trade_start <= now <= no_trade_end)
 
 
+def derive_15m_trend_from_5m(candles_5m):
+    if not candles_5m or len(candles_5m) < 6:
+        return None
+
+    grouped = []
+    for idx in range(0, len(candles_5m), 3):
+        chunk = candles_5m[idx:idx + 3]
+        if len(chunk) < 3:
+            continue
+        grouped.append(
+            {
+                "time": chunk[-1]["time"],
+                "open": chunk[0]["open"],
+                "high": max(c["high"] for c in chunk),
+                "low": min(c["low"] for c in chunk),
+                "close": chunk[-1]["close"],
+                "volume": sum(c.get("volume", 0) for c in chunk),
+            }
+        )
+
+    if len(grouped) < 2:
+        return None
+    return calculate_trend_from_candles(grouped, lookback=min(5, len(grouped)))
+
+
 def replay(candles, snapshot_map, disable_continuation=False):
     strategy = BreakoutStrategy()
     vwap = VWAPCalculator()
@@ -168,7 +194,7 @@ def replay(candles, snapshot_map, disable_continuation=False):
     blocker_counter = Counter()
     caution_counter = Counter()
 
-    for candle in candles:
+    for idx, candle in enumerate(candles):
         ts = candle["time"]
         strategy.time_utils.now_ist = lambda ts=ts: ts
         strategy.time_utils.current_time = lambda ts=ts: ts.time()
@@ -203,6 +229,9 @@ def replay(candles, snapshot_map, disable_continuation=False):
             oi_ladder_data = None
             pressure_metrics = None
 
+        recent_candles_5m = candles[max(0, idx - 23):idx + 1]
+        trend_15m = derive_15m_trend_from_5m(recent_candles_5m)
+
         signal, reason = strategy.generate_signal(
             price=candle["close"],
             orb_high=orb_high,
@@ -226,6 +255,8 @@ def replay(candles, snapshot_map, disable_continuation=False):
             candle_time=ts,
             candle_volume=candle["volume"],
             expiry=option_data.get("expiry") if option_data else None,
+            recent_candles_5m=recent_candles_5m,
+            trend_15m=trend_15m,
         )
 
         if disable_continuation and strategy.last_signal_type in {"CONTINUATION", "AGGRESSIVE_CONTINUATION"}:

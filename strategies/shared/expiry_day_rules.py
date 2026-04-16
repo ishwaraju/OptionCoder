@@ -33,6 +33,15 @@ class ExpiryDayRules:
             return False
         return self.time_utils.now_ist().date() == expiry_date
 
+    @staticmethod
+    def _expiry_vwap_distance_limit():
+        symbol = (getattr(Config, "SYMBOL", "") or "").upper()
+        if symbol == "SENSEX":
+            return 140
+        if symbol == "BANKNIFTY":
+            return 90
+        return 45
+
     def evaluate(
             self,
             expiry_value,
@@ -60,16 +69,28 @@ class ExpiryDayRules:
         cautions = list(cautions)
         allow_trade = True
         score_floor = 72
+        pressure_bias = pressure_metrics["pressure_bias"] if pressure_metrics else "NEUTRAL"
+        opposite_pressure = (
+            (current_signal == "CE" and pressure_bias == "BEARISH")
+            or (current_signal == "PE" and pressure_bias == "BULLISH")
+        )
+        high_conviction_expiry_trend = (
+            current_signal in {"CE", "PE"}
+            and score >= 80
+            and confidence in {"MEDIUM", "HIGH"}
+            and volume_signal == "STRONG"
+            and not opposite_pressure
+        )
 
         if time(9, 15) <= now < time(9, 45):
             blockers.append("expiry_opening_whipsaw_window")
             allow_trade = False
 
-        if time(11, 30) <= now < time(13, 30) and score < 85:
+        if time(11, 30) <= now < time(13, 30) and score < 85 and not high_conviction_expiry_trend:
             blockers.append("expiry_midday_chop_window")
             allow_trade = False
 
-        if now >= time(13, 30) and score < 82:
+        if now >= time(13, 30) and score < 82 and not high_conviction_expiry_trend:
             blockers.append("expiry_late_session_requires_high_score")
             allow_trade = False
 
@@ -81,11 +102,10 @@ class ExpiryDayRules:
             blockers.append("expiry_weak_volume")
             allow_trade = False
 
-        if vwap is not None and abs(price - vwap) > 45:
+        if vwap is not None and abs(price - vwap) > self._expiry_vwap_distance_limit():
             blockers.append("expiry_too_far_from_vwap")
             allow_trade = False
 
-        pressure_bias = pressure_metrics["pressure_bias"] if pressure_metrics else "NEUTRAL"
         if current_signal == "CE" and pressure_bias == "BEARISH":
             blockers.append("expiry_opposite_pressure")
             allow_trade = False

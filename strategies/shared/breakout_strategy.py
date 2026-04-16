@@ -208,7 +208,7 @@ class BreakoutStrategy:
         if not self.for_option_buyer:
             return True, 0, "Multi-TF check skipped (not option buyer mode)"
 
-        if trend_15m is None:
+        if trend_15m in [None, "NEUTRAL", "UNKNOWN", "INSUFFICIENT_DATA"]:
             return True, 0, "15m trend unavailable"
 
         self.multi_tf_trend.update_trends("BULLISH" if signal == "CE" else "BEARISH", trend_15m)
@@ -640,6 +640,8 @@ class BreakoutStrategy:
             candle_volume=None,
             atm_ce_volume=None,
             atm_pe_volume=None,
+            recent_candles_5m=None,
+            trend_15m=None,
     ):
         """
         Generate CE/PE signal using:
@@ -754,6 +756,25 @@ class BreakoutStrategy:
         if opening_session:
             cautions.append("opening_session")
 
+        opening_direction_pressure_aligned = (
+            pressure_metrics
+            and (
+                (scored_direction == "CE" and pressure_metrics["pressure_bias"] == "BULLISH")
+                or (scored_direction == "PE" and pressure_metrics["pressure_bias"] == "BEARISH")
+            )
+        )
+        opening_breakout_override = (
+            opening_session
+            and scored_direction in {"CE", "PE"}
+            and score >= 90
+            and volume_signal == "STRONG"
+            and breakout_body_ok
+            and breakout_structure_ok
+            and candle_liquidity_ok
+            and opening_direction_pressure_aligned
+        )
+        opening_far_vwap_override = opening_breakout_override and score >= 95
+
         if atr is not None and abs(price - vwap) > max(atr * 1.5, buffer * 4):
             cautions.append("far_from_vwap")
 
@@ -770,6 +791,19 @@ class BreakoutStrategy:
 
         provisional_confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
         time_thresholds = self._get_time_regime_thresholds(time_regime, fallback_mode)
+        adx_trade_ok = True
+        mtf_trade_ok = True
+        if scored_direction and recent_candles_5m and len(recent_candles_5m) >= 15:
+            adx_ok, _, _ = self._check_adx_filter(recent_candles_5m, scored_direction)
+            adx_trade_ok = adx_ok or (score >= 85 and volume_signal == "STRONG")
+            if not adx_ok:
+                cautions.append("adx_not_confirmed")
+        if scored_direction and trend_15m is not None:
+            tf_ok, _, _ = self._check_multi_timeframe_filter(trend_15m, scored_direction)
+            mtf_trade_ok = tf_ok or (score >= 80 and volume_signal == "STRONG")
+            if not tf_ok:
+                cautions.append("higher_tf_not_aligned")
+
         expiry_eval = self.expiry_rules.evaluate(
             expiry_value=expiry,
             score=score,
@@ -879,7 +913,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and bullish_ha_ok
                 and "opposite_pressure" not in cautions
-                and "far_from_vwap" not in cautions
+                and ("far_from_vwap" not in cautions or opening_far_vwap_override)
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -910,7 +944,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and bearish_ha_ok
                 and "opposite_pressure" not in cautions
-                and "far_from_vwap" not in cautions
+                and ("far_from_vwap" not in cautions or opening_far_vwap_override)
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -1082,7 +1116,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and bullish_ha_ok
                 and (candle_close is None or candle_close > orb_high)
-                and not opening_session
+                and (not opening_session or opening_breakout_override)
                 and breakout_regime_ok
         ):
             if fallback_mode and time_regime in ["MIDDAY", "LATE_DAY"] and volume_signal != "STRONG":
@@ -1124,7 +1158,7 @@ class BreakoutStrategy:
                 and candle_liquidity_ok
                 and bearish_ha_ok
                 and (candle_close is None or candle_close < orb_low)
-                and not opening_session
+                and (not opening_session or opening_breakout_override)
                 and breakout_regime_ok
         ):
             if fallback_mode and time_regime in ["MIDDAY", "LATE_DAY"] and volume_signal != "STRONG":
@@ -1154,9 +1188,14 @@ class BreakoutStrategy:
         elif (
                 support is not None
                 and price <= support + buffer
+                and not opening_session
+                and volume_signal in ["NORMAL", "STRONG"]
                 and oi_trend != "BEARISH"
                 and bullish_build_up_ok
-                and score >= time_thresholds["reversal_min_score"]
+                and score >= max(time_thresholds["reversal_min_score"], 62)
+                and pressure_metrics
+                and pressure_metrics["pressure_bias"] == "BULLISH"
+                and breakout_structure_ok
                 and reversal_regime_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
@@ -1176,9 +1215,14 @@ class BreakoutStrategy:
         elif (
                 resistance is not None
                 and price >= resistance - buffer
+                and not opening_session
+                and volume_signal in ["NORMAL", "STRONG"]
                 and oi_trend != "BULLISH"
                 and bearish_build_up_ok
-                and score >= time_thresholds["reversal_min_score"]
+                and score >= max(time_thresholds["reversal_min_score"], 62)
+                and pressure_metrics
+                and pressure_metrics["pressure_bias"] == "BEARISH"
+                and breakout_structure_ok
                 and reversal_regime_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
@@ -1210,6 +1254,8 @@ class BreakoutStrategy:
                 and "far_from_vwap" not in cautions
                 and not opening_session
                 and regime in ["TRENDING", "EXPANDING", "OPENING_EXPANSION"]
+                and adx_trade_ok
+                and mtf_trade_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -1241,6 +1287,8 @@ class BreakoutStrategy:
                 and "far_from_vwap" not in cautions
                 and not opening_session
                 and regime in ["TRENDING", "EXPANDING", "OPENING_EXPANSION"]
+                and adx_trade_ok
+                and mtf_trade_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -1279,6 +1327,8 @@ class BreakoutStrategy:
                 )
                 and "opposite_pressure" not in cautions
                 and continuation_regime_ok
+                and adx_trade_ok
+                and mtf_trade_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -1309,6 +1359,8 @@ class BreakoutStrategy:
                 and "far_from_vwap" not in cautions
                 and not opening_session
                 and continuation_regime_ok
+                and adx_trade_ok
+                and mtf_trade_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -1347,6 +1399,8 @@ class BreakoutStrategy:
                 )
                 and "opposite_pressure" not in cautions
                 and continuation_regime_ok
+                and adx_trade_ok
+                and mtf_trade_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -1377,6 +1431,8 @@ class BreakoutStrategy:
                 and "far_from_vwap" not in cautions
                 and not opening_session
                 and continuation_regime_ok
+                and adx_trade_ok
+                and mtf_trade_ok
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -1466,7 +1522,8 @@ class BreakoutStrategy:
 
             blockers.append("direction_present_but_filters_incomplete")
             if opening_session:
-                blockers.append("opening_session_confirmation_pending")
+                if not opening_breakout_override:
+                    blockers.append("opening_session_confirmation_pending")
             if not breakout_body_ok:
                 blockers.append("weak_breakout_body")
             if not breakout_structure_ok:

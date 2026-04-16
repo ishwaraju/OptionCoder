@@ -101,6 +101,16 @@ class MainConfig:
     ENTRY_TRIGGER_VALIDITY_MINUTES = int(os.getenv('ENTRY_TRIGGER_VALIDITY_MINUTES', '2'))
     ENTRY_TRIGGER_MIN_BODY = int(os.getenv('ENTRY_TRIGGER_MIN_BODY', '5'))
     ALLOW_CONTINUATION_ENTRY = os.getenv('ALLOW_CONTINUATION_ENTRY', 'False').lower() == 'true'
+    OPTION_BUYER_ALERT_GRADES = tuple(
+        part.strip().upper()
+        for part in os.getenv('OPTION_BUYER_ALERT_GRADES', 'A+,A').split(',')
+        if part.strip()
+    )
+    OPTION_BUYER_ALERT_TYPES = tuple(
+        part.strip().upper()
+        for part in os.getenv('OPTION_BUYER_ALERT_TYPES', 'OPENING_DRIVE,BREAKOUT,BREAKOUT_CONFIRM,RETEST').split(',')
+        if part.strip()
+    )
     AUTO_SWITCH_TO_MOCK_AFTER_CLOSE = os.getenv('AUTO_SWITCH_TO_MOCK_AFTER_CLOSE', 'False').lower() == 'true'
 
     # ==============================

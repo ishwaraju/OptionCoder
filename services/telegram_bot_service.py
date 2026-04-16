@@ -32,6 +32,9 @@ from config import Config
 from shared.db.reader import DBReader
 from shared.utils.log_utils import build_log_path, build_instrument_log_path, cleanup_old_logs
 from shared.utils.time_utils import TimeUtils
+from datetime import datetime
+import pytz
+import logging
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,6 +54,54 @@ class TelegramCommandService:
         self.running = False
         self.python_executable = sys.executable
         cleanup_old_logs(retention_days=7)
+        
+        # Setup logging
+        self.ist = pytz.timezone('Asia/Kolkata')
+        self._setup_logger()
+
+    def _setup_logger(self):
+        """Setup file logger for Telegram bot"""
+        log_file = build_log_path("telegram_bot")
+        
+        # Create logger
+        self.logger = logging.getLogger("telegram_bot")
+        self.logger.setLevel(logging.INFO)
+        
+        # Remove existing handlers
+        self.logger.handlers = []
+        
+        # File handler
+        fh = logging.FileHandler(log_file)
+        fh.setLevel(logging.INFO)
+        
+        # Formatter with IST timestamp
+        formatter = logging.Formatter(
+            '[%(asctime)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        formatter.converter = self._ist_time_converter
+        fh.setFormatter(formatter)
+        
+        self.logger.addHandler(fh)
+        self._log("Telegram Bot Logger initialized")
+        self._log(f"Log file: {log_file}")
+
+    def _ist_time_converter(self, *args):
+        """Convert time to IST for logging"""
+        return datetime.now(self.ist).timetuple()
+
+    def _log(self, message, level="INFO"):
+        """Log message with IST timestamp"""
+        if self.logger:
+            if level == "INFO":
+                self.logger.info(message)
+            elif level == "ERROR":
+                self.logger.error(message)
+            elif level == "WARNING":
+                self.logger.warning(message)
+        # Also print to console
+        ist_time = datetime.now(self.ist).strftime('%H:%M:%S')
+        print(f"[{ist_time}] [Telegram Bot] {message}")
 
     def _validate(self):
         if not Config.TELEGRAM_ENABLED:
@@ -85,13 +136,21 @@ class TelegramCommandService:
         return body["result"]
 
     def _send_message(self, chat_id, text):
-        self._telegram_post(
-            "sendMessage",
-            {
-                "chat_id": chat_id,
-                "text": text,
-            },
-        )
+        """Send message to Telegram with logging"""
+        try:
+            self._telegram_post(
+                "sendMessage",
+                {
+                    "chat_id": chat_id,
+                    "text": text,
+                },
+            )
+            # Log successful send
+            msg_preview = text[:50].replace('\n', ' ')
+            self._log(f"✅ Message sent to {chat_id}: {msg_preview}...")
+        except Exception as e:
+            self._log(f"❌ Failed to send message to {chat_id}: {e}", level="ERROR")
+            raise
 
     def _sync_offset_to_latest(self):
         """Skip stale queued Telegram commands on startup."""
@@ -1062,13 +1121,21 @@ class TelegramCommandService:
     def _handle_command(self, text):
         command = (text or "").strip().split()[0].lower()
         command_args = self._parse_command_args(text)
+        
+        # Log command received
+        self._log(f"📩 Command received: {command} (args: {command_args})")
+        
         if command == "/status":
+            self._log("Processing /status command")
             return {"reply": self._format_status(), "post_action": None}
         if command == "/health":
+            self._log("Processing /health command")
             return {"reply": self._format_health(), "post_action": None}
         if command == "/signals":
+            self._log("Processing /signals command")
             return {"reply": self._format_signals(), "post_action": None}
         if command == "/scalp":
+            self._log("Processing /scalp command")
             return {"reply": self._format_scalp_signals(), "post_action": None}
         if command == "/start_signal":
             instruments = self._valid_instruments(command_args)
@@ -1119,8 +1186,12 @@ class TelegramCommandService:
         if not chat_id or not text:
             return
         if chat_id != self.allowed_chat_id:
+            self._log(f"⚠️  Unauthorized chat: {chat_id} (allowed: {self.allowed_chat_id})")
             return
 
+        # Log incoming message
+        self._log(f"📨 Message from {chat_id}: {text[:50]}...")
+        
         result = self._handle_command(text)
         post_action = result.get("post_action")
         if isinstance(post_action, dict):
@@ -1148,10 +1219,10 @@ class TelegramCommandService:
         self._validate()
         self.running = True
         self._sync_offset_to_latest()
-        print("[Telegram Command Service] Started")
-        print("[Telegram Command Service] Allowed chat:", self.allowed_chat_id)
-        print("[Telegram Command Service] Startup offset:", self.offset)
-        print("[Telegram Command Service] Commands: /status /health /signals /stop /shutdown")
+        self._log("🚀 Telegram Command Service Started")
+        self._log(f"📱 Allowed chat: {self.allowed_chat_id}")
+        self._log(f"📊 Startup offset: {self.offset}")
+        self._log("📝 Commands: /status /health /signals /scalp /stop /shutdown")
 
         while self.running:
             try:
@@ -1162,13 +1233,15 @@ class TelegramCommandService:
                         "offset": self.offset,
                     },
                 )
+                if updates:
+                    self._log(f"📩 Received {len(updates)} update(s)")
                 for update in updates:
                     self._process_update(update)
             except KeyboardInterrupt:
-                print("\n[Telegram Command Service] Shutdown requested")
+                self._log("🛑 Shutdown requested via KeyboardInterrupt")
                 self.running = False
             except Exception as exc:
-                print(f"[Telegram Command Service] Error: {exc}")
+                self._log(f"❌ Error in main loop: {exc}", level="ERROR")
                 time.sleep(3)
 
 
