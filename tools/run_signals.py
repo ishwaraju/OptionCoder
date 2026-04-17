@@ -150,9 +150,12 @@ class SignalServiceManager:
             process = subprocess.Popen(
                 command,
                 cwd=str(REPO_ROOT),
+                stdin=subprocess.DEVNULL,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                close_fds=True,
+                start_new_session=True,
             )
             log_handle.close()
             self.processes.append(

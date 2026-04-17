@@ -139,9 +139,12 @@ class CollectorLauncher:
         process = subprocess.Popen(
             command,
             cwd=str(REPO_ROOT),
+            stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            close_fds=True,
+            start_new_session=True,
         )
         # Store log handle to keep it open
         self.log_handles.append(log_handle)

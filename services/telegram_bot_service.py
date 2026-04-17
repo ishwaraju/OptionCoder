@@ -61,7 +61,7 @@ class TelegramCommandService:
 
     def _setup_logger(self):
         """Setup file logger for Telegram bot"""
-        log_file = build_log_path("telegram_bot")
+        log_file = build_log_path("telegram_bot_service")
         
         # Create logger
         self.logger = logging.getLogger("telegram_bot")
@@ -99,9 +99,10 @@ class TelegramCommandService:
                 self.logger.error(message)
             elif level == "WARNING":
                 self.logger.warning(message)
-        # Also print to console
-        ist_time = datetime.now(self.ist).strftime('%H:%M:%S')
-        print(f"[{ist_time}] [Telegram Bot] {message}")
+        # Print only for interactive foreground runs; launcher already redirects stdout to the same log file.
+        if sys.stdout.isatty():
+            ist_time = datetime.now(self.ist).strftime('%H:%M:%S')
+            print(f"[{ist_time}] [Telegram Bot] {message}")
 
     def _validate(self):
         if not Config.TELEGRAM_ENABLED:
@@ -1241,8 +1242,20 @@ class TelegramCommandService:
                 self._log("🛑 Shutdown requested via KeyboardInterrupt")
                 self.running = False
             except Exception as exc:
-                self._log(f"❌ Error in main loop: {exc}", level="ERROR")
-                time.sleep(3)
+                error_str = str(exc)
+                # Handle 409 Conflict - another bot instance running
+                if "409" in error_str or "Conflict" in error_str:
+                    self._log(f"⚠️  409 Conflict: Another bot instance running. Waiting 10s...", level="WARNING")
+                    time.sleep(10)
+                    continue
+                # Handle timeout - network issues
+                elif "timeout" in error_str.lower():
+                    self._log(f"⏱️  Network timeout. Retrying in 5s...", level="WARNING")
+                    time.sleep(5)
+                    continue
+                else:
+                    self._log(f"❌ Error in main loop: {exc}", level="ERROR")
+                    time.sleep(3)
 
 
 def main():

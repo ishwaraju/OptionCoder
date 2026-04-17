@@ -28,6 +28,7 @@ from shared.utils.instrument_profile import get_instrument_profile
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.log_utils import build_instrument_log_path
 from shared.utils.volume_cache import VolumeCache
+from shared.utils.option_data_cache import OptionDataCache
 
 
 class OICollector:
@@ -83,6 +84,7 @@ class OICollector:
         
         # Volume cache for data collector
         self.volume_cache = VolumeCache()
+        self.option_data_cache = OptionDataCache()
         self.last_volume_fetch = 0
         self.volume_fetch_interval = 60  # Fetch volume every 60 seconds
         
@@ -156,6 +158,8 @@ class OICollector:
         option_data = self.option_chain.fetch_option_chain()
         if not option_data:
             return None
+
+        self.option_data_cache.set(self.instrument, option_data, timestamp=self.time_utils.now_ist())
 
         band_snapshots = option_data.get("band_snapshots") or []
         if not band_snapshots:

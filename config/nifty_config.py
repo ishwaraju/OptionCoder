@@ -65,6 +65,7 @@ class NiftyConfig:
     MIN_VOLUME_THRESHOLD = int(os.getenv('NIFTY_MIN_VOLUME_THRESHOLD', '800'))
     MAX_QUOTE_AGE_SECONDS = int(os.getenv('NIFTY_MAX_QUOTE_AGE_SECONDS', '45'))
     OI_CONFIRMATION_WINDOW = int(os.getenv('NIFTY_OI_CONFIRMATION_WINDOW', '5'))
+    OPTION_CACHE_MAX_AGE_SECONDS = int(os.getenv('NIFTY_OPTION_CACHE_MAX_AGE_SECONDS', '75'))
 
     # ==============================
     # NIFTY TRADING TIME (IST)

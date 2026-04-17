@@ -41,6 +41,7 @@ from shared.utils.logger import TradeLogger
 from shared.utils.notifier import Notifier
 from shared.utils.instrument_profile import get_instrument_profile
 from shared.utils.service_watchdog import ServiceWatchdog
+from shared.utils.option_data_cache import OptionDataCache
 
 
 class SignalService:
@@ -66,6 +67,7 @@ class SignalService:
         
         # Market data
         self.option_chain = OptionChain(self.instrument)
+        self.option_data_cache = OptionDataCache()
         self.oi_ladder = OILadder()
         self.pressure = PressureAnalyzer()
         self.spread_filter = SpreadFilter()
@@ -108,16 +110,26 @@ class SignalService:
         
         # Sleep detection
         self.last_loop_time = time_module.time()
-        self.sleep_threshold_seconds = 60  # If loop gap > 60s, system was asleep
+        self.sleep_threshold_seconds = 90  # Avoid false positives from the normal 60s loop sleep
         
         # Previous values for OI build-up
         self.prev_price = None
         self.prev_total_oi = None
         self.option_data = None
+        self.option_data_ts = None
+        self.option_data_source = None
         self.last_oi_fallback_notice = 0
         
         # Initialize with historical data
         self._restore_indicator_state()
+
+    @staticmethod
+    def _effective_candle_close_time(candle):
+        """Return the effective close time for a 5m candle."""
+        close_time = candle.get("close_time")
+        if close_time:
+            return close_time
+        return candle["time"] + timedelta(minutes=5)
 
     def _log(self, message):
         """Log with HH:mm:ss IST timestamp prefix"""
@@ -443,14 +455,183 @@ class SignalService:
             print("[Signal Service]", *args, **kwargs)
 
     def _refresh_option_data_if_due(self):
-        """Refresh option chain data if needed"""
+        """Refresh option data from hybrid shared cache first, DB fallback second."""
         if time_module.time() - self.last_option_fetch <= 5:
             return
 
-        latest_option_data = self.option_chain.fetch_option_chain()
         self.last_option_fetch = time_module.time()
+        latest_option_data = self._load_cached_option_data()
+        source = "CACHE"
+        if not latest_option_data:
+            latest_option_data = self._load_shared_option_data()
+            source = "DB_FALLBACK"
         if latest_option_data:
             self.option_data = latest_option_data
+            self.option_data_ts = latest_option_data.get("snapshot_ts")
+            self.option_data_source = source
+            self._log(f"Option data source: {self.option_data_source} | snapshot_ts={self.option_data_ts}")
+
+    def _load_cached_option_data(self):
+        """Load freshest local shared-cache option data when available."""
+        cached = self.option_data_cache.get(self.instrument)
+        if not cached:
+            return None
+
+        snapshot_ts_raw = cached.get("snapshot_ts")
+        if not snapshot_ts_raw:
+            return None
+
+        try:
+            snapshot_ts = datetime.fromisoformat(snapshot_ts_raw)
+        except ValueError:
+            return None
+
+        now = self.time_utils.now_ist()
+        if snapshot_ts.tzinfo is None:
+            snapshot_ts = snapshot_ts.replace(tzinfo=now.tzinfo)
+        cache_age = max(0.0, (now - snapshot_ts).total_seconds())
+        max_age = getattr(self.config, "OPTION_CACHE_MAX_AGE_SECONDS", Config.OPTION_CACHE_MAX_AGE_SECONDS)
+        if cache_age > max_age:
+            return None
+
+        band_snapshots = cached.get("band_snapshots") or []
+        if not band_snapshots:
+            return None
+
+        normalized_rows = []
+        for row in band_snapshots:
+            normalized_rows.append(
+                {
+                    "atm_strike": int(row["atm_strike"]) if row.get("atm_strike") is not None else None,
+                    "strike": int(row["strike"]) if row.get("strike") is not None else None,
+                    "distance_from_atm": int(row["distance_from_atm"]) if row.get("distance_from_atm") is not None else None,
+                    "option_type": row.get("option_type"),
+                    "security_id": row.get("security_id"),
+                    "oi": int(row.get("oi", 0) or 0),
+                    "volume": int(row.get("volume", 0) or 0),
+                    "ltp": float(row.get("ltp", 0) or 0),
+                    "iv": float(row.get("iv", 0) or 0),
+                    "top_bid_price": float(row["top_bid_price"]) if row.get("top_bid_price") is not None else None,
+                    "top_bid_quantity": int(row["top_bid_quantity"]) if row.get("top_bid_quantity") is not None else None,
+                    "top_ask_price": float(row["top_ask_price"]) if row.get("top_ask_price") is not None else None,
+                    "top_ask_quantity": int(row["top_ask_quantity"]) if row.get("top_ask_quantity") is not None else None,
+                    "spread": float(row["spread"]) if row.get("spread") is not None else None,
+                    "average_price": float(row["average_price"]) if row.get("average_price") is not None else None,
+                    "previous_oi": int(row["previous_oi"]) if row.get("previous_oi") is not None else None,
+                    "previous_volume": int(row["previous_volume"]) if row.get("previous_volume") is not None else None,
+                    "delta": float(row["delta"]) if row.get("delta") is not None else None,
+                    "theta": float(row["theta"]) if row.get("theta") is not None else None,
+                    "gamma": float(row["gamma"]) if row.get("gamma") is not None else None,
+                    "vega": float(row["vega"]) if row.get("vega") is not None else None,
+                }
+            )
+
+        ce_rows = [row for row in normalized_rows if row["option_type"] == "CE"]
+        pe_rows = [row for row in normalized_rows if row["option_type"] == "PE"]
+        total_ce = sum(row["oi"] for row in ce_rows)
+        total_pe = sum(row["oi"] for row in pe_rows)
+        atm = next((row["atm_strike"] for row in normalized_rows if row.get("atm_strike") is not None), None)
+        atm_ce = next((row for row in ce_rows if row.get("distance_from_atm") == 0), None)
+        atm_pe = next((row for row in pe_rows if row.get("distance_from_atm") == 0), None)
+
+        return {
+            "snapshot_ts": snapshot_ts_raw,
+            "instrument": cached.get("instrument"),
+            "time": cached.get("time"),
+            "expiry": cached.get("expiry"),
+            "underlying_price": float(cached["underlying_price"]) if cached.get("underlying_price") is not None else None,
+            "atm": atm,
+            "pcr": round(total_pe / total_ce, 2) if total_ce else 0.0,
+            "ce_oi_ladder": {row["strike"]: row["oi"] for row in ce_rows if row.get("strike") is not None},
+            "pe_oi_ladder": {row["strike"]: row["oi"] for row in pe_rows if row.get("strike") is not None},
+            "band_snapshots": normalized_rows,
+            "max_call_oi_strike": max((row["strike"] for row in ce_rows), key=lambda strike: next(r["oi"] for r in ce_rows if r["strike"] == strike), default=None),
+            "max_put_oi_strike": max((row["strike"] for row in pe_rows), key=lambda strike: next(r["oi"] for r in pe_rows if r["strike"] == strike), default=None),
+            "atm_ce_security_id": atm_ce.get("security_id") if atm_ce else None,
+            "atm_pe_security_id": atm_pe.get("security_id") if atm_pe else None,
+            "ce_ltp": atm_ce.get("ltp", 0) if atm_ce else 0,
+            "pe_ltp": atm_pe.get("ltp", 0) if atm_pe else 0,
+            "ce_oi": atm_ce.get("oi", 0) if atm_ce else 0,
+            "pe_oi": atm_pe.get("oi", 0) if atm_pe else 0,
+            "ce_volume": atm_ce.get("volume", 0) if atm_ce else 0,
+            "pe_volume": atm_pe.get("volume", 0) if atm_pe else 0,
+            "ce_volume_band": sum(row["volume"] for row in ce_rows),
+            "pe_volume_band": sum(row["volume"] for row in pe_rows),
+            "ce_iv": atm_ce.get("iv", 0) if atm_ce else 0,
+            "pe_iv": atm_pe.get("iv", 0) if atm_pe else 0,
+            "ce_top_bid_price": atm_ce.get("top_bid_price") if atm_ce else None,
+            "ce_top_ask_price": atm_ce.get("top_ask_price") if atm_ce else None,
+            "pe_top_bid_price": atm_pe.get("top_bid_price") if atm_pe else None,
+            "pe_top_ask_price": atm_pe.get("top_ask_price") if atm_pe else None,
+            "ce_spread": atm_ce.get("spread") if atm_ce else None,
+            "pe_spread": atm_pe.get("spread") if atm_pe else None,
+            "ce_delta": atm_ce.get("delta") if atm_ce else None,
+            "pe_delta": atm_pe.get("delta") if atm_pe else None,
+            "ce_theta": atm_ce.get("theta") if atm_ce else None,
+            "pe_theta": atm_pe.get("theta") if atm_pe else None,
+        }
+
+    def _load_shared_option_data(self):
+        """Build option-chain context from the latest shared DB snapshot."""
+        before_ts = getattr(self, "_current_candle_time", None)
+        band_rows = self.db_reader.fetch_latest_option_band_snapshot(self.instrument, before_ts=before_ts)
+        if not band_rows:
+            return None
+
+        snapshot_ts = band_rows[0]["ts"]
+        ce_rows = [row for row in band_rows if row["option_type"] == "CE"]
+        pe_rows = [row for row in band_rows if row["option_type"] == "PE"]
+        if not ce_rows and not pe_rows:
+            return None
+
+        atm = next((row["atm_strike"] for row in band_rows if row.get("atm_strike") is not None), None)
+        ce_oi_ladder = {row["strike"]: row["oi"] for row in ce_rows if row.get("strike") is not None}
+        pe_oi_ladder = {row["strike"]: row["oi"] for row in pe_rows if row.get("strike") is not None}
+        total_ce = sum(row["oi"] for row in ce_rows)
+        total_pe = sum(row["oi"] for row in pe_rows)
+        pcr = round(total_pe / total_ce, 2) if total_ce else 0.0
+
+        atm_ce = next((row for row in ce_rows if row.get("distance_from_atm") == 0), None)
+        atm_pe = next((row for row in pe_rows if row.get("distance_from_atm") == 0), None)
+
+        latest_oi_snapshot = self.db_reader.fetch_latest_oi_snapshot(self.instrument, before_ts=snapshot_ts)
+        underlying_price = (
+            latest_oi_snapshot.get("underlying_price")
+            if latest_oi_snapshot and latest_oi_snapshot.get("underlying_price") is not None
+            else None
+        )
+
+        return {
+            "snapshot_ts": snapshot_ts,
+            "atm": atm,
+            "band_snapshots": [
+                {key: value for key, value in row.items() if key != "ts"}
+                for row in band_rows
+            ],
+            "ce_oi_ladder": ce_oi_ladder,
+            "pe_oi_ladder": pe_oi_ladder,
+            "pcr": pcr,
+            "ce_oi": atm_ce.get("oi", 0) if atm_ce else 0,
+            "pe_oi": atm_pe.get("oi", 0) if atm_pe else 0,
+            "ce_volume": atm_ce.get("volume", 0) if atm_ce else 0,
+            "pe_volume": atm_pe.get("volume", 0) if atm_pe else 0,
+            "ce_ltp": atm_ce.get("ltp", 0) if atm_ce else 0,
+            "pe_ltp": atm_pe.get("ltp", 0) if atm_pe else 0,
+            "ce_iv": atm_ce.get("iv", 0) if atm_ce else 0,
+            "pe_iv": atm_pe.get("iv", 0) if atm_pe else 0,
+            "ce_top_bid_price": atm_ce.get("top_bid_price") if atm_ce else None,
+            "ce_top_ask_price": atm_ce.get("top_ask_price") if atm_ce else None,
+            "pe_top_bid_price": atm_pe.get("top_bid_price") if atm_pe else None,
+            "pe_top_ask_price": atm_pe.get("top_ask_price") if atm_pe else None,
+            "ce_spread": atm_ce.get("spread") if atm_ce else None,
+            "pe_spread": atm_pe.get("spread") if atm_pe else None,
+            "ce_delta": atm_ce.get("delta") if atm_ce else None,
+            "pe_delta": atm_pe.get("delta") if atm_pe else None,
+            "ce_theta": atm_ce.get("theta") if atm_ce else None,
+            "pe_theta": atm_pe.get("theta") if atm_pe else None,
+            "underlying_price": underlying_price,
+            "expiry": None,
+        }
 
     def _build_oi_snapshot_fallback_context(self, price, candle_time):
         """Approximate strategy context from latest OI snapshot when band data is unavailable."""
@@ -820,6 +1001,10 @@ class SignalService:
             f"| quality={balanced_pro['quality']} | tradability={balanced_pro['tradability']} "
             f"| time_regime={balanced_pro['time_regime']}"
         )
+        if self.option_data_source:
+            enriched_reason += f" | option_data_source={self.option_data_source}"
+        if self.option_data_ts:
+            enriched_reason += f" | option_data_ts={self.option_data_ts}"
         if self.strategy.last_heikin_ashi:
             enriched_reason += (
                 f" | ha_bias={self.strategy.last_heikin_ashi.get('bias')}"
@@ -920,7 +1105,7 @@ class SignalService:
         now = self.time_utils.now_ist()
         
         # Fix timezone - ensure candle time is in IST
-        candle_time = latest_5m["time"]
+        candle_time = self._effective_candle_close_time(latest_5m)
         if candle_time.tzinfo is None:
             # If naive, assume UTC and convert to IST
             from datetime import timezone
@@ -1007,18 +1192,24 @@ class SignalService:
                 latest_candle = latest_candles[0]
                 current_time = self.time_utils.now_ist()
                 
-                # Check if this is a new candle (allow 1 minute buffer)
+                # Check if this is a newly closed 5m candle (use close time, not start time)
                 candle_time = latest_candle["time"]
-                time_diff = current_time - candle_time
+                effective_close_time = self._effective_candle_close_time(latest_candle)
+                time_diff = current_time - effective_close_time
                 is_new = time_diff < timedelta(minutes=6) and candle_time != self.last_processed_5m_ts
                 
                 # DEBUG logging
                 if not is_new:
-                    self._log(f"DEBUG Candle Check | Time Diff: {time_diff} | Candle TS: {candle_time} | Last Processed: {self.last_processed_5m_ts} | Will Process: {is_new}")
+                    self._log(
+                        f"DEBUG Candle Check | Time Diff: {time_diff} | Candle TS: {candle_time} | "
+                        f"Effective Close: {effective_close_time} | Last Processed: {self.last_processed_5m_ts} | "
+                        f"Will Process: {is_new}"
+                    )
                 
                 if is_new:
                     # Process the candle
                     self._log(f"Processing new 5m candle | Time: {candle_time} | Price: {latest_candle['close']}")
+                    self._current_candle_time = candle_time
                     self._refresh_option_data_if_due()
                     self._process_5m_candle(latest_candle)
                     self.last_processed_5m_ts = candle_time

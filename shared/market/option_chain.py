@@ -30,6 +30,7 @@ class OptionChain:
         self.option_chain_data = None
         self.underlying_price = None
         self.mock_step = 0
+        self.rate_limited_until = 0
 
     @staticmethod
     def _safe_spread(bid_price, ask_price):
@@ -39,6 +40,11 @@ class OptionChain:
 
     def _post_json(self, url, payload, label):
         last_error = None
+
+        if self.rate_limited_until and time.time() < self.rate_limited_until:
+            remaining = int(max(0, self.rate_limited_until - time.time()))
+            print(f"ERROR: {label} cooldown active after 429 ({remaining}s left)")
+            return None
 
         for attempt in range(1, Config.OPTION_CHAIN_RETRIES + 1):
             try:
@@ -50,10 +56,18 @@ class OptionChain:
                 )
 
                 if response.status_code == 200:
+                    self.rate_limited_until = 0
                     return response
 
                 last_error = f"{label} API Failed: {response.status_code}"
                 print("ERROR:", last_error, f"(attempt {attempt}/{Config.OPTION_CHAIN_RETRIES})")
+                if response.status_code == 429:
+                    self.rate_limited_until = time.time() + Config.OPTION_CHAIN_429_COOLDOWN_SECONDS
+                    print(
+                        f"ERROR: {label} hit 429, cooling down for "
+                        f"{Config.OPTION_CHAIN_429_COOLDOWN_SECONDS}s"
+                    )
+                    break
             except Exception as e:
                 last_error = e
                 print(

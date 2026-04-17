@@ -65,6 +65,7 @@ class SensexConfig:
     MIN_VOLUME_THRESHOLD = int(os.getenv('SENSEX_MIN_VOLUME_THRESHOLD', '800'))
     MAX_QUOTE_AGE_SECONDS = int(os.getenv('SENSEX_MAX_QUOTE_AGE_SECONDS', '45'))
     OI_CONFIRMATION_WINDOW = int(os.getenv('SENSEX_OI_CONFIRMATION_WINDOW', '5'))
+    OPTION_CACHE_MAX_AGE_SECONDS = int(os.getenv('SENSEX_OPTION_CACHE_MAX_AGE_SECONDS', '90'))
 
     # ==============================
     # SENSEX TRADING TIME (IST)

@@ -69,7 +69,7 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
         <condition column="id" operator="=" value="" active="true" />
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.option_band_snapshots_1m" active-filter-id="b4826a80-e74e-457c-b32c-c8a6967b62e7">
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.option_band_snapshots_1m" active-filter-id="">
       <filter id="b4826a80-e74e-457c-b32c-c8a6967b62e7" name="Apr 15, 2026" temporary="false" custom-name="false" type="basic" join-type="AND">
         <condition column="id" operator="&gt;=" value="Apr 15, 2026" active="true" />
       </filter>

@@ -128,6 +128,8 @@ class MainConfig:
     MIN_VOLUME_THRESHOLD = int(os.getenv('MIN_VOLUME_THRESHOLD', '800'))
     MAX_QUOTE_AGE_SECONDS = int(os.getenv('MAX_QUOTE_AGE_SECONDS', '45'))
     OI_CONFIRMATION_WINDOW = int(os.getenv('OI_CONFIRMATION_WINDOW', '5'))
+    OPTION_CACHE_MAX_AGE_SECONDS = int(os.getenv('OPTION_CACHE_MAX_AGE_SECONDS', '90'))
+    OPTION_CHAIN_429_COOLDOWN_SECONDS = int(os.getenv('OPTION_CHAIN_429_COOLDOWN_SECONDS', '30'))
 
     # ==============================
     # MINIMUM SCORE THRESHOLD
