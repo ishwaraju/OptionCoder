@@ -145,6 +145,19 @@ CREATE TABLE strategy_decisions_5m (
   tradability TEXT,
   time_regime TEXT,
   oi_mode TEXT,
+  blockers_json JSONB,
+  cautions_json JSONB,
+  candidate_signal_type TEXT,
+  candidate_signal_grade TEXT,
+  candidate_confidence TEXT,
+  actionable_block_reason TEXT,
+  watch_bucket TEXT,
+  pressure_conflict_level TEXT,
+  confidence_summary TEXT,
+  entry_above NUMERIC(12,2),
+  entry_below NUMERIC(12,2),
+  invalidate_price NUMERIC(12,2),
+  first_target_price NUMERIC(12,2),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (ts, instrument)
 );
@@ -163,6 +176,11 @@ CREATE TABLE signals_issued (
   time_regime TEXT,
   oi_mode TEXT,
   reason TEXT,
+  confidence_summary TEXT,
+  entry_above NUMERIC(12,2),
+  entry_below NUMERIC(12,2),
+  invalidate_price NUMERIC(12,2),
+  first_target_price NUMERIC(12,2),
   telegram_sent BOOLEAN NOT NULL DEFAULT FALSE,
   monitor_started BOOLEAN NOT NULL DEFAULT FALSE,
   entry_window_end TIMESTAMPTZ,
@@ -186,6 +204,27 @@ CREATE TABLE trade_monitor_events_1m (
   time_regime TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (ts, instrument, entry_ts, signal)
+);
+
+CREATE TABLE alert_reviews_5m (
+  id BIGSERIAL PRIMARY KEY,
+  alert_ts TIMESTAMPTZ NOT NULL,
+  instrument TEXT NOT NULL,
+  alert_kind TEXT NOT NULL,
+  direction TEXT,
+  setup_type TEXT,
+  watch_bucket TEXT,
+  usefulness TEXT,
+  outcome_tag TEXT,
+  lookahead_minutes INTEGER,
+  max_favorable_points NUMERIC(12,2),
+  max_adverse_points NUMERIC(12,2),
+  close_move_points NUMERIC(12,2),
+  blockers_json JSONB,
+  cautions_json JSONB,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (alert_ts, instrument, alert_kind, direction, setup_type)
 );
 
 CREATE INDEX idx_instrument_profiles_enabled ON instrument_profiles (enabled, instrument);
@@ -219,6 +258,7 @@ CREATE INDEX idx_signals_issued_quality ON signals_issued (instrument, signal_qu
 
 CREATE INDEX idx_monitor_inst_ts ON trade_monitor_events_1m (instrument, ts DESC);
 CREATE INDEX idx_monitor_entry ON trade_monitor_events_1m (instrument, entry_ts DESC);
+CREATE INDEX idx_alert_reviews_inst_ts ON alert_reviews_5m (instrument, alert_ts DESC);
 
 INSERT INTO instrument_profiles (
   instrument, exchange_segment, security_id, strike_step, lot_size, enabled, min_score_threshold, atr_multiplier, notes

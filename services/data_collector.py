@@ -120,7 +120,7 @@ class DataCollector:
         # Reset connection state
         self._log("   Reconnecting WebSocket...")
         try:
-            self.connection_manager.force_reconnect()
+            self.live_feed.force_reconnect()
             self._log("   ✅ WebSocket reconnected")
         except Exception as e:
             self._log(f"   ⚠️  Reconnect failed: {e}")
@@ -386,16 +386,28 @@ class DataCollector:
             live_snapshot.get("data_age_seconds"),
         )
         
-        if connection_state.get("recovered") and connection_state.get("missing_candles"):
-            # Handle recovered missing candles
-            for candle in connection_state["missing_candles"]:
-                self.candle_managers[self.instrument].add_historical_candle(candle)
-                self._safe_save_1m_candle(self.instrument, candle)
-                candle_5m = self.candle_managers[self.instrument].add_minute_candle(candle)
-                if candle_5m:
-                    self._safe_save_5m_candle(self.instrument, candle_5m)
-            
-            self._log(f" Recovery Summary | backfilled: {len(connection_state['missing_candles'])}")
+        if connection_state.get("recovered"):
+            total_backfilled = 0
+            for managed_instrument in self.managed_instruments:
+                last_candle_time = self.candle_managers[managed_instrument].get_last_candle_time()
+                if not last_candle_time:
+                    continue
+                missing_candles = self.historical_backfill.get_missing_candles_for_instrument(
+                    instrument=managed_instrument,
+                    last_candle_time=last_candle_time,
+                )
+                if not missing_candles:
+                    continue
+                for candle in missing_candles:
+                    self.candle_managers[managed_instrument].add_historical_candle(candle)
+                    self._safe_save_1m_candle(managed_instrument, candle)
+                    candle_5m = self.candle_managers[managed_instrument].add_minute_candle(candle)
+                    if candle_5m:
+                        self._safe_save_5m_candle(managed_instrument, candle_5m)
+                total_backfilled += len(missing_candles)
+
+            if total_backfilled:
+                self._log(f" Recovery Summary | backfilled: {total_backfilled}")
 
         return connection_state
 

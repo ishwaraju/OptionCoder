@@ -54,7 +54,10 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files />
+    <open-files>
+      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/alert_reviews_5m" />
+      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/signals_issued" />
+    </open-files>
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
     <prerequisites />
@@ -75,6 +78,11 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
       </filter>
     </filter-actions>
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.trade_monitor_events_1m" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.alert_reviews_5m" active-filter-id="EMPTY_FILTER">
+      <filter id="477400e3-14a7-4cf8-bfaf-54958fc81b6b" name="Filter" temporary="false" custom-name="false" type="basic" join-type="AND">
+        <condition column="id" operator="=" value="" active="true" />
+      </filter>
+    </filter-actions>
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.signals_issued" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.scalp_signals_1m" active-filter-id="">
       <filter id="5a233271-1c1b-4e26-abd5-252c36fa2b3f" name="Filter" temporary="false" custom-name="false" type="basic" join-type="AND">

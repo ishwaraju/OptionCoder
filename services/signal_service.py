@@ -74,7 +74,7 @@ class SignalService:
         self.oi_quote_confirmation = OIQuoteConfirmation()
         
         # Strategy
-        self.strategy = BreakoutStrategy()
+        self.strategy = BreakoutStrategy(instrument=self.instrument)
         self.strike_selector = StrikeSelector()
         
         # Logging and notifications
@@ -87,6 +87,9 @@ class SignalService:
         self.last_signal_time = 0
         self.signal_cooldown_remaining = 0
         self.last_emitted_signal = None
+        self.last_watch_alert_key = None
+        self.last_watch_alert_time = 0
+        self.watch_alert_state = {}
         self.session_decisions = []
         self.pending_entry_watch = None
         self.day_high_5m = None
@@ -342,10 +345,18 @@ class SignalService:
         signal_grade = (self.strategy.last_signal_grade or "SKIP").upper()
         confidence = (self.strategy.last_confidence or "LOW").upper()
         regime = (self.strategy.last_regime or "UNKNOWN").upper()
-        score = float(self.strategy.last_score or 0)
+        score = float(self.strategy.last_entry_score or self.strategy.last_score or 0)
 
         if signal_type == "CONTINUATION" and not Config.ALLOW_CONTINUATION_ENTRY:
-            return False
+            breakout_memory = getattr(self.strategy, "breakout_memory", None) or {}
+            recent_breakout = bool(
+                breakout_memory
+                and candle_time is not None
+                and breakout_memory.get("session_day") == candle_time.date()
+                and int((candle_time - breakout_memory.get("time")).total_seconds() // 60) <= 45
+            )
+            if not (recent_breakout and signal_grade in {"A", "A+"} and confidence == "HIGH" and score >= 78):
+                return False
         if self.instrument == "SENSEX":
             return SensexActionableRules.should_allow_signal(
                 signal_type=signal_type,
@@ -379,13 +390,27 @@ class SignalService:
         """Balanced Pro output summary for logs and saved reasons."""
         setup = self.strategy.last_signal_type or "NONE"
         quality = self._classify_signal_quality(fallback_context, pressure_metrics)
-        tradability = "TRADE" if actionable_signal else ("WATCH" if (signal or bias != "NEUTRAL") else "NO_TRADE")
+        decision_state = (self.strategy.last_decision_state or "IGNORE").upper()
+        if actionable_signal:
+            tradability = "ACTION"
+        elif decision_state == "ACTION":
+            tradability = "WATCH"
+        elif decision_state == "WATCH":
+            tradability = "WATCH"
+        else:
+            tradability = "NO_TRADE"
         return {
             "bias": bias,
             "setup": setup,
             "quality": quality,
             "tradability": tradability,
             "time_regime": self.strategy.last_time_regime,
+            "context_score": self.strategy.last_context_score,
+            "entry_score": self.strategy.last_entry_score,
+            "decision_state": decision_state,
+            "watch_bucket": self.strategy.last_watch_bucket,
+            "pressure_conflict_level": self.strategy.last_pressure_conflict_level,
+            "confidence_summary": self.strategy.last_confidence_summary,
         }
 
     @staticmethod
@@ -737,9 +762,17 @@ class SignalService:
             return self.orb.get_orb_levels()
 
         orb_high, orb_low = self.orb.calculate_orb()
-        if orb_high is None or orb_low is None:
-            return self.orb.get_fallback_levels([])
-        return orb_high, orb_low
+        if orb_high is not None and orb_low is not None:
+            return orb_high, orb_low
+
+        recent_candles = self.db_reader.fetch_recent_candles_5m(self.instrument, limit=24)
+        if not recent_candles or recent_candles[-1]["time"] != candle_5m["time"]:
+            recent_candles = (recent_candles or []) + [candle_5m]
+
+        orb_high, orb_low = self.orb.get_fallback_levels(recent_candles)
+        if orb_high is not None and orb_low is not None:
+            return orb_high, orb_low
+        return None, None
 
     def _apply_signal_cooldowns(self, signal, reason):
         """Apply signal cooldowns and filters"""
@@ -797,6 +830,10 @@ class SignalService:
     def _safe_save_strategy_decision(self, ts, price, signal, reason, volume_signal, oi_bias, oi_trend, build_up, pressure_metrics, ce_delta_total, pe_delta_total, pcr, orb_high, orb_low, vwap, atr, strike, balanced_pro=None, oi_mode=None):
         """Save strategy decision to database"""
         try:
+            actionable_block_reason = None
+            if signal is None and reason and reason.startswith("Option-buyer filter blocked live alert"):
+                actionable_block_reason = "option_buyer_filter"
+
             row = (
                 ts,
                 self.instrument,
@@ -824,6 +861,19 @@ class SignalService:
                 balanced_pro["tradability"] if balanced_pro else None,
                 balanced_pro["time_regime"] if balanced_pro else None,
                 oi_mode,
+                list(self.strategy.last_blockers or []),
+                list(self.strategy.last_cautions or []),
+                self.strategy.last_signal_type,
+                self.strategy.last_signal_grade,
+                self.strategy.last_confidence,
+                actionable_block_reason,
+                self.strategy.last_watch_bucket,
+                self.strategy.last_pressure_conflict_level,
+                self.strategy.last_confidence_summary,
+                self.strategy.last_entry_plan.get("entry_above"),
+                self.strategy.last_entry_plan.get("entry_below"),
+                self.strategy.last_entry_plan.get("invalidate_price"),
+                self.strategy.last_entry_plan.get("first_target_price"),
             )
             self.db_writer.insert_strategy_decision_5m(row)
         except Exception as e:
@@ -859,13 +909,18 @@ class SignalService:
                 signal,
                 float(price) if price is not None else None,
                 int(strike) if strike is not None else None,
-                int(self.strategy.last_score),
+                int(self.strategy.last_entry_score or self.strategy.last_score),
                 balanced_pro["quality"] if balanced_pro else None,
                 balanced_pro["setup"] if balanced_pro else None,
                 balanced_pro["tradability"] if balanced_pro else None,
                 balanced_pro["time_regime"] if balanced_pro else None,
                 oi_mode,
                 reason,
+                self.strategy.last_confidence_summary,
+                self.strategy.last_entry_plan.get("entry_above"),
+                self.strategy.last_entry_plan.get("entry_below"),
+                self.strategy.last_entry_plan.get("invalidate_price"),
+                self.strategy.last_entry_plan.get("first_target_price"),
                 bool(telegram_sent),
                 bool(monitor_started),
                 entry_window_end,
@@ -873,6 +928,118 @@ class SignalService:
             self.db_writer.insert_signal_issued(row)
         except Exception as e:
             self._log(f"DB save error (signal issued): {e}")
+
+    def _extract_watch_direction(self, candidate_signal, balanced_pro):
+        if candidate_signal in {"CE", "PE"}:
+            return candidate_signal
+        bias = (balanced_pro or {}).get("bias")
+        if bias == "BULLISH":
+            return "CE"
+        if bias == "BEARISH":
+            return "PE"
+        return None
+
+    def _build_manual_watch_payload(self, candle_5m, price, candidate_signal, candidate_reason, balanced_pro, orb_high, orb_low, support, resistance):
+        if not balanced_pro or balanced_pro.get("tradability") != "WATCH":
+            return None
+        if "time_filter" in (self.strategy.last_blockers or []):
+            return None
+        if (self.strategy.last_context_score or self.strategy.last_score or 0) < 60:
+            return None
+        if (self.strategy.last_confidence or "LOW").upper() not in {"MEDIUM", "HIGH"}:
+            return None
+
+        direction = self._extract_watch_direction(candidate_signal, balanced_pro)
+        if not direction:
+            return None
+
+        blockers = list(self.strategy.last_blockers or [])
+        strong_watch = (
+            candidate_signal in {"CE", "PE"}
+            or "direction_present_but_filters_incomplete" in blockers
+            or (self.strategy.last_signal_type or "NONE") != "NONE"
+        )
+        if not strong_watch:
+            return None
+
+        trigger_price = orb_high if direction == "CE" else orb_low
+        invalidate_price = support if direction == "CE" else resistance
+        setup = self.strategy.last_signal_type or balanced_pro.get("setup") or "WATCH"
+        if setup == "NONE":
+            return None
+        watch_bucket = balanced_pro.get("watch_bucket") or self.strategy.last_watch_bucket or "WATCH_SETUP"
+        if watch_bucket == "WATCH_CONTEXT":
+            return None
+
+        context_bits = [
+            f"Bias={balanced_pro.get('bias')}",
+            f"Setup={setup}",
+            f"Regime={self.strategy.last_regime}",
+            f"Bucket={watch_bucket}",
+        ]
+        context = " | ".join(bit for bit in context_bits if bit and "None" not in bit)
+        if candidate_signal in {"CE", "PE"}:
+            action_hint = "Candidate mila hai. Entry tabhi lena jab candle close hold kare aur chart bhi support kare."
+        elif setup == "RETEST":
+            action_hint = "Retest hold kare tabhi entry socho. Break ho to skip karo."
+        elif setup == "REVERSAL":
+            action_hint = "Reversal hai. Next candle confirm kare tabhi entry lena."
+        elif setup == "BREAKOUT_CONFIRM":
+            action_hint = "Breakout confirm zone hold kare to entry socho. Instant chase mat karo."
+        elif trigger_price is not None:
+            side = "above" if direction == "CE" else "below"
+            action_hint = f"Abhi sirf watch karo. Entry se pehle clean 5m close {side} {trigger_price} ka wait karo."
+        else:
+            action_hint = "Abhi entry mat lo. Price confirmation ka wait karo."
+
+        return {
+            "instrument": self.instrument,
+            "direction": direction,
+            "setup": setup,
+            "signal_grade": self.strategy.last_signal_grade,
+            "confidence": self.strategy.last_confidence,
+            "confidence_summary": self.strategy.last_confidence_summary,
+            "score": self.strategy.last_context_score or self.strategy.last_score,
+            "entry_score": self.strategy.last_entry_score,
+            "price": round(price, 2) if price is not None else None,
+            "trigger_price": round(trigger_price, 2) if trigger_price is not None else None,
+            "invalidate_price": round(invalidate_price, 2) if invalidate_price is not None else None,
+            "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
+            "blockers": blockers,
+            "cautions": list(self.strategy.last_cautions or []),
+            "watch_bucket": watch_bucket,
+            "context": f"{context} | ContextScore={self.strategy.last_context_score} | EntryScore={self.strategy.last_entry_score}",
+            "reason": candidate_reason,
+            "action_hint": action_hint,
+            "key": (
+                self.instrument,
+                direction,
+                setup,
+            ),
+        }
+
+    def _maybe_send_watch_alert(self, watch_payload):
+        if not watch_payload or not Config.ENABLE_ALERTS:
+            return
+
+        now_ts = time_module.time()
+        state = self.watch_alert_state.get(watch_payload["key"])
+        if state and now_ts - state["time"] < 20 * 60:
+            score_improved = (watch_payload.get("score") or 0) >= state.get("score", 0) + 5
+            entry_score_improved = (watch_payload.get("entry_score") or 0) >= state.get("entry_score", 0) + 4
+            blockers_reduced = len(watch_payload.get("blockers") or []) < state.get("blocker_count", 99)
+            if not any([score_improved, entry_score_improved, blockers_reduced]):
+                return
+
+        self.notifier.send_watch_notification(watch_payload)
+        self.last_watch_alert_key = watch_payload["key"]
+        self.last_watch_alert_time = now_ts
+        self.watch_alert_state[watch_payload["key"]] = {
+            "time": now_ts,
+            "score": watch_payload.get("score") or 0,
+            "entry_score": watch_payload.get("entry_score") or 0,
+            "blocker_count": len(watch_payload.get("blockers") or []),
+        }
 
     def _process_5m_candle(self, candle_5m):
         """Process 5-minute candle and generate signal"""
@@ -999,8 +1166,13 @@ class SignalService:
         enriched_reason += (
             f" | base_bias={balanced_pro['bias']} | setup={balanced_pro['setup']} "
             f"| quality={balanced_pro['quality']} | tradability={balanced_pro['tradability']} "
-            f"| time_regime={balanced_pro['time_regime']}"
+            f"| time_regime={balanced_pro['time_regime']} "
+            f"| context_score={balanced_pro['context_score']} | entry_score={balanced_pro['entry_score']} "
+            f"| decision_state={balanced_pro['decision_state']} | watch_bucket={balanced_pro['watch_bucket']} "
+            f"| pressure_conflict_level={balanced_pro['pressure_conflict_level']}"
         )
+        if balanced_pro.get("confidence_summary"):
+            enriched_reason += f" | confidence_summary={balanced_pro['confidence_summary']}"
         if self.option_data_source:
             enriched_reason += f" | option_data_source={self.option_data_source}"
         if self.option_data_ts:
@@ -1068,6 +1240,23 @@ class SignalService:
             print(f"Score: {self.strategy.last_score} | Confidence: {self.strategy.last_confidence}")
             print(f"Strike: {selected_strike} | Reason: {reason}")
             print(f"Price: {price} | Time: {candle_5m['time']}")
+            self.notifier.send_trade_notification(
+                {
+                    "instrument": self.instrument,
+                    "signal": signal,
+                    "strike": selected_strike,
+                    "confidence": self.strategy.last_confidence,
+                    "confidence_summary": self.strategy.last_confidence_summary,
+                    "signal_type": self.strategy.last_signal_type,
+                    "signal_grade": self.strategy.last_signal_grade,
+                    "price": round(price, 2) if price is not None else None,
+                    "trigger_price": self.strategy.last_entry_plan.get("entry_above") if signal == "CE" else self.strategy.last_entry_plan.get("entry_below"),
+                    "invalidate_price": self.strategy.last_entry_plan.get("invalidate_price"),
+                    "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
+                    "time_regime": balanced_pro["time_regime"],
+                    "reason": enriched_reason,
+                }
+            )
             self._safe_save_signal_issued(
                 ts=candle_5m["time"],
                 signal=signal,
@@ -1086,6 +1275,18 @@ class SignalService:
             self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
             self.signals_generated += 1
         else:
+            watch_payload = self._build_manual_watch_payload(
+                candle_5m=candle_5m,
+                price=price,
+                candidate_signal=candidate_signal,
+                candidate_reason=candidate_reason,
+                balanced_pro=balanced_pro,
+                orb_high=orb_high,
+                orb_low=orb_low,
+                support=support,
+                resistance=resistance,
+            )
+            self._maybe_send_watch_alert(watch_payload)
             print(
                 f"[Signal Service] No signal | Bias: {balanced_pro['bias']} | "
                 f"Setup: {balanced_pro['setup']} | Quality: {balanced_pro['quality']} | "

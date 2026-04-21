@@ -70,6 +70,13 @@ class HistoricalBackfill:
         return []
 
     def get_missing_candles_for_reconnect(self, last_candle_time, current_time=None):
+        return self.get_missing_candles_for_instrument(
+            instrument=Config.SYMBOL,
+            last_candle_time=last_candle_time,
+            current_time=current_time,
+        )
+
+    def get_missing_candles_for_instrument(self, instrument, last_candle_time, current_time=None):
         """
         Get missing candles since last known candle for reconnection recovery.
         
@@ -93,10 +100,12 @@ class HistoricalBackfill:
         if time_gap.total_seconds() < 120:
             return None
             
+        instrument = (instrument or Config.SYMBOL).upper()
+
         # Get security info from config
-        security_id = Config.SECURITY_IDS.get(Config.SYMBOL)
+        security_id = Config.SECURITY_IDS.get(instrument)
         if not security_id:
-            print(f"No security ID found for symbol {Config.SYMBOL}")
+            print(f"No security ID found for symbol {instrument}")
             return None
             
         # Calculate from_date (start from 2 minutes before last candle)

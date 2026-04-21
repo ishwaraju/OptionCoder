@@ -1,3 +1,5 @@
+import json
+
 from config import Config
 from shared.db.pool import DBPool
 
@@ -10,6 +12,7 @@ class DBWriter:
             print("DBWriter disabled (DB_ENABLED=False)")
             return
         print("DBWriter using pooled connections")
+        self._strategy_decision_has_structured_columns = None
 
     def close(self):
         self.conn = None
@@ -54,6 +57,20 @@ class DBWriter:
         except Exception as e:
             print("DB fetch error:", e)
             return []
+
+    def _table_has_columns(self, table_name, column_names):
+        if not self.enabled:
+            return False
+
+        query = """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s;
+        """
+        rows = self._fetch_all(query, (table_name,))
+        existing = {row[0] for row in rows}
+        return all(column in existing for column in column_names)
 
     def insert_candle_1m(self, row):
         """
@@ -214,9 +231,93 @@ class DBWriter:
             volume_signal, oi_bias, oi_trend, build_up, pressure_bias,
             ce_delta_total, pe_delta_total, pcr,
             orb_high, orb_low, vwap, atr, strike,
-            base_bias, setup_type, signal_quality, tradability, time_regime, oi_mode
+            base_bias, setup_type, signal_quality, tradability, time_regime, oi_mode,
+            blockers_json, cautions_json, candidate_signal_type, candidate_signal_grade,
+            candidate_confidence, actionable_block_reason
         )
         """
+        structured_columns = (
+            "blockers_json",
+            "cautions_json",
+            "candidate_signal_type",
+            "candidate_signal_grade",
+            "candidate_confidence",
+            "actionable_block_reason",
+            "watch_bucket",
+            "pressure_conflict_level",
+            "confidence_summary",
+            "entry_above",
+            "entry_below",
+            "invalidate_price",
+            "first_target_price",
+        )
+        if self._strategy_decision_has_structured_columns is None:
+            self._strategy_decision_has_structured_columns = self._table_has_columns(
+                "strategy_decisions_5m",
+                structured_columns,
+            )
+
+        if self._strategy_decision_has_structured_columns:
+            row = list(row)
+            row[26] = json.dumps(row[26] or [])
+            row[27] = json.dumps(row[27] or [])
+            query = """
+            INSERT INTO strategy_decisions_5m
+            (
+                ts, instrument, price, signal, reason, strategy_score, score_factors,
+                volume_signal, oi_bias, oi_trend, build_up, pressure_bias,
+                ce_delta_total, pe_delta_total, pcr,
+                orb_high, orb_low, vwap, atr, strike,
+                base_bias, setup_type, signal_quality, tradability, time_regime, oi_mode,
+                blockers_json, cautions_json, candidate_signal_type, candidate_signal_grade,
+                candidate_confidence, actionable_block_reason, watch_bucket,
+                pressure_conflict_level, confidence_summary, entry_above, entry_below,
+                invalidate_price, first_target_price
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ts, instrument) DO UPDATE
+            SET price = EXCLUDED.price,
+                signal = EXCLUDED.signal,
+                reason = EXCLUDED.reason,
+                strategy_score = EXCLUDED.strategy_score,
+                score_factors = EXCLUDED.score_factors,
+                volume_signal = EXCLUDED.volume_signal,
+                oi_bias = EXCLUDED.oi_bias,
+                oi_trend = EXCLUDED.oi_trend,
+                build_up = EXCLUDED.build_up,
+                pressure_bias = EXCLUDED.pressure_bias,
+                ce_delta_total = EXCLUDED.ce_delta_total,
+                pe_delta_total = EXCLUDED.pe_delta_total,
+                pcr = EXCLUDED.pcr,
+                orb_high = EXCLUDED.orb_high,
+                orb_low = EXCLUDED.orb_low,
+                vwap = EXCLUDED.vwap,
+                atr = EXCLUDED.atr,
+                strike = EXCLUDED.strike,
+                base_bias = EXCLUDED.base_bias,
+                setup_type = EXCLUDED.setup_type,
+                signal_quality = EXCLUDED.signal_quality,
+                tradability = EXCLUDED.tradability,
+                time_regime = EXCLUDED.time_regime,
+                oi_mode = EXCLUDED.oi_mode,
+                blockers_json = EXCLUDED.blockers_json,
+                cautions_json = EXCLUDED.cautions_json,
+                candidate_signal_type = EXCLUDED.candidate_signal_type,
+                candidate_signal_grade = EXCLUDED.candidate_signal_grade,
+                candidate_confidence = EXCLUDED.candidate_confidence,
+                actionable_block_reason = EXCLUDED.actionable_block_reason,
+                watch_bucket = EXCLUDED.watch_bucket,
+                pressure_conflict_level = EXCLUDED.pressure_conflict_level,
+                confidence_summary = EXCLUDED.confidence_summary,
+                entry_above = EXCLUDED.entry_above,
+                entry_below = EXCLUDED.entry_below,
+                invalidate_price = EXCLUDED.invalidate_price,
+                first_target_price = EXCLUDED.first_target_price;
+            """
+            self._execute(query, tuple(row))
+            return
+
+        legacy_row = row[:26]
         query = """
         INSERT INTO strategy_decisions_5m
         (
@@ -253,14 +354,15 @@ class DBWriter:
             time_regime = EXCLUDED.time_regime,
             oi_mode = EXCLUDED.oi_mode;
         """
-        self._execute(query, row)
+        self._execute(query, legacy_row)
 
     def insert_signal_issued(self, row):
         """
         row = (
             ts, instrument, signal, price, strike, strategy_score,
             signal_quality, setup_type, tradability, time_regime, oi_mode,
-            reason, telegram_sent, monitor_started, entry_window_end
+            reason, confidence_summary, entry_above, entry_below, invalidate_price,
+            first_target_price, telegram_sent, monitor_started, entry_window_end
         )
         """
         query = """
@@ -268,9 +370,10 @@ class DBWriter:
         (
             ts, instrument, signal, price, strike, strategy_score,
             signal_quality, setup_type, tradability, time_regime, oi_mode,
-            reason, telegram_sent, monitor_started, entry_window_end
+            reason, confidence_summary, entry_above, entry_below, invalidate_price,
+            first_target_price, telegram_sent, monitor_started, entry_window_end
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (ts, instrument, signal, strike) DO UPDATE
         SET price = EXCLUDED.price,
             strategy_score = EXCLUDED.strategy_score,
@@ -280,11 +383,49 @@ class DBWriter:
             time_regime = EXCLUDED.time_regime,
             oi_mode = EXCLUDED.oi_mode,
             reason = EXCLUDED.reason,
+            confidence_summary = EXCLUDED.confidence_summary,
+            entry_above = EXCLUDED.entry_above,
+            entry_below = EXCLUDED.entry_below,
+            invalidate_price = EXCLUDED.invalidate_price,
+            first_target_price = EXCLUDED.first_target_price,
             telegram_sent = EXCLUDED.telegram_sent,
             monitor_started = EXCLUDED.monitor_started,
             entry_window_end = EXCLUDED.entry_window_end;
         """
         self._execute(query, row)
+
+    def insert_alert_review_5m(self, row):
+        """
+        row = (
+            alert_ts, instrument, alert_kind, direction, setup_type, watch_bucket,
+            usefulness, outcome_tag, lookahead_minutes, max_favorable_points,
+            max_adverse_points, close_move_points, blockers_json, cautions_json, notes
+        )
+        """
+        serialized = list(row)
+        serialized[12] = json.dumps(serialized[12] or [])
+        serialized[13] = json.dumps(serialized[13] or [])
+        query = """
+        INSERT INTO alert_reviews_5m
+        (
+            alert_ts, instrument, alert_kind, direction, setup_type, watch_bucket,
+            usefulness, outcome_tag, lookahead_minutes, max_favorable_points,
+            max_adverse_points, close_move_points, blockers_json, cautions_json, notes
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (alert_ts, instrument, alert_kind, direction, setup_type) DO UPDATE
+        SET watch_bucket = EXCLUDED.watch_bucket,
+            usefulness = EXCLUDED.usefulness,
+            outcome_tag = EXCLUDED.outcome_tag,
+            lookahead_minutes = EXCLUDED.lookahead_minutes,
+            max_favorable_points = EXCLUDED.max_favorable_points,
+            max_adverse_points = EXCLUDED.max_adverse_points,
+            close_move_points = EXCLUDED.close_move_points,
+            blockers_json = EXCLUDED.blockers_json,
+            cautions_json = EXCLUDED.cautions_json,
+            notes = EXCLUDED.notes;
+        """
+        self._execute(query, tuple(serialized))
 
     def insert_trade_monitor_event_1m(self, row):
         """

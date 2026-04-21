@@ -313,7 +313,8 @@ class DBReader:
         query = """
         SELECT
             ts, signal, price, strike, strategy_score,
-            signal_quality, setup_type, tradability, time_regime, oi_mode, reason
+            signal_quality, setup_type, tradability, time_regime, oi_mode, reason,
+            confidence_summary, entry_above, entry_below, invalidate_price, first_target_price
         FROM signals_issued
         WHERE instrument = %s
         ORDER BY ts DESC
@@ -336,6 +337,11 @@ class DBReader:
             "time_regime": row[8],
             "oi_mode": row[9],
             "reason": row[10],
+            "confidence_summary": row[11],
+            "entry_above": float(row[12]) if row[12] is not None else None,
+            "entry_below": float(row[13]) if row[13] is not None else None,
+            "invalidate_price": float(row[14]) if row[14] is not None else None,
+            "first_target_price": float(row[15]) if row[15] is not None else None,
         }
 
     def fetch_latest_scalp_signal(self, instrument):
