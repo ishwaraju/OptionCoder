@@ -13,9 +13,9 @@ from shared.indicators.multi_timeframe_trend import MultiTimeframeTrend, quick_t
 class BreakoutStrategy:
     def __init__(self, for_option_buyer=True, instrument="NIFTY"):
         self.time_utils = TimeUtils()
-        self.expiry_rules = ExpiryDayRules(self.time_utils)
-        self.for_option_buyer = for_option_buyer  # Enable strict mode for option buyers
         self.instrument = (instrument or "NIFTY").upper()
+        self.expiry_rules = ExpiryDayRules(self.time_utils, instrument=self.instrument)
+        self.for_option_buyer = for_option_buyer  # Enable strict mode for option buyers
 
         # New option buyer protection indicators
         self.adx_calc = ADXCalculator(period=14)
@@ -321,10 +321,11 @@ class BreakoutStrategy:
         }
 
     def _set_confirmation_setup(self, direction, level, current_bar_time, score):
+        bars_remaining = 3 if (score or 0) >= 68 else 2
         self.confirmation_setup = {
             "direction": direction,
             "level": level,
-            "bars_remaining": 2,
+            "bars_remaining": bars_remaining,
             "session_day": current_bar_time.date() if current_bar_time is not None else self.time_utils.now_ist().date(),
             "score": score,
         }
@@ -468,6 +469,7 @@ class BreakoutStrategy:
                 "weak_breakout_body",
                 "breakout_structure_weak",
                 "pressure_conflict",
+                "pressure_neutral",
                 "oi_conflict",
                 "build_up_missing",
                 "orb_breakout_missing",
@@ -476,7 +478,7 @@ class BreakoutStrategy:
                 "higher_tf_not_aligned",
             }
             if any(marker in (blockers or []) for marker in watch_markers) or any(
-                marker in (cautions or []) for marker in {"opposite_pressure", "adx_not_confirmed", "far_from_vwap"}
+                marker in (cautions or []) for marker in {"opposite_pressure", "adx_not_confirmed", "far_from_vwap", "pressure_neutral"}
             ):
                 return "WATCH"
         return "IGNORE"
@@ -517,6 +519,7 @@ class BreakoutStrategy:
             "opposite_pressure",
             "far_from_vwap",
             "adx_not_confirmed",
+            "pressure_neutral",
         }
         return sum(1 for caution in (cautions or []) if caution in soft_conflicts)
 
@@ -766,6 +769,28 @@ class BreakoutStrategy:
 
         return thresholds
 
+    @staticmethod
+    def _direction_vwap_aligned(direction, price, vwap):
+        if direction == "CE":
+            return price is not None and vwap is not None and price > vwap
+        if direction == "PE":
+            return price is not None and vwap is not None and price < vwap
+        return False
+
+    @staticmethod
+    def _previous_candle(recent_candles_5m):
+        if not recent_candles_5m or len(recent_candles_5m) < 2:
+            return None
+        return recent_candles_5m[-2]
+
+    @staticmethod
+    def _append_cautions(existing, *new_flags):
+        merged = list(existing or [])
+        for flag in new_flags:
+            if flag and flag not in merged:
+                merged.append(flag)
+        return merged
+
     def _confidence_from_score(self, score, volume_signal, pressure_metrics, cautions):
         pressure_bias = pressure_metrics["pressure_bias"] if pressure_metrics else "NEUTRAL"
         if score >= 85 and volume_signal == "STRONG" and pressure_bias != "NEUTRAL" and not cautions:
@@ -1007,12 +1032,6 @@ class BreakoutStrategy:
             self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime="NO_DATA")
             return None, f"VWAP not ready | score={score}"
 
-        if pressure_metrics and pressure_metrics["pressure_bias"] == "NEUTRAL" and score < 58:
-            blockers.append("pressure_neutral")
-            self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime="CHOPPY")
-            self.last_is_expiry_day = self.expiry_rules.is_expiry_day(expiry)
-            return None, f"Pressure not aligned | score={score}"
-
         if self._is_invalid_candle(candle_open, candle_high, candle_low, candle_close, candle_volume):
             blockers.append("invalid_candle_data")
             self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime="NO_DATA", signal_type="NONE")
@@ -1117,6 +1136,22 @@ class BreakoutStrategy:
 
         provisional_confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
         time_thresholds = self._get_time_regime_thresholds(time_regime, fallback_mode)
+        neutral_pressure_soft_watch = (
+            pressure_metrics
+            and pressure_metrics["pressure_bias"] == "NEUTRAL"
+            and scored_direction in {"CE", "PE"}
+            and self._direction_vwap_aligned(scored_direction, price, vwap)
+            and volume_signal in ["NORMAL", "STRONG"]
+            and score >= max(time_thresholds["breakout_min_score"] - 2, 52)
+        )
+        if pressure_metrics and pressure_metrics["pressure_bias"] == "NEUTRAL":
+            if neutral_pressure_soft_watch:
+                cautions.append("pressure_neutral")
+            else:
+                blockers.append("pressure_neutral")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime="CHOPPY")
+                self.last_is_expiry_day = self.expiry_rules.is_expiry_day(expiry)
+                return None, f"Pressure not aligned | score={score}"
         adx_trade_ok = True
         mtf_trade_ok = True
         if scored_direction and recent_candles_5m and len(recent_candles_5m) >= 15:
@@ -1241,6 +1276,9 @@ class BreakoutStrategy:
         retest_zone = max(buffer * 1.2, tuning["retest_zone_floor"])
         active_retest = self.retest_setup
         active_confirmation = self.confirmation_setup
+        previous_candle = self._previous_candle(recent_candles_5m)
+        prev_high = previous_candle.get("high") if previous_candle else None
+        prev_low = previous_candle.get("low") if previous_candle else None
 
         if (
                 opening_drive_window
@@ -1641,6 +1679,112 @@ class BreakoutStrategy:
             self._reset_confirmation_setup()
             self._mark_signal_emitted("PE", "RETEST", candle_time, level=level, buffer=buffer)
             return "PE", f"Strong-context retest resistance entry below {level} | score={score}"
+
+        # =============================
+        # Previous Candle Break Confirmation
+        # Inspired by common VWAP-confirmation workflows for intraday trend entries.
+        # =============================
+        if (
+                prev_high is not None
+                and scored_direction == "CE"
+                and price > vwap
+                and candle_close is not None
+                and candle_close > prev_high
+                and (
+                    not orb_ready
+                    or orb_high is None
+                    or candle_close > orb_high
+                    or prev_high > orb_high
+                )
+                and candle_high is not None
+                and candle_high >= prev_high + max(buffer * 0.3, 4)
+                and volume_signal in ["NORMAL", "STRONG"]
+                and oi_bias in ["BULLISH", "NEUTRAL"]
+                and oi_trend in ["BULLISH", "NEUTRAL", None]
+                and bullish_build_up_ok
+                and candle_liquidity_ok
+                and bullish_ha_ok
+                and continuation_regime_ok
+                and not opening_session
+                and "near_resistance" not in cautions
+                and score >= max(time_thresholds["confirm_min_score"] - 2, 60)
+                and (
+                    pressure_conflict_level in {"NONE", "MILD"}
+                    or (
+                        score >= 74
+                        and "opposite_pressure" not in cautions
+                    )
+                )
+        ):
+            if self._should_suppress_duplicate("CE", "BREAKOUT_CONFIRM", candle_time, prev_high):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate previous-candle breakout suppressed | score={score}"
+            confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
+            self._set_diagnostics(
+                blockers=blockers,
+                cautions=cautions,
+                confidence=confidence,
+                regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                signal_type="BREAKOUT_CONFIRM",
+            )
+            self._remember_breakout_context("CE", "BREAKOUT_CONFIRM", candle_time, prev_high, score)
+            self.last_entry_plan = self._build_entry_plan("CE", "BREAKOUT_CONFIRM", prev_high, orb_low, atr, support, resistance)
+            self._reset_retest_setup()
+            self._reset_confirmation_setup()
+            self._mark_signal_emitted("CE", "BREAKOUT_CONFIRM", candle_time, level=prev_high, buffer=buffer)
+            return "CE", f"Previous-candle breakout confirmation above {prev_high} | score={score}"
+
+        if (
+                prev_low is not None
+                and scored_direction == "PE"
+                and price < vwap
+                and candle_close is not None
+                and candle_close < prev_low
+                and (
+                    not orb_ready
+                    or orb_low is None
+                    or candle_close < orb_low
+                    or prev_low < orb_low
+                )
+                and candle_low is not None
+                and candle_low <= prev_low - max(buffer * 0.3, 4)
+                and volume_signal in ["NORMAL", "STRONG"]
+                and oi_bias in ["BEARISH", "NEUTRAL"]
+                and oi_trend in ["BEARISH", "NEUTRAL", None]
+                and bearish_build_up_ok
+                and candle_liquidity_ok
+                and bearish_ha_ok
+                and continuation_regime_ok
+                and not opening_session
+                and "near_support" not in cautions
+                and score >= max(time_thresholds["confirm_min_score"] - 2, 60)
+                and (
+                    pressure_conflict_level in {"NONE", "MILD"}
+                    or (
+                        score >= 74
+                        and "opposite_pressure" not in cautions
+                    )
+                )
+        ):
+            if self._should_suppress_duplicate("PE", "BREAKOUT_CONFIRM", candle_time, prev_low):
+                blockers.append("duplicate_signal_suppressed")
+                self._set_diagnostics(blockers=blockers, cautions=cautions, confidence="LOW", regime=regime, signal_type="NONE")
+                return None, f"Duplicate previous-candle breakdown suppressed | score={score}"
+            confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
+            self._set_diagnostics(
+                blockers=blockers,
+                cautions=cautions,
+                confidence=confidence,
+                regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                signal_type="BREAKOUT_CONFIRM",
+            )
+            self._remember_breakout_context("PE", "BREAKOUT_CONFIRM", candle_time, prev_low, score)
+            self.last_entry_plan = self._build_entry_plan("PE", "BREAKOUT_CONFIRM", prev_low, orb_high, atr, support, resistance)
+            self._reset_retest_setup()
+            self._reset_confirmation_setup()
+            self._mark_signal_emitted("PE", "BREAKOUT_CONFIRM", candle_time, level=prev_low, buffer=buffer)
+            return "PE", f"Previous-candle breakdown confirmation below {prev_low} | score={score}"
 
         # =============================
         # CE BREAKOUT (Smart Money Confirmation)
@@ -2118,12 +2262,42 @@ class BreakoutStrategy:
             if scored_direction and score >= Config.MIN_SCORE_THRESHOLD and not any([breakout_regime_ok, continuation_regime_ok, retest_regime_ok, reversal_regime_ok]):
                 blockers.append("regime_filter")
 
+            strong_directional_watch = (
+                scored_direction in {"CE", "PE"}
+                and score >= max(time_thresholds["breakout_min_score"], 60)
+                and self.last_entry_score >= 54
+                and self._direction_vwap_aligned(scored_direction, price, vwap)
+                and candle_liquidity_ok
+            )
+            confirmation_level = None
+            if orb_ready:
+                confirmation_level = orb_high if scored_direction == "CE" else orb_low
+            elif candle_high is not None and candle_low is not None:
+                confirmation_level = candle_high if scored_direction == "CE" else candle_low
+
             blockers.append("direction_present_but_filters_incomplete")
             if opening_session:
                 if not opening_breakout_override:
-                    blockers.append("opening_session_confirmation_pending")
+                    if strong_directional_watch and confirmation_level is not None:
+                        self._set_confirmation_setup(scored_direction, confirmation_level, candle_time, score)
+                        cautions = self._append_cautions(
+                            cautions,
+                            "confirmation_watch_active",
+                            "opening_session_confirmation_pending",
+                        )
+                    else:
+                        blockers.append("opening_session_confirmation_pending")
             if not breakout_body_ok:
-                blockers.append("weak_breakout_body")
+                if strong_directional_watch and confirmation_level is not None:
+                    if active_confirmation is None:
+                        self._set_confirmation_setup(scored_direction, confirmation_level, candle_time, score)
+                    cautions = self._append_cautions(
+                        cautions,
+                        "confirmation_watch_active",
+                        "weak_breakout_body",
+                    )
+                else:
+                    blockers.append("weak_breakout_body")
             if not breakout_structure_ok:
                 blockers.append("breakout_structure_weak")
             if not candle_liquidity_ok:

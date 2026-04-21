@@ -54,6 +54,16 @@ def _watch_bucket_label(bucket):
     return labels.get((bucket or "NONE").upper(), (bucket or "Watch").replace("_", " ").title())
 
 
+def _watch_trigger_line(direction, trigger_price):
+    if trigger_price is None:
+        return None
+    if direction == "CE":
+        return f"CE watch above {trigger_price}"
+    if direction == "PE":
+        return f"PE watch below {trigger_price}"
+    return f"Watch trigger {trigger_price}"
+
+
 def _action_plan_for_setup(setup, direction, trigger_price, invalidate_price):
     setup = (setup or "WATCH").upper()
     direction_word = "upside" if direction == "CE" else "downside"
@@ -250,7 +260,13 @@ class Notifier:
         short_reason = _reason_summary(reason)
 
         lines = []
-        header = f"{instrument} WATCH {direction}" if instrument else f"WATCH {direction}"
+        trigger_line = _watch_trigger_line(direction, trigger_price)
+        if instrument and trigger_line:
+            header = f"{instrument} {trigger_line}"
+        elif instrument:
+            header = f"{instrument} WATCH {direction}"
+        else:
+            header = trigger_line or f"WATCH {direction}"
         lines.append(header)
         summary = []
         if setup and setup != "NONE":
@@ -271,11 +287,11 @@ class Notifier:
         if spot_price is not None:
             levels.append(f"Spot: {spot_price}")
         if trigger_price is not None:
-            levels.append(f"Watch trigger: {trigger_price}")
+            levels.append(f"Trigger: {trigger_price}")
         if invalidate_price is not None:
             levels.append(f"Risk level: {invalidate_price}")
         if first_target_price is not None:
-            levels.append(f"If confirms: {first_target_price}")
+            levels.append(f"If confirms target: {first_target_price}")
         if levels:
             lines.append(" | ".join(levels))
         if context:

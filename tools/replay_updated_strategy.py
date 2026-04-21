@@ -180,8 +180,8 @@ def derive_15m_trend_from_5m(candles_5m):
     return calculate_trend_from_candles(grouped, lookback=min(5, len(grouped)))
 
 
-def replay(candles, snapshot_map, disable_continuation=False):
-    strategy = BreakoutStrategy()
+def replay(candles, snapshot_map, instrument, disable_continuation=False):
+    strategy = BreakoutStrategy(instrument=instrument)
     vwap = VWAPCalculator()
     atr = ATRCalculator()
     orb = ORB()
@@ -211,6 +211,10 @@ def replay(candles, snapshot_map, disable_continuation=False):
             orb_high, orb_low = orb.get_orb_levels()
         else:
             orb_high, orb_low = orb.calculate_orb()
+            if orb_high is None or orb_low is None:
+                # Historical DB 5m candles are stored by close timestamp, so the
+                # official 09:15-09:30 ORB window may be unavailable in replay.
+                orb_high, orb_low = orb.get_fallback_levels(candles[max(0, idx - 2):idx + 1])
 
         option_data = to_option_data(find_latest_band_snapshot(snapshot_map, ts))
         if option_data:
@@ -351,6 +355,7 @@ def main():
     results, blocker_counter, caution_counter = replay(
         candles,
         snapshot_map,
+        args.instrument,
         disable_continuation=args.disable_continuation,
     )
     print_summary(results, blocker_counter, caution_counter, args)

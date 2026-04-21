@@ -159,6 +159,9 @@ class SignalService:
         if self.active_trade_monitor:
             self._log("   ⚠️  Clearing active trade monitor (may have expired during sleep)")
             self.active_trade_monitor = None
+        if self.pending_entry_watch:
+            self._log("   ⚠️  Clearing pending entry watch (needs fresh 1m confirmation after sleep)")
+            self.pending_entry_watch = None
         
         # Refresh indicator state from recent history
         try:
@@ -181,6 +184,222 @@ class SignalService:
             "last_notified_minute": None,
             "minutes_active": 0,
         }
+
+    def _clear_pending_entry_watch(self):
+        self.pending_entry_watch = None
+
+    @staticmethod
+    def _one_minute_trigger_volume_ok(recent_1m_candles):
+        if not recent_1m_candles:
+            return False
+
+        latest = recent_1m_candles[-1]
+        latest_volume = latest.get("volume") or 0
+        if latest_volume <= 0:
+            return False
+
+        prior = recent_1m_candles[-4:-1]
+        if not prior:
+            return True
+
+        prior_volumes = [candle.get("volume") or 0 for candle in prior]
+        avg_prior_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0
+        previous_volume = prior_volumes[-1] if prior_volumes else 0
+        minimum_needed = max(avg_prior_volume, previous_volume * 0.9)
+        return latest_volume >= minimum_needed
+
+    @staticmethod
+    def _pending_watch_risk_reward_ok(pending):
+        trigger_price = pending.get("trigger_price")
+        invalidate_price = pending.get("invalidate_price")
+        first_target = pending.get("first_target_price")
+        if trigger_price is None or invalidate_price is None or first_target is None:
+            return True
+
+        risk = abs(float(trigger_price) - float(invalidate_price))
+        reward = abs(float(first_target) - float(trigger_price))
+        if risk <= 0:
+            return False
+        return reward >= (risk * 0.9)
+
+    def _set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m):
+        if not watch_payload:
+            self._clear_pending_entry_watch()
+            return
+
+        direction = watch_payload.get("direction")
+        trigger_price = watch_payload.get("trigger_price")
+        if direction not in {"CE", "PE"} or trigger_price is None:
+            self._clear_pending_entry_watch()
+            return
+
+        score = watch_payload.get("score") or 0
+        entry_score = watch_payload.get("entry_score") or 0
+        watch_bucket = watch_payload.get("watch_bucket")
+        if watch_bucket == "WATCH_CONTEXT":
+            self._clear_pending_entry_watch()
+            return
+        if score < 68 and entry_score < 60:
+            self._clear_pending_entry_watch()
+            return
+
+        self.pending_entry_watch = {
+            "instrument": self.instrument,
+            "direction": direction,
+            "trigger_price": float(trigger_price),
+            "invalidate_price": watch_payload.get("invalidate_price"),
+            "first_target_price": watch_payload.get("first_target_price"),
+            "score": score,
+            "entry_score": entry_score,
+            "confidence": watch_payload.get("confidence"),
+            "signal_type": watch_payload.get("setup"),
+            "signal_grade": watch_payload.get("signal_grade"),
+            "watch_bucket": watch_payload.get("watch_bucket"),
+            "quality": (balanced_pro or {}).get("quality"),
+            "time_regime": (balanced_pro or {}).get("time_regime"),
+            "created_at": candle_5m["time"],
+            "last_checked_minute": None,
+            "reason": watch_payload.get("reason"),
+        }
+
+    def _evaluate_pending_entry_watch(self, recent_1m_candles):
+        if not self.pending_entry_watch or len(recent_1m_candles) < 2:
+            return None
+
+        pending = self.pending_entry_watch
+        latest = recent_1m_candles[-1]
+        previous = recent_1m_candles[-2]
+        created_at = pending["created_at"]
+        if created_at is not None and latest["time"] is not None:
+            if getattr(created_at, "tzinfo", None) is None and getattr(latest["time"], "tzinfo", None) is not None:
+                created_at = created_at.replace(tzinfo=latest["time"].tzinfo)
+            elif getattr(created_at, "tzinfo", None) is not None and getattr(latest["time"], "tzinfo", None) is None:
+                latest = {**latest, "time": latest["time"].replace(tzinfo=created_at.tzinfo)}
+                previous = {
+                    **previous,
+                    "time": previous["time"].replace(tzinfo=created_at.tzinfo)
+                    if getattr(previous["time"], "tzinfo", None) is None else previous["time"],
+                }
+        minutes_since_watch = int((latest["time"] - created_at).total_seconds() // 60)
+        if minutes_since_watch < 1:
+            return None
+        if minutes_since_watch > 20:
+            return {"status": "EXPIRED", "reason": "1m confirmation window expired"}
+
+        trigger_price = pending["trigger_price"]
+        invalidate_price = pending.get("invalidate_price")
+        direction = pending["direction"]
+        one_min_buffer = 2 if self.instrument == "NIFTY" else 5
+
+        if not self._pending_watch_risk_reward_ok(pending):
+            return {"status": "INVALIDATED", "reason": "Watch risk-reward not attractive for 1m trigger"}
+
+        if direction == "CE":
+            if invalidate_price is not None and latest["low"] <= invalidate_price:
+                return {"status": "INVALIDATED", "reason": "Watch invalidated before 1m trigger"}
+            trigger_hit = latest["close"] > trigger_price and latest["high"] >= trigger_price + one_min_buffer
+            body_ok = latest["close"] >= latest["open"]
+            follow_through_ok = latest["close"] > previous["high"] or (
+                previous["close"] > trigger_price and latest["close"] >= previous["close"]
+            )
+        else:
+            if invalidate_price is not None and latest["high"] >= invalidate_price:
+                return {"status": "INVALIDATED", "reason": "Watch invalidated before 1m trigger"}
+            trigger_hit = latest["close"] < trigger_price and latest["low"] <= trigger_price - one_min_buffer
+            body_ok = latest["close"] <= latest["open"]
+            follow_through_ok = latest["close"] < previous["low"] or (
+                previous["close"] < trigger_price and latest["close"] <= previous["close"]
+            )
+
+        volume_ok = self._one_minute_trigger_volume_ok(recent_1m_candles)
+        if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
+            return None
+
+        return {
+            "status": "TRIGGERED",
+            "price": latest["close"],
+            "time": latest["time"],
+            "reason": "1m trigger confirmed after 5m watch",
+        }
+
+    def _maybe_fire_pending_entry_watch(self, latest_5m_candle):
+        if not self.pending_entry_watch:
+            return
+
+        recent_1m_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=6)
+        if len(recent_1m_candles) < 2:
+            return
+
+        latest_1m = recent_1m_candles[-1]
+        minute_key = latest_1m["time"]
+        if self.pending_entry_watch.get("last_checked_minute") == minute_key:
+            return
+        self.pending_entry_watch["last_checked_minute"] = minute_key
+
+        evaluation = self._evaluate_pending_entry_watch(recent_1m_candles)
+        if not evaluation:
+            return
+
+        if evaluation["status"] in {"EXPIRED", "INVALIDATED"}:
+            self._clear_pending_entry_watch()
+            return
+
+        pending = self.pending_entry_watch
+        signal = pending["direction"]
+        trigger_price = pending["trigger_price"]
+        strike = None
+        if self.option_data:
+            strike, _ = self.strike_selector.select_strike_with_reason(
+                price=evaluation["price"],
+                signal=signal,
+                volume_signal="NORMAL",
+                strategy_score=pending["score"],
+                pressure_metrics=None,
+            )
+
+        self.notifier.send_entry_trigger_notification(
+            {
+                "instrument": self.instrument,
+                "signal": signal,
+                "strike": strike,
+                "confidence": pending.get("confidence"),
+                "signal_type": pending.get("signal_type"),
+                "signal_grade": pending.get("signal_grade"),
+                "price": round(evaluation["price"], 2),
+                "trigger_price": trigger_price,
+            }
+        )
+
+        balanced_pro = {
+            "quality": pending.get("quality"),
+            "setup": pending.get("signal_type"),
+            "tradability": "ACTION",
+            "time_regime": pending.get("time_regime"),
+        }
+        self.strategy.last_entry_plan = {
+            "entry_above": trigger_price if signal == "CE" else None,
+            "entry_below": trigger_price if signal == "PE" else None,
+            "invalidate_price": pending.get("invalidate_price"),
+            "first_target_price": pending.get("first_target_price"),
+        }
+        self._safe_save_signal_issued(
+            ts=evaluation["time"],
+            signal=signal,
+            price=evaluation["price"],
+            strike=strike,
+            reason=(
+                f"1m entry trigger after 5m watch | setup={pending.get('signal_type')} "
+                f"| watch_bucket={pending.get('watch_bucket')} | base_reason={pending.get('reason')}"
+            ),
+            balanced_pro=balanced_pro,
+            oi_mode="WATCH_TO_1M_TRIGGER",
+            telegram_sent=Config.ENABLE_ALERTS,
+            monitor_started=True,
+            entry_window_end=evaluation["time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES),
+        )
+        self._start_trade_monitor(signal, latest_5m_candle, evaluation["price"], balanced_pro, strike)
+        self.signals_generated += 1
+        self._clear_pending_entry_watch()
 
     def _evaluate_trade_monitor(self, recent_1m_candles, recent_5m_candles):
         """Generate momentum-focused option-buyer guidance using 1m and 5m structure."""
@@ -962,8 +1181,14 @@ class SignalService:
         if not strong_watch:
             return None
 
-        trigger_price = orb_high if direction == "CE" else orb_low
-        invalidate_price = support if direction == "CE" else resistance
+        planned_trigger = (
+            self.strategy.last_entry_plan.get("entry_above")
+            if direction == "CE"
+            else self.strategy.last_entry_plan.get("entry_below")
+        )
+        trigger_price = planned_trigger if planned_trigger is not None else (orb_high if direction == "CE" else orb_low)
+        planned_invalidate = self.strategy.last_entry_plan.get("invalidate_price")
+        invalidate_price = planned_invalidate if planned_invalidate is not None else (support if direction == "CE" else resistance)
         setup = self.strategy.last_signal_type or balanced_pro.get("setup") or "WATCH"
         if setup == "NONE":
             return None
@@ -1272,6 +1497,7 @@ class SignalService:
                     if candle_5m.get("close_time") else None
                 ),
             )
+            self._clear_pending_entry_watch()
             self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
             self.signals_generated += 1
         else:
@@ -1286,6 +1512,7 @@ class SignalService:
                 support=support,
                 resistance=resistance,
             )
+            self._set_pending_entry_watch(watch_payload, balanced_pro, candle_5m)
             self._maybe_send_watch_alert(watch_payload)
             print(
                 f"[Signal Service] No signal | Bias: {balanced_pro['bias']} | "
@@ -1416,8 +1643,11 @@ class SignalService:
                     self.last_processed_5m_ts = candle_time
 
                 current_minute = current_time.replace(second=0, microsecond=0)
-                if self.active_trade_monitor and current_minute != self.last_monitor_check_minute:
-                    self._maybe_send_trade_monitor_update(latest_candle)
+                if current_minute != self.last_monitor_check_minute:
+                    if self.pending_entry_watch:
+                        self._maybe_fire_pending_entry_watch(latest_candle)
+                    if self.active_trade_monitor:
+                        self._maybe_send_trade_monitor_update(latest_candle)
                     self.last_monitor_check_minute = current_minute
                 
                 # Periodic checks

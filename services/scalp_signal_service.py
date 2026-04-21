@@ -67,6 +67,29 @@ class ScalpSignalService:
         self.last_heartbeat = 0
         self.cooldown_seconds = self.scalp_config['cooldown']  # Use config cooldown
 
+    def _rebuild_intraday_context(self, recent_candles):
+        """Rebuild VWAP and volume context from recent 1m candles."""
+        self.vwap.reset()
+        self.volume.reset()
+
+        if not recent_candles:
+            return None, "NO_DATA"
+
+        vwap_value = None
+        for candle in recent_candles:
+            vwap_value = self.vwap.update(candle)
+
+        # Use prior candles only for the current-candle volume baseline.
+        for candle in recent_candles[:-1]:
+            self.volume.update(candle)
+
+        current_volume = recent_candles[-1]["volume"]
+        volume_signal = self.volume.get_volume_signal(current_volume)
+        if volume_signal == "NO_DATA":
+            volume_signal = "NORMAL"
+
+        return vwap_value, volume_signal
+
     def _log(self, message):
         """Log with timestamp"""
         log_with_timestamp(f"[Scalp {self.instrument}] {message}")
@@ -101,13 +124,20 @@ class ScalpSignalService:
         try:
             price = candle_1m["close"]
 
-            # Get VWAP
-            vwap_value = self.vwap.get_vwap(price)
-
             # Get recent candles for volume and ATR analysis
             recent_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=14)
-            self.volume.analyze_candles(recent_candles)
-            volume_signal = self.volume.get_volume_signal(candle_1m["volume"])
+            if not recent_candles:
+                self._log("Skipping 1m candle - no recent candles available")
+                return None
+
+            # Make sure the newest candle participates in intraday context.
+            if recent_candles[-1]["time"] != candle_1m["time"]:
+                recent_candles.append(candle_1m)
+
+            vwap_value, volume_signal = self._rebuild_intraday_context(recent_candles)
+            if vwap_value is None or vwap_value <= 0:
+                self._log("Skipping 1m candle - VWAP not ready")
+                return None
             
             # Calculate ATR (simplified - using last 14 candles)
             atr_value = 0
@@ -231,6 +261,14 @@ class ScalpSignalService:
         self._log(f"   Stop: {self.scalp_config['stop']} pts")
         self._log(f"   Min ATR: {self.scalp_config['min_atr']}")
         self._log(f"   Cooldown: {self.scalp_config['cooldown']}s")
+
+        # Warm up the 1m-derived indicators so the first live candle has context.
+        recent_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=30)
+        if recent_candles:
+            vwap_value, volume_signal = self._rebuild_intraday_context(recent_candles)
+            self._log(
+                f"   Warmup: {len(recent_candles)} candles | VWAP: {round(vwap_value, 2) if vwap_value else 'NA'} | Volume: {volume_signal}"
+            )
 
         try:
             loop_count = 0

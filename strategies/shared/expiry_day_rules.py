@@ -8,8 +8,9 @@ class ExpiryDayRules:
     Keeps expiry logic separate from the base strategy so normal sessions stay clean.
     """
 
-    def __init__(self, time_utils):
+    def __init__(self, time_utils, instrument="NIFTY"):
         self.time_utils = time_utils
+        self.instrument = (instrument or "NIFTY").upper()
 
     @staticmethod
     def _parse_expiry(expiry_value):
@@ -33,14 +34,32 @@ class ExpiryDayRules:
             return False
         return self.time_utils.now_ist().date() == expiry_date
 
-    @staticmethod
-    def _expiry_vwap_distance_limit():
-        symbol = (getattr(Config, "SYMBOL", "") or "").upper()
+    def _expiry_vwap_distance_limit(self):
+        symbol = self.instrument
         if symbol == "SENSEX":
             return 140
         if symbol == "BANKNIFTY":
             return 90
         return 45
+
+    def _opening_whipsaw_cutoff(self):
+        if self.instrument == "NIFTY":
+            return time(9, 40)
+        return time(9, 45)
+
+    def _midday_score_floor(self):
+        if self.instrument == "BANKNIFTY":
+            return 76
+        if self.instrument == "SENSEX":
+            return 74
+        return 78
+
+    def _late_session_score_floor(self):
+        if self.instrument == "BANKNIFTY":
+            return 74
+        if self.instrument == "SENSEX":
+            return 72
+        return 76
 
     def evaluate(
             self,
@@ -76,21 +95,27 @@ class ExpiryDayRules:
         )
         high_conviction_expiry_trend = (
             current_signal in {"CE", "PE"}
-            and score >= 80
+            and score >= 76
             and confidence in {"MEDIUM", "HIGH"}
-            and volume_signal == "STRONG"
+            and volume_signal in {"NORMAL", "STRONG"}
             and not opposite_pressure
         )
+        soft_expiry_trend = (
+            current_signal in {"CE", "PE"}
+            and score >= 72
+            and confidence in {"MEDIUM", "HIGH"}
+            and volume_signal != "WEAK"
+        )
 
-        if time(9, 15) <= now < time(9, 45):
+        if time(9, 15) <= now < self._opening_whipsaw_cutoff() and not high_conviction_expiry_trend:
             blockers.append("expiry_opening_whipsaw_window")
             allow_trade = False
 
-        if time(11, 30) <= now < time(13, 30) and score < 85 and not high_conviction_expiry_trend:
+        if time(11, 30) <= now < time(13, 30) and score < self._midday_score_floor() and not high_conviction_expiry_trend:
             blockers.append("expiry_midday_chop_window")
             allow_trade = False
 
-        if now >= time(13, 30) and score < 82 and not high_conviction_expiry_trend:
+        if now >= time(13, 30) and score < self._late_session_score_floor() and not high_conviction_expiry_trend:
             blockers.append("expiry_late_session_requires_high_score")
             allow_trade = False
 
@@ -98,7 +123,7 @@ class ExpiryDayRules:
             blockers.append("expiry_requires_medium_plus_confidence")
             allow_trade = False
 
-        if volume_signal == "WEAK":
+        if volume_signal == "WEAK" and not soft_expiry_trend:
             blockers.append("expiry_weak_volume")
             allow_trade = False
 
@@ -106,10 +131,10 @@ class ExpiryDayRules:
             blockers.append("expiry_too_far_from_vwap")
             allow_trade = False
 
-        if current_signal == "CE" and pressure_bias == "BEARISH":
+        if current_signal == "CE" and pressure_bias == "BEARISH" and not high_conviction_expiry_trend and score < 78:
             blockers.append("expiry_opposite_pressure")
             allow_trade = False
-        elif current_signal == "PE" and pressure_bias == "BULLISH":
+        elif current_signal == "PE" and pressure_bias == "BULLISH" and not high_conviction_expiry_trend and score < 78:
             blockers.append("expiry_opposite_pressure")
             allow_trade = False
 
