@@ -162,6 +162,19 @@ class CollectorLauncher:
             f"(pid={process.pid}) | log={log_path}"
         )
 
+    def _verify_started_processes(self, retries=4, delay_seconds=1.0):
+        missing = []
+        for _ in range(retries):
+            missing = []
+            for entry in self.processes:
+                process = entry.get("process")
+                if process is None or process.poll() is not None:
+                    missing.append(entry)
+            if not missing:
+                return True, []
+            time.sleep(delay_seconds)
+        return False, missing
+
     def _update_future_ids_cache(self):
         """Ensure future IDs are cached for all instruments"""
         try:
@@ -221,6 +234,19 @@ class CollectorLauncher:
             self._spawn("oi_collector", instrument)
             if self.stagger_seconds > 0:
                 time.sleep(self.stagger_seconds)
+
+        healthy, missing = self._verify_started_processes()
+        if not healthy:
+            print("[Launcher] Collector startup verification failed.")
+            for entry in missing:
+                process = entry.get("process")
+                pid = process.pid if process else entry.get("pid")
+                print(
+                    f"[Launcher] Missing/Exited: {entry['service']}:{entry['instrument']} "
+                    f"(pid={pid})"
+                )
+            self._save_state()
+            raise SystemExit(1)
 
         print("[Launcher] All collector services started.")
         print("[Launcher] Press Ctrl+C to stop all collectors.")

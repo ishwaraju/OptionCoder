@@ -63,7 +63,11 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
     <connection id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" />
   </component>
   <component name="DBNavigator.Project.DatasetFilterManager">
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.oi_snapshots_1m" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.oi_snapshots_1m" active-filter-id="c9a9de05-69a5-4d13-b9d0-44825ecdb993">
+      <filter id="c9a9de05-69a5-4d13-b9d0-44825ecdb993" name="Filter 1" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>"ts" >= '2026-04-22 00:00:00'<br>and "ts" < '2026-04-24 00:00:00';]]></condition>
+      </filter>
+    </filter-actions>
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.candles_1m" active-filter-id="EMPTY_FILTER">
       <filter id="56fc5bdf-9a0b-4a39-9f85-135736258288" name="Filter" temporary="false" custom-name="false" type="basic" join-type="AND">
         <condition column="id" operator="=" value="" active="true" />
@@ -81,13 +85,18 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
       </filter>
     </filter-actions>
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.signals_issued" active-filter-id="EMPTY_FILTER" />
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.scalp_signals_1m" active-filter-id="">
-      <filter id="5a233271-1c1b-4e26-abd5-252c36fa2b3f" name="Filter" temporary="false" custom-name="false" type="basic" join-type="AND">
-        <condition column="instrument" operator="=" value="" active="true" />
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.scalp_signals_1m" active-filter-id="EMPTY_FILTER">
+      <filter id="5a233271-1c1b-4e26-abd5-252c36fa2b3f" name="CURRENT_DATE &amp; CURRENT_DATE + INTERVAL '..." temporary="false" custom-name="false" type="basic" join-type="AND">
+        <condition column="ts" operator="&gt;=" value="CURRENT_DATE" active="true" />
+        <condition column="ts" operator="&lt;" value="CURRENT_DATE + INTERVAL '1 day'" active="true" />
       </filter>
     </filter-actions>
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.candles_5m" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.candles_5m" active-filter-id="2f633ca1-d05e-4bea-a3ed-4064d733bfaf">
+      <filter id="2f633ca1-d05e-4bea-a3ed-4064d733bfaf" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>"ts" >= '2026-04-23 00:00:00'<br>and "ts" < '2026-04-24 00:00:00';]]></condition>
+      </filter>
+    </filter-actions>
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.strategy_decisions_5m" active-filter-id="EMPTY_FILTER" />
   </component>
   <component name="DBNavigator.Project.ExecutionManager">

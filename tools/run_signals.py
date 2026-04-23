@@ -119,6 +119,19 @@ class SignalServiceManager:
         except Exception:
             return None
 
+    def _verify_started_processes(self, retries=4, delay_seconds=1.0):
+        missing = []
+        for _ in range(retries):
+            missing = []
+            for entry in self.processes:
+                process = entry.get("process")
+                if process is None or process.poll() is not None:
+                    missing.append(entry)
+            if not missing:
+                return True, []
+            time.sleep(delay_seconds)
+        return False, missing
+
     def start(self, instruments):
         """Start one or more signal service processes."""
         existing = self._load_processes_from_state()
@@ -169,6 +182,19 @@ class SignalServiceManager:
                 f"[Signal Manager] Signal service started for {instrument} "
                 f"(pid={process.pid}) | log={log_path}"
             )
+
+        healthy, missing = self._verify_started_processes()
+        if not healthy:
+            print("[Signal Manager] Signal startup verification failed.")
+            for entry in missing:
+                process = entry.get("process")
+                pid = process.pid if process else entry.get("pid")
+                print(
+                    f"[Signal Manager] Missing/Exited: {entry['instrument']} "
+                    f"(pid={pid})"
+                )
+            self._save_state()
+            raise SystemExit(1)
 
         print("[Signal Manager] Press Ctrl+C to stop all signal services")
         self._save_state()

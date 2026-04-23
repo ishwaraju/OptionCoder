@@ -13,6 +13,7 @@ from datetime import datetime
 from shared.utils.time_utils import TimeUtils
 from shared.utils.log_utils import log_with_timestamp
 import pytz
+from shared.utils.log_utils import build_log_path
 
 class AutoScheduler:
     def __init__(self):
@@ -56,15 +57,126 @@ class AutoScheduler:
                 break
             time.sleep(delay_seconds)
         return started, sorted(pending)
+
+    def _verify_telegram_started(self, retries=4, delay_seconds=1.5):
+        pids = []
+        for _ in range(retries):
+            pids = self._find_running_pids("services/telegram_bot_service.py")
+            if pids:
+                break
+            time.sleep(delay_seconds)
+        return pids
+
+    def _verify_collectors_started(self, retries=5, delay_seconds=1.5):
+        data_collector_pids = []
+        oi_started = {}
+        pending_oi = set(self.instruments)
+
+        for _ in range(retries):
+            if not data_collector_pids:
+                data_collector_pids = self._find_running_pids("services/data_collector.py --instruments")
+
+            resolved = []
+            for instrument in pending_oi:
+                pids = self._find_running_pids(f"services/oi_collector.py --instrument {instrument}")
+                if pids:
+                    oi_started[instrument] = pids
+                    resolved.append(instrument)
+
+            for instrument in resolved:
+                pending_oi.discard(instrument)
+
+            if data_collector_pids and not pending_oi:
+                break
+            time.sleep(delay_seconds)
+
+        return data_collector_pids, oi_started, sorted(pending_oi)
+
+    def _verify_signal_services_started(self, retries=5, delay_seconds=1.5):
+        started = {}
+        pending = set(self.instruments)
+
+        for _ in range(retries):
+            resolved = []
+            for instrument in pending:
+                pids = self._find_running_pids(f"services/signal_service.py --instrument {instrument}")
+                if pids:
+                    started[instrument] = pids
+                    resolved.append(instrument)
+            for instrument in resolved:
+                pending.discard(instrument)
+            if not pending:
+                break
+            time.sleep(delay_seconds)
+
+        return started, sorted(pending)
+
+    def _run_command(self, cmd):
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=os.getcwd(),
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
+        except Exception as e:
+            return 1, "", str(e)
+
+    def _log_service_snapshot(self, label, cmd):
+        code, stdout, stderr = self._run_command(cmd)
+        self._log(f"📋 {label}:")
+        if stdout:
+            for line in stdout.splitlines():
+                self._log(f"   {line}")
+        if stderr:
+            for line in stderr.splitlines():
+                self._log(f"   stderr: {line}")
+        if not stdout and not stderr:
+            self._log(f"   (no output, exit={code})")
+
+    def _log_start_snapshot(self):
+        self._log("🔎 Startup Status Snapshot")
+        self._log_service_snapshot("Collectors", ["python3", "tools/run_collectors.py", "status"])
+        self._log_service_snapshot("Signals", ["python3", "tools/run_signals.py", "status"])
+        self._log_service_snapshot("Scalp", ["python3", "tools/run_scalp.py", "status"])
+        telegram_pids = self._find_running_pids("services/telegram_bot_service.py")
+        if telegram_pids:
+            self._log(f"📋 Telegram:")
+            self._log(f"   running pid={telegram_pids[0]}")
+        else:
+            self._log("📋 Telegram:")
+            self._log("   not running")
         
     def start_collectors(self):
         """Start data collectors (non-blocking)"""
         try:
             self._log("🚀 Starting Data Collectors")
             cmd = ["python3", "tools/run_collectors.py", "start", "--instruments"] + self.instruments
-            # Use Popen (non-blocking) instead of run (blocking)
-            subprocess.Popen(cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self._log("✅ Collectors starter initiated (running in background)")
+            log_file = build_log_path("run_collectors")
+            log_fh = open(log_file, "a")
+            subprocess.Popen(
+                cmd,
+                cwd=os.getcwd(),
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+            time.sleep(2)
+            data_pids, oi_started, missing_oi = self._verify_collectors_started()
+            if data_pids and not missing_oi:
+                self._log(
+                    f"✅ Collectors started: data_collector={data_pids[0]} | "
+                    f"{', '.join(f'{k}={v[0]}' for k, v in oi_started.items())} | log={log_file}"
+                )
+            else:
+                self._log(
+                    f"⚠️ Collectors start incomplete. data_collector="
+                    f"{data_pids[0] if data_pids else 'missing'} | "
+                    f"OI running: {', '.join(f'{k}={v[0]}' for k, v in oi_started.items()) or 'none'} | "
+                    f"Missing OI: {', '.join(missing_oi) or 'none'} | log={log_file}"
+                )
         except Exception as e:
             self._log(f"❌ Error starting collectors: {e}")
     
@@ -73,9 +185,26 @@ class AutoScheduler:
         try:
             self._log("🚀 Starting Signal Services")
             cmd = ["python3", "tools/run_signals.py", "start", "--instruments"] + self.instruments
-            # Use Popen (non-blocking) instead of run (blocking)
-            subprocess.Popen(cmd, cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self._log("✅ Signal services initiated (running in background)")
+            log_file = build_log_path("run_signals")
+            log_fh = open(log_file, "a")
+            subprocess.Popen(
+                cmd,
+                cwd=os.getcwd(),
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+            time.sleep(2)
+            started, missing = self._verify_signal_services_started()
+            if not missing:
+                self._log(
+                    f"✅ Signal services started: {', '.join(f'{k}={v[0]}' for k, v in started.items())} | log={log_file}"
+                )
+            else:
+                self._log(
+                    f"⚠️ Signal start incomplete. Running: {', '.join(f'{k}={v[0]}' for k, v in started.items()) or 'none'} | "
+                    f"Missing: {', '.join(missing)} | log={log_file}"
+                )
         except Exception as e:
             self._log(f"❌ Error starting signals: {e}")
     
@@ -146,7 +275,11 @@ class AutoScheduler:
                 stderr=subprocess.STDOUT,
                 bufsize=1
             )
-            self._log(f"✅ Telegram Bot started (logging to: {log_file})")
+            pids = self._verify_telegram_started()
+            if pids:
+                self._log(f"✅ Telegram Bot started: pid={pids[0]} | log={log_file}")
+            else:
+                self._log(f"⚠️ Telegram Bot start incomplete | log={log_file}")
         except Exception as e:
             self._log(f"❌ Error starting telegram bot: {e}")
     
@@ -184,6 +317,17 @@ class AutoScheduler:
             self._log("✅ Telegram Bot stopped")
         except Exception as e:
             self._log(f"❌ Error stopping telegram bot: {e}")
+
+        self._log("🔎 Post-stop Status Snapshot")
+        self._log_service_snapshot("Collectors", ["python3", "tools/run_collectors.py", "status"])
+        self._log_service_snapshot("Signals", ["python3", "tools/run_signals.py", "status"])
+        self._log_service_snapshot("Scalp", ["python3", "tools/run_scalp.py", "status"])
+        telegram_pids = self._find_running_pids("services/telegram_bot_service.py")
+        self._log("📋 Telegram:")
+        if telegram_pids:
+            self._log(f"   still running pid={telegram_pids[0]}")
+        else:
+            self._log("   not running")
         
         self._log("=" * 50)
         self._log("🎉 All services stopped successfully!")
@@ -245,6 +389,8 @@ class AutoScheduler:
         time.sleep(4 * 60)  # Wait 4 minutes until 9:18 AM IST
 
         self.start_telegram_bot()
+
+        self._log_start_snapshot()
 
         self._log("=" * 50)
         self._log("🎉 All services started successfully!")
