@@ -324,14 +324,12 @@ class DataCollector:
         price = tick_data['price']
         volume = self._extract_effective_tick_volume(instrument, tick_data)
         
-        # Generate 1-minute candle
-        candle_1m, is_new_1m = self.candle_managers[instrument].add_tick(price, volume)
-        
-        if is_new_1m and candle_1m:
+        completed_1m_candles, _current_1m, _is_new_1m = self.candle_managers[instrument].add_tick(price, volume)
+
+        for candle_1m in completed_1m_candles:
             self._print_completed_1m_summary(instrument, candle_1m)
             self._safe_save_1m_candle(instrument, candle_1m)
-            
-            # Generate 5-minute candle
+
             candle_5m = self.candle_managers[instrument].add_minute_candle(candle_1m)
             if candle_5m:
                 self._print_completed_5m_summary(instrument, candle_5m)

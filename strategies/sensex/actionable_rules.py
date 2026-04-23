@@ -8,12 +8,22 @@ class SensexActionableRules:
         confidence = (confidence or "LOW").upper()
         regime = (regime or "UNKNOWN").upper()
 
-        if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "RETEST"}:
-            return False
-        if signal_grade not in {"A", "A+"}:
+        minute_of_day = None
+        if candle_time is not None:
+            minute_of_day = candle_time.hour * 60 + candle_time.minute
+        early_session = minute_of_day is not None and minute_of_day <= (10 * 60 + 45)
+
+        if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "RETEST", "CONTINUATION"}:
             return False
         if confidence not in {"MEDIUM", "HIGH"}:
             return False
-        if regime not in {"TRENDING", "EXPANDING", "EXPIRY_DAY"}:
+        if regime not in {"TRENDING", "EXPANDING", "EXPIRY_DAY", "OPENING_EXPANSION"}:
             return False
-        return True
+
+        if signal_grade in {"A", "A+"}:
+            return True
+
+        if early_session and signal_grade == "B" and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "CONTINUATION", "RETEST"}:
+            return True
+
+        return False

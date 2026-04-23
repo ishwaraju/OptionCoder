@@ -137,6 +137,7 @@ class MainConfig:
     MIN_SCORE_THRESHOLD = float(os.getenv('MIN_SCORE_THRESHOLD', '55.0'))
     MIN_HIGH_QUALITY_SCORE = float(os.getenv('MIN_HIGH_QUALITY_SCORE', '65.0'))
     AGGRESSIVE_MODE = os.getenv('AGGRESSIVE_MODE', 'False').lower() == 'true'
+    FOCUSED_MANUAL_MODE = os.getenv('FOCUSED_MANUAL_MODE', 'True').lower() == 'true'
 
     # ==============================
     # DEBUG SETTINGS

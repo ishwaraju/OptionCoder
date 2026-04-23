@@ -64,6 +64,21 @@ class CandleManager:
         self.minute_candles.append(completed)
         return completed
 
+    def _build_flat_gap_candle(self, minute_dt, price):
+        candle = {
+            "datetime": minute_dt,
+            "close_time": minute_dt + timedelta(minutes=1),
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": 0,
+            "tick_count": 0,
+            "synthetic": True,
+        }
+        self.minute_candles.append(candle)
+        return candle
+
     def _start_5m_candle(self, slot, minute_candle):
         self.current_5m_candle = {
             "time": slot,
@@ -88,11 +103,28 @@ class CandleManager:
         now = self.time_utils.now_ist()
         self.last_tick_time = now
         minute_dt = self._minute_slot(now)
+        completed_candles = []
+        is_new_minute = False
 
-        # New minute candle
-        if self.current_minute != minute_dt.strftime("%Y-%m-%d %H:%M"):
-            self._finalize_current_1m(minute_dt)
-            return self._start_1m_candle(minute_dt, price, volume), True
+        if self.current_1m_candle is None:
+            current = self._start_1m_candle(minute_dt, price, volume)
+            return completed_candles, current, True
+
+        current_dt = self.current_1m_candle["datetime"]
+        if minute_dt != current_dt:
+            is_new_minute = True
+            completed = self._finalize_current_1m(current_dt + timedelta(minutes=1))
+            if completed:
+                completed_candles.append(completed)
+
+            gap_cursor = current_dt + timedelta(minutes=1)
+            last_price = completed["close"] if completed else price
+            while gap_cursor < minute_dt:
+                completed_candles.append(self._build_flat_gap_candle(gap_cursor, last_price))
+                gap_cursor += timedelta(minutes=1)
+
+            current = self._start_1m_candle(minute_dt, price, volume)
+            return completed_candles, current, is_new_minute
 
         # Update current candle
         self.current_1m_candle["high"] = max(self.current_1m_candle["high"], price)
@@ -101,7 +133,7 @@ class CandleManager:
         self.current_1m_candle["volume"] += volume
         self.current_1m_candle["tick_count"] += 1
 
-        return self.current_1m_candle, False
+        return completed_candles, self.current_1m_candle, is_new_minute
 
     # =========================
     # 1-min → 5-min candle

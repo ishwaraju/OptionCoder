@@ -25,6 +25,12 @@ def _humanize_flag(flag):
         "heikin_ashi_strong_opposite": "Heikin Ashi opposite side strong hai",
         "time_filter": "time window allow nahi karta",
         "opening_session": "opening volatility high hai",
+        "participation_weak": "option participation weak hai",
+        "participation_spread_wide": "ATM option spread wide hai",
+        "participation_delta_missing": "same-side option volume delta strong nahi hai",
+        "participation_baseline_weak": "current option participation recent average se strong nahi hai",
+        "late_confirmation_wait_retest": "move extend ho chuka hai, retest ka wait better hai",
+        "hybrid_price_led_setup": "price structure strong hai, options confirmation partial hai",
     }
     return mapping.get(flag, flag.replace("_", " "))
 
@@ -256,6 +262,9 @@ class Notifier:
         reason = watch_data.get("reason")
         watch_bucket = watch_data.get("watch_bucket")
         confidence_summary = watch_data.get("confidence_summary")
+        entry_if = watch_data.get("entry_if")
+        avoid_if = watch_data.get("avoid_if")
+        participation_read = watch_data.get("participation_read")
         setup_label = _setup_label(setup)
         short_reason = _reason_summary(reason)
 
@@ -298,12 +307,18 @@ class Notifier:
             lines.append(f"Context: {context}")
         if confidence_summary:
             lines.append(f"Read: {confidence_summary}")
+        if participation_read:
+            lines.append(f"Participation: {participation_read}")
         if short_reason:
             lines.append(f"Why: {short_reason}")
         if blockers:
             lines.append("Missing: " + ", ".join(_humanize_flag(flag) for flag in blockers[:3]))
         if cautions:
             lines.append("Caution: " + ", ".join(_humanize_flag(flag) for flag in cautions[:3]))
+        if entry_if:
+            lines.append(f"Entry if: {entry_if}")
+        if avoid_if:
+            lines.append(f"Avoid if: {avoid_if}")
         plan = action_hint or _action_plan_for_setup(setup, direction, trigger_price, invalidate_price)
         if plan:
             lines.append(f"Plan: {plan}")

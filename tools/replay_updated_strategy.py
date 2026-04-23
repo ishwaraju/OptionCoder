@@ -2,7 +2,7 @@ import argparse
 import csv
 import subprocess
 import sys
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from datetime import datetime
 from pathlib import Path
 
@@ -121,6 +121,13 @@ def find_latest_band_snapshot(snapshot_map, ts):
     return snapshot_map[max(same_day)]
 
 
+def find_previous_band_snapshot(snapshot_map, ts):
+    same_day = [snapshot_ts for snapshot_ts in snapshot_map.keys() if snapshot_ts.date() == ts.date() and snapshot_ts < ts]
+    if not same_day:
+        return None
+    return snapshot_map[max(same_day)]
+
+
 def to_option_data(band_rows):
     if not band_rows:
         return None
@@ -144,6 +151,182 @@ def to_option_data(band_rows):
         "pe_oi": next((row["oi"] for row in pe_rows if row["distance_from_atm"] == 0), 0),
         "expiry": None,
     }
+
+
+def participation_row_weight(distance_from_atm):
+    distance = abs(distance_from_atm if distance_from_atm is not None else 99)
+    weights = {
+        0: 1.8,
+        1: 1.25,
+        2: 0.75,
+    }
+    return weights.get(distance, 0.35)
+
+
+def participation_phase(ts):
+    now = ts.time()
+    if now < datetime.strptime("09:45", "%H:%M").time():
+        return "OPENING"
+    if now < datetime.strptime("11:30", "%H:%M").time():
+        return "MID_MORNING"
+    if now < datetime.strptime("13:30", "%H:%M").time():
+        return "MIDDAY"
+    return "LATE"
+
+
+def rolling_average(history, direction):
+    series = list(history.get(direction) or [])
+    if not series:
+        return 0.0
+    return sum(series) / len(series)
+
+
+def build_option_participation_metrics(current_rows, previous_rows, ts, history):
+    if not current_rows:
+        return None
+
+    previous_map = {}
+    for row in previous_rows or []:
+        previous_map[(row.get("strike"), row.get("option_type"))] = row
+
+    def enrich(rows):
+        enriched = []
+        for row in rows:
+            prior = previous_map.get((row.get("strike"), row.get("option_type"))) or {}
+            enriched.append(
+                {
+                    **row,
+                    "previous_volume": prior.get("volume"),
+                    "previous_oi": prior.get("oi"),
+                }
+            )
+        return enriched
+
+    ce_rows = enrich([row for row in current_rows if row["option_type"] == "CE"])
+    pe_rows = enrich([row for row in current_rows if row["option_type"] == "PE"])
+    phase = participation_phase(ts)
+
+    def summarize(rows, atm_distance=2):
+        scoped = [row for row in rows if abs(row.get("distance_from_atm", 99)) <= atm_distance]
+        volume_delta = sum(
+            max(int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0), 0)
+            for row in scoped
+            if row.get("previous_volume") is not None
+        )
+        weighted_volume_delta = sum(
+            max(int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0), 0)
+            * participation_row_weight(row.get("distance_from_atm"))
+            for row in scoped
+            if row.get("previous_volume") is not None
+        )
+        oi_delta = sum(
+            int(row.get("oi", 0) or 0) - int(row.get("previous_oi", 0) or 0)
+            for row in scoped
+            if row.get("previous_oi") is not None
+        )
+        active_breadth = sum(
+            1
+            for row in scoped
+            if (
+                (int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0)) > 0
+                if row.get("previous_volume") is not None else int(row.get("volume", 0) or 0) > 0
+            )
+        )
+        weighted_breadth = sum(
+            participation_row_weight(row.get("distance_from_atm"))
+            for row in scoped
+            if (
+                (int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0)) > 0
+                if row.get("previous_volume") is not None else int(row.get("volume", 0) or 0) > 0
+            )
+        )
+        return {
+            "volume_delta": volume_delta,
+            "weighted_volume_delta": round(weighted_volume_delta, 2),
+            "oi_delta": oi_delta,
+            "active_breadth": active_breadth,
+            "weighted_breadth": round(weighted_breadth, 2),
+            "atm_spread_pct": None,
+            "atm_quote_ratio": None,
+        }
+
+    ce = summarize(ce_rows)
+    pe = summarize(pe_rows)
+
+    def directional_metrics(direction):
+        same_side = ce if direction == "CE" else pe
+        opposite_side = pe if direction == "CE" else ce
+        score_boost = 0
+        flags = []
+        baseline = rolling_average(history, direction)
+        opening_mode = phase == "OPENING"
+
+        same_dominates_delta = same_side["weighted_volume_delta"] > max(
+            opposite_side["weighted_volume_delta"] * (1.05 if opening_mode else 1.15),
+            baseline * (0.8 if opening_mode else 1.0),
+            0,
+        )
+        same_dominates_breadth = same_side["weighted_breadth"] >= (opposite_side["weighted_breadth"] + (0.2 if opening_mode else 0.45))
+        oi_supportive = same_side["oi_delta"] >= opposite_side["oi_delta"]
+        beats_own_baseline = same_side["weighted_volume_delta"] >= max(baseline * (0.95 if opening_mode else 1.1), 0)
+
+        if same_dominates_delta:
+            score_boost += 5
+            flags.append("same_side_volume_delta")
+        else:
+            score_boost -= 4
+            flags.append("same_side_volume_delta_missing")
+        if beats_own_baseline:
+            score_boost += 3
+            flags.append("same_side_vs_rolling_avg")
+        else:
+            score_boost -= 2
+            flags.append("same_side_vs_rolling_avg_missing")
+        if same_dominates_breadth:
+            score_boost += 4
+            flags.append("same_side_breadth")
+        else:
+            score_boost -= 3
+            flags.append("same_side_breadth_missing")
+        if oi_supportive:
+            score_boost += 3
+            flags.append("same_side_oi_delta")
+        else:
+            score_boost -= 2
+            flags.append("same_side_oi_delta_missing")
+
+        if score_boost >= 9:
+            quality = "STRONG"
+        elif score_boost >= 3:
+            quality = "MODERATE"
+        else:
+            quality = "WEAK"
+
+        return {
+            "quality": quality,
+            "score_boost": score_boost,
+            "same_side_volume_delta": same_side["volume_delta"],
+            "opposite_side_volume_delta": opposite_side["volume_delta"],
+            "same_side_weighted_delta": same_side["weighted_volume_delta"],
+            "opposite_side_weighted_delta": opposite_side["weighted_volume_delta"],
+            "rolling_avg_weighted_delta": round(baseline, 2),
+            "same_side_breadth": same_side["active_breadth"],
+            "opposite_side_breadth": opposite_side["active_breadth"],
+            "same_side_oi_delta": same_side["oi_delta"],
+            "opposite_side_oi_delta": opposite_side["oi_delta"],
+            "atm_spread_pct": same_side["atm_spread_pct"],
+            "atm_quote_ratio": same_side["atm_quote_ratio"],
+            "participation_phase": phase,
+            "flags": flags,
+        }
+
+    metrics = {
+        "CE": directional_metrics("CE"),
+        "PE": directional_metrics("PE"),
+    }
+    for direction in ("CE", "PE"):
+        history[direction].append(float((metrics.get(direction) or {}).get("same_side_weighted_delta", 0.0) or 0.0))
+    return metrics
 
 
 def can_trade_at(ts):
@@ -189,6 +372,10 @@ def replay(candles, snapshot_map, instrument, disable_continuation=False):
     oi = OIAnalyzer()
     oi_ladder = OILadder()
     pressure = PressureAnalyzer()
+    participation_history = {
+        "CE": deque(maxlen=12),
+        "PE": deque(maxlen=12),
+    }
 
     results = []
     blocker_counter = Counter()
@@ -216,7 +403,15 @@ def replay(candles, snapshot_map, instrument, disable_continuation=False):
                 # official 09:15-09:30 ORB window may be unavailable in replay.
                 orb_high, orb_low = orb.get_fallback_levels(candles[max(0, idx - 2):idx + 1])
 
-        option_data = to_option_data(find_latest_band_snapshot(snapshot_map, ts))
+        current_band_rows = find_latest_band_snapshot(snapshot_map, ts)
+        previous_band_rows = find_previous_band_snapshot(snapshot_map, ts)
+        option_data = to_option_data(current_band_rows)
+        participation_metrics = build_option_participation_metrics(
+            current_band_rows,
+            previous_band_rows,
+            ts,
+            participation_history,
+        )
         if option_data:
             oi.update(candle["close"], option_data.get("ce_oi", 0), option_data.get("pe_oi", 0))
             oi_bias = oi.get_bias()
@@ -261,6 +456,7 @@ def replay(candles, snapshot_map, instrument, disable_continuation=False):
             expiry=option_data.get("expiry") if option_data else None,
             recent_candles_5m=recent_candles_5m,
             trend_15m=trend_15m,
+            participation_metrics=participation_metrics,
         )
 
         if disable_continuation and strategy.last_signal_type in {"CONTINUATION", "AGGRESSIVE_CONTINUATION"}:

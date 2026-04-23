@@ -59,8 +59,9 @@ class ScalpStrategy:
         body = abs(candle_close - candle_open)
         candle_range = candle_high - candle_low
         
-        # STRICT: Skip low volatility candles
-        if candle_range < 8 or body < 5:  # Increased from 5/3 to 8/5
+        # DATA-DRIVEN: Skip extremely small candles (based on 25th percentile analysis)
+        # 25th percentile shows range=0, body=0 for many 1m candles - need reasonable minimum
+        if candle_range < 3 or body < 2:  # DATA-DRIVEN: Was 8/5 (too strict), now 3/2
             return None, 0, f"Candle too small (range:{candle_range:.1f}, body:{body:.1f})"
         
         # STRICT: Skip if ATR too low (market dead)

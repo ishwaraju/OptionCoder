@@ -12,6 +12,7 @@ import time as time_module
 import sys
 import os
 import argparse
+from collections import deque
 from datetime import timedelta, time, datetime
 
 # Add current directory to Python path
@@ -92,6 +93,11 @@ class SignalService:
         self.watch_alert_state = {}
         self.session_decisions = []
         self.pending_entry_watch = None
+        self.participation_history = {
+            "CE": deque(maxlen=12),
+            "PE": deque(maxlen=12),
+        }
+        self.last_participation_history_key = None
         self.day_high_5m = None
         self.day_low_5m = None
         self.opening_range_30_high = None
@@ -222,6 +228,25 @@ class SignalService:
             return False
         return reward >= (risk * 0.9)
 
+    @staticmethod
+    def _pending_watch_not_too_late(pending, latest_price):
+        trigger_price = pending.get("trigger_price")
+        first_target = pending.get("first_target_price")
+        direction = pending.get("direction")
+        if trigger_price is None or first_target is None or latest_price is None or direction not in {"CE", "PE"}:
+            return True
+
+        total_path = abs(float(first_target) - float(trigger_price))
+        if total_path <= 0:
+            return True
+
+        covered = (
+            float(latest_price) - float(trigger_price)
+            if direction == "CE"
+            else float(trigger_price) - float(latest_price)
+        )
+        return covered <= (total_path * 0.55)
+
     def _set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m):
         if not watch_payload:
             self._clear_pending_entry_watch()
@@ -312,6 +337,8 @@ class SignalService:
             )
 
         volume_ok = self._one_minute_trigger_volume_ok(recent_1m_candles)
+        if trigger_hit and not self._pending_watch_not_too_late(pending, latest["close"]):
+            return {"status": "INVALIDATED", "reason": "1m trigger arrived too late after move extension"}
         if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
             return None
 
@@ -631,6 +658,238 @@ class SignalService:
             "pressure_conflict_level": self.strategy.last_pressure_conflict_level,
             "confidence_summary": self.strategy.last_confidence_summary,
         }
+
+    @staticmethod
+    def _safe_ratio(numerator, denominator):
+        if denominator in (None, 0):
+            return 0.0
+        return float(numerator) / float(denominator)
+
+    @staticmethod
+    def _participation_row_weight(distance_from_atm):
+        distance = abs(distance_from_atm if distance_from_atm is not None else 99)
+        weights = {
+            0: 1.8,
+            1: 1.25,
+            2: 0.75,
+        }
+        return weights.get(distance, 0.35)
+
+    def _participation_phase(self, candle_time):
+        current_now = candle_time.time() if candle_time is not None else self.time_utils.current_time()
+        if current_now < self.time_utils._parse_clock("09:45"):
+            return "OPENING"
+        if current_now < self.time_utils._parse_clock("11:30"):
+            return "MID_MORNING"
+        if current_now < self.time_utils._parse_clock("13:30"):
+            return "MIDDAY"
+        return "LATE"
+
+    def _participation_rolling_average(self, direction):
+        history = list(self.participation_history.get(direction) or [])
+        if not history:
+            return 0.0
+        return sum(history) / len(history)
+
+    def _update_participation_history(self, history_key, metrics):
+        if history_key is None or history_key == self.last_participation_history_key or not metrics:
+            return
+
+        for direction in ("CE", "PE"):
+            directional = metrics.get(direction) or {}
+            self.participation_history[direction].append(float(directional.get("weighted_volume_delta", 0.0) or 0.0))
+        self.last_participation_history_key = history_key
+
+    def _build_option_participation_metrics(self, candle_time=None):
+        if not self.option_data or not self.option_data.get("band_snapshots"):
+            return None
+
+        band_rows = self.option_data.get("band_snapshots") or []
+        ce_rows = [row for row in band_rows if row.get("option_type") == "CE"]
+        pe_rows = [row for row in band_rows if row.get("option_type") == "PE"]
+        participation_phase = self._participation_phase(candle_time)
+
+        def summarize(rows, atm_distance=2):
+            scoped = [row for row in rows if abs(row.get("distance_from_atm", 99)) <= atm_distance]
+            atm_row = next((row for row in rows if row.get("distance_from_atm") == 0), None)
+            volume_total = sum(int(row.get("volume", 0) or 0) for row in scoped)
+            volume_delta = sum(
+                max(int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0), 0)
+                for row in scoped
+                if row.get("previous_volume") is not None
+            )
+            weighted_volume_delta = sum(
+                max(int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0), 0)
+                * self._participation_row_weight(row.get("distance_from_atm"))
+                for row in scoped
+                if row.get("previous_volume") is not None
+            )
+            oi_delta = sum(
+                int(row.get("oi", 0) or 0) - int(row.get("previous_oi", 0) or 0)
+                for row in scoped
+                if row.get("previous_oi") is not None
+            )
+            active_breadth = sum(
+                1
+                for row in scoped
+                if (
+                    (int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0)) > 0
+                    if row.get("previous_volume") is not None else int(row.get("volume", 0) or 0) > 0
+                )
+            )
+            weighted_breadth = sum(
+                self._participation_row_weight(row.get("distance_from_atm"))
+                for row in scoped
+                if (
+                    (int(row.get("volume", 0) or 0) - int(row.get("previous_volume", 0) or 0)) > 0
+                    if row.get("previous_volume") is not None else int(row.get("volume", 0) or 0) > 0
+                )
+            )
+            spread = atm_row.get("spread") if atm_row else None
+            ltp = atm_row.get("ltp") if atm_row else None
+            spread_pct = round(self._safe_ratio(spread, ltp) * 100, 2) if spread is not None and ltp else None
+            bid_qty = atm_row.get("top_bid_quantity") if atm_row else None
+            ask_qty = atm_row.get("top_ask_quantity") if atm_row else None
+            quote_ratio = round(self._safe_ratio(bid_qty or 0, ask_qty or 1), 2) if bid_qty is not None or ask_qty is not None else None
+            return {
+                "volume_total": volume_total,
+                "volume_delta": volume_delta,
+                "weighted_volume_delta": round(weighted_volume_delta, 2),
+                "oi_delta": oi_delta,
+                "active_breadth": active_breadth,
+                "weighted_breadth": round(weighted_breadth, 2),
+                "atm_spread": spread,
+                "atm_spread_pct": spread_pct,
+                "atm_quote_ratio": quote_ratio,
+            }
+
+        ce = summarize(ce_rows)
+        pe = summarize(pe_rows)
+
+        def directional_metrics(direction):
+            same_side = ce if direction == "CE" else pe
+            opposite_side = pe if direction == "CE" else ce
+            score_boost = 0
+            flags = []
+            rolling_avg = self._participation_rolling_average(direction)
+            opening_mode = participation_phase == "OPENING"
+
+            opposite_delta_factor = 1.05 if opening_mode else 1.15
+            rolling_factor = 0.8 if opening_mode else 1.0
+            breadth_edge = 0.2 if opening_mode else 0.45
+
+            same_dominates_delta = same_side["weighted_volume_delta"] > max(
+                opposite_side["weighted_volume_delta"] * opposite_delta_factor,
+                rolling_avg * rolling_factor,
+                0,
+            )
+            same_dominates_breadth = same_side["weighted_breadth"] >= (opposite_side["weighted_breadth"] + breadth_edge)
+            oi_supportive = same_side["oi_delta"] >= opposite_side["oi_delta"]
+            spread_ok = same_side["atm_spread_pct"] is None or same_side["atm_spread_pct"] <= Config.MAX_SPREAD_PERCENT
+            quote_ok = same_side["atm_quote_ratio"] is None or same_side["atm_quote_ratio"] >= 0.85
+            beats_own_baseline = same_side["weighted_volume_delta"] >= max(rolling_avg * (0.95 if opening_mode else 1.1), 0)
+
+            if same_dominates_delta:
+                score_boost += 5
+                flags.append("same_side_volume_delta")
+            else:
+                score_boost -= 4
+                flags.append("same_side_volume_delta_missing")
+            if beats_own_baseline:
+                score_boost += 3
+                flags.append("same_side_vs_rolling_avg")
+            else:
+                score_boost -= 2
+                flags.append("same_side_vs_rolling_avg_missing")
+            if same_dominates_breadth:
+                score_boost += 4
+                flags.append("same_side_breadth")
+            else:
+                score_boost -= 3
+                flags.append("same_side_breadth_missing")
+            if oi_supportive:
+                score_boost += 3
+                flags.append("same_side_oi_delta")
+            else:
+                score_boost -= 2
+                flags.append("same_side_oi_delta_missing")
+            if spread_ok:
+                score_boost += 2
+                flags.append("atm_spread_ok")
+            else:
+                score_boost -= 4
+                flags.append("atm_spread_wide")
+            if quote_ok:
+                score_boost += 1
+                flags.append("atm_quote_supportive")
+            else:
+                score_boost -= 2
+                flags.append("atm_quote_weak")
+
+            if score_boost >= 9:
+                quality = "STRONG"
+            elif score_boost >= 3:
+                quality = "MODERATE"
+            else:
+                quality = "WEAK"
+
+            return {
+                "quality": quality,
+                "score_boost": score_boost,
+                "same_side_volume_delta": same_side["volume_delta"],
+                "opposite_side_volume_delta": opposite_side["volume_delta"],
+                "same_side_weighted_delta": same_side["weighted_volume_delta"],
+                "opposite_side_weighted_delta": opposite_side["weighted_volume_delta"],
+                "rolling_avg_weighted_delta": round(rolling_avg, 2),
+                "same_side_breadth": same_side["active_breadth"],
+                "opposite_side_breadth": opposite_side["active_breadth"],
+                "same_side_weighted_breadth": same_side["weighted_breadth"],
+                "opposite_side_weighted_breadth": opposite_side["weighted_breadth"],
+                "same_side_oi_delta": same_side["oi_delta"],
+                "opposite_side_oi_delta": opposite_side["oi_delta"],
+                "atm_spread_pct": same_side["atm_spread_pct"],
+                "atm_quote_ratio": same_side["atm_quote_ratio"],
+                "participation_phase": participation_phase,
+                "flags": flags,
+            }
+
+        metrics = {
+            "CE": directional_metrics("CE"),
+            "PE": directional_metrics("PE"),
+        }
+        history_key = candle_time.isoformat() if candle_time is not None else None
+        self._update_participation_history(history_key, metrics)
+        return metrics
+
+    @staticmethod
+    def _summarize_participation_read(participation_metrics, direction):
+        if not participation_metrics or direction not in {"CE", "PE"}:
+            return None
+
+        directional = participation_metrics.get(direction) or {}
+        quality = directional.get("quality")
+        same_delta = directional.get("same_side_volume_delta")
+        opposite_delta = directional.get("opposite_side_volume_delta")
+        same_weighted_delta = directional.get("same_side_weighted_delta")
+        rolling_avg = directional.get("rolling_avg_weighted_delta")
+        breadth = directional.get("same_side_breadth")
+        spread_pct = directional.get("atm_spread_pct")
+        phase = directional.get("participation_phase")
+
+        bits = []
+        if quality:
+            bits.append(f"{quality} participation")
+        if phase:
+            bits.append(phase.lower())
+        if same_delta is not None and opposite_delta is not None:
+            bits.append(f"same-side delta {same_delta} vs opp {opposite_delta}")
+        if same_weighted_delta is not None and rolling_avg is not None:
+            bits.append(f"weighted {same_weighted_delta} vs avg {rolling_avg}")
+        if breadth is not None:
+            bits.append(f"breadth {breadth}")
+        if spread_pct is not None:
+            bits.append(f"ATM spread {spread_pct}%")
+        return " | ".join(bits) if bits else None
 
     @staticmethod
     def _derive_15m_trend_from_5m(candles_5m):
@@ -1217,6 +1476,23 @@ class SignalService:
         else:
             action_hint = "Abhi entry mat lo. Price confirmation ka wait karo."
 
+        entry_if = None
+        if trigger_price is not None:
+            side = "above" if direction == "CE" else "below"
+            entry_if = f"Clean 5m close {side} {round(trigger_price, 2)} with follow-through volume"
+
+        avoid_if = None
+        if invalidate_price is not None:
+            side = "below" if direction == "CE" else "above"
+            avoid_if = f"Skip if price closes {side} {round(invalidate_price, 2)}"
+        elif blockers:
+            avoid_if = "Skip if current blockers clear nahi hote"
+
+        participation_read = self._summarize_participation_read(
+            getattr(self.strategy, "last_participation_metrics", None),
+            direction,
+        )
+
         return {
             "instrument": self.instrument,
             "direction": direction,
@@ -1236,6 +1512,9 @@ class SignalService:
             "context": f"{context} | ContextScore={self.strategy.last_context_score} | EntryScore={self.strategy.last_entry_score}",
             "reason": candidate_reason,
             "action_hint": action_hint,
+            "entry_if": entry_if,
+            "avoid_if": avoid_if,
+            "participation_read": participation_read,
             "key": (
                 self.instrument,
                 direction,
@@ -1320,6 +1599,7 @@ class SignalService:
         support = oi_ladder_data["support"] if oi_ladder_data else None
         resistance = oi_ladder_data["resistance"] if oi_ladder_data else None
         base_bias = self._classify_base_bias(price, vwap_value, oi_bias, oi_ladder_data)
+        participation_metrics = self._build_option_participation_metrics(candle_time=candle_5m["time"])
 
         # Get ATM options volume for advanced confirmation
         atm_ce_volume = self.option_data.get("ce_volume") if self.option_data else None
@@ -1357,6 +1637,7 @@ class SignalService:
             atm_pe_volume=atm_pe_volume,
             recent_candles_5m=recent_candles_5m,
             trend_15m=trend_15m,
+            participation_metrics=participation_metrics,
         )
         
         candidate_signal = signal

@@ -34,7 +34,7 @@ def direction_threshold(instrument):
     if instrument == "BANKNIFTY":
         return 55.0, 35.0
     if instrument == "SENSEX":
-        return 85.0, 55.0
+        return 60.0, 38.0
     return 28.0, 18.0
 
 
