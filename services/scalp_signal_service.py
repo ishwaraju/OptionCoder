@@ -21,6 +21,7 @@ from shared.indicators.volume_analyzer import VolumeAnalyzer
 from shared.market.oi_analyzer import OIAnalyzer
 from strategies.shared.scalp_strategy import ScalpStrategy
 from shared.utils.instrument_profile import get_instrument_profile
+from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.service_watchdog import ServiceWatchdog
 
 
@@ -61,11 +62,16 @@ class ScalpSignalService:
         self.signal_cooldown = 0
         self.last_candle = None
         self.data_pause_active = False
+        self.last_data_pause_reason = None
 
         # Intervals
         self.heartbeat_interval = 30
         self.last_heartbeat = 0
         self.cooldown_seconds = self.scalp_config['cooldown']  # Use config cooldown
+        self.runtime_gap_detector = RuntimeGapDetector(
+            threshold_seconds=20,
+            sleep_confirmation_seconds=10,
+        )
 
     def _rebuild_intraday_context(self, recent_candles):
         """Rebuild VWAP and volume context from recent 1m candles."""
@@ -118,6 +124,54 @@ class ScalpSignalService:
             return True, "OK"
         except Exception as e:
             return False, f"Data check error: {e}"
+
+    def _handle_runtime_gap_recovery(self, reason_label):
+        self._log(f"🔄 Recovering after {reason_label}...")
+        self.last_processed_1m_ts = None
+
+        if self.data_pause_active:
+            self.data_pause_active = False
+            self.last_data_pause_reason = None
+            self._log("   ✅ Reset data pause state")
+
+        try:
+            recent_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=30)
+            if recent_candles:
+                vwap_value, volume_signal = self._rebuild_intraday_context(recent_candles)
+                self._log(
+                    "   ✅ Restored 1m context "
+                    f"| candles: {len(recent_candles)} | "
+                    f"VWAP: {round(vwap_value, 2) if vwap_value else 'NA'} | "
+                    f"Volume: {volume_signal}"
+                )
+        except Exception as e:
+            self._log(f"   ⚠️  Could not rebuild 1m context: {e}")
+
+        self._log("🔄 Recovery complete. Resuming scalp loop...")
+
+    def _handle_runtime_gap(self, gap_event):
+        kind = gap_event["kind"]
+        wall_gap = gap_event["wall_gap"]
+        active_gap = gap_event["active_gap"]
+        suspended_gap = gap_event["suspended_gap"]
+
+        if kind == "system_sleep":
+            self._log(
+                "⚠️  SYSTEM SLEEP/WAKE DETECTED! "
+                f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
+                f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
+                "Recovering..."
+            )
+            self._handle_runtime_gap_recovery("system sleep/wake")
+            return
+
+        self._log(
+            "⚠️  PROCESSING/FEED GAP DETECTED! "
+            f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
+            f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
+            "This is not a confirmed system sleep. Recovering..."
+        )
+        self._handle_runtime_gap_recovery("processing/feed gap")
 
     def _process_1m_candle(self, candle_1m):
         """Process 1-minute candle and generate scalp signal"""
@@ -275,12 +329,17 @@ class ScalpSignalService:
             while self.running:
                 loop_count += 1
 
+                gap_event = self.runtime_gap_detector.check()
+                if gap_event:
+                    self._handle_runtime_gap(gap_event)
+
                 # Check data health
                 data_ok, pause_reason = self._check_data_health()
                 if not data_ok:
-                    if not self.data_pause_active:
+                    if self.last_data_pause_reason != pause_reason:
                         self._log(f"Pausing: {pause_reason}")
-                        self.data_pause_active = True
+                        self.last_data_pause_reason = pause_reason
+                    self.data_pause_active = True
                     self.watchdog.touch({"phase": "data_pause", "reason": pause_reason})
                     time_module.sleep(10)
                     continue
@@ -288,6 +347,7 @@ class ScalpSignalService:
                 if self.data_pause_active:
                     self._log("Data healthy - resuming")
                     self.data_pause_active = False
+                    self.last_data_pause_reason = None
                     self.watchdog.touch({"phase": "resumed"})
 
                 # Get latest 1m candle

@@ -28,6 +28,7 @@ from shared.market.historical_backfill import HistoricalBackfill
 from shared.utils.instrument_profile import get_instrument_profile
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.log_utils import build_log_path
+from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.volume_cache import VolumeCache
 
 
@@ -72,9 +73,11 @@ class DataCollector:
         self.running = False
         self.feed_stale_logged = False
         
-        # Sleep detection
-        self.last_loop_time = time_module.time()
-        self.sleep_threshold_seconds = 60  # If loop gap > 60s, system was asleep
+        # Runtime gap detection
+        self.runtime_gap_detector = RuntimeGapDetector(
+            threshold_seconds=60,
+            sleep_confirmation_seconds=20,
+        )
         
         self.watchdogs = {
             item: ServiceWatchdog("data_collector", item)
@@ -113,9 +116,9 @@ class DataCollector:
         """Get current timestamp in IST (HH:mm:ss)"""
         return self.time_utils.now_ist().strftime('%H:%M:%S')
 
-    def _handle_wake_from_sleep(self):
-        """Handle recovery after system sleep/lock detected."""
-        self._log("🔄 Recovering from system sleep...")
+    def _handle_runtime_gap_recovery(self, reason_label):
+        """Handle recovery after a confirmed system sleep or large runtime gap."""
+        self._log(f"🔄 Recovering after {reason_label}...")
         
         # Reset connection state
         self._log("   Reconnecting WebSocket...")
@@ -135,6 +138,31 @@ class DataCollector:
             self._log(f"   ✅ Reset candle manager for {inst}")
         
         self._log("🔄 Recovery complete. Resuming data collection...")
+
+    def _handle_runtime_gap(self, gap_event):
+        """Differentiate between real sleep/wake and generic processing stalls."""
+        kind = gap_event["kind"]
+        wall_gap = gap_event["wall_gap"]
+        active_gap = gap_event["active_gap"]
+        suspended_gap = gap_event["suspended_gap"]
+
+        if kind == "system_sleep":
+            self._log(
+                "⚠️  SYSTEM SLEEP/WAKE DETECTED! "
+                f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
+                f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
+                "Reconnecting..."
+            )
+            self._handle_runtime_gap_recovery("system sleep/wake")
+            return
+
+        self._log(
+            "⚠️  PROCESSING/FEED GAP DETECTED! "
+            f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
+            f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
+            "This is not a confirmed system sleep. Reconnecting..."
+        )
+        self._handle_runtime_gap_recovery("processing/feed gap")
 
     def _restore_indicator_state(self):
         """Restore indicator state from database on startup"""
@@ -487,13 +515,10 @@ class DataCollector:
         try:
             while self.running:
                 current_time = time_module.time()
-                
-                # Sleep detection - check if system was asleep/locked
-                loop_gap = current_time - self.last_loop_time
-                if loop_gap > self.sleep_threshold_seconds:
-                    self._log(f"⚠️  SYSTEM SLEEP DETECTED! Gap: {loop_gap:.1f}s ({loop_gap/60:.1f} min). Reconnecting...")
-                    self._handle_wake_from_sleep()
-                self.last_loop_time = current_time
+
+                gap_event = self.runtime_gap_detector.check()
+                if gap_event:
+                    self._handle_runtime_gap(gap_event)
                 
                 # Market status check
                 if current_time - self.last_market_status_check >= self.market_status_interval:

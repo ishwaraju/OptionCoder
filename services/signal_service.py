@@ -41,6 +41,7 @@ from strategies.sensex import SensexActionableRules
 from shared.utils.logger import TradeLogger
 from shared.utils.notifier import Notifier
 from shared.utils.instrument_profile import get_instrument_profile
+from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.option_data_cache import OptionDataCache
 
@@ -117,9 +118,11 @@ class SignalService:
         self.data_pause_active = False
         self.last_data_pause_reason = None
         
-        # Sleep detection
-        self.last_loop_time = time_module.time()
-        self.sleep_threshold_seconds = 90  # Avoid false positives from the normal 60s loop sleep
+        # Runtime gap detection
+        self.runtime_gap_detector = RuntimeGapDetector(
+            threshold_seconds=90,
+            sleep_confirmation_seconds=20,
+        )
         
         # Previous values for OI build-up
         self.prev_price = None
@@ -145,9 +148,9 @@ class SignalService:
         ts = self.time_utils.now_ist().strftime('%H:%M:%S')
         print(f"[{ts}] [Signal Service] {message}")
 
-    def _handle_wake_from_sleep(self):
-        """Handle recovery after system sleep/lock detected."""
-        self._log("🔄 Recovering from system sleep...")
+    def _handle_runtime_gap_recovery(self, reason_label):
+        """Handle recovery after confirmed system sleep or a large runtime gap."""
+        self._log(f"🔄 Recovering after {reason_label}...")
         
         # Clear last processed timestamp to allow processing new candles
         if self.last_processed_5m_ts:
@@ -177,6 +180,30 @@ class SignalService:
             self._log(f"   ⚠️  Could not restore indicators: {e}")
         
         self._log("🔄 Recovery complete. Resuming normal operation...")
+
+    def _handle_runtime_gap(self, gap_event):
+        kind = gap_event["kind"]
+        wall_gap = gap_event["wall_gap"]
+        active_gap = gap_event["active_gap"]
+        suspended_gap = gap_event["suspended_gap"]
+
+        if kind == "system_sleep":
+            self._log(
+                "⚠️  SYSTEM SLEEP/WAKE DETECTED! "
+                f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
+                f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
+                "Recovering..."
+            )
+            self._handle_runtime_gap_recovery("system sleep/wake")
+            return
+
+        self._log(
+            "⚠️  PROCESSING/FEED GAP DETECTED! "
+            f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
+            f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
+            "This is not a confirmed system sleep. Recovering..."
+        )
+        self._handle_runtime_gap_recovery("processing/feed gap")
 
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
         """Start 1-minute manual trade monitor after a signal."""
@@ -261,7 +288,21 @@ class SignalService:
         score = watch_payload.get("score") or 0
         entry_score = watch_payload.get("entry_score") or 0
         watch_bucket = watch_payload.get("watch_bucket")
-        if watch_bucket == "WATCH_CONTEXT":
+        signal_grade = watch_payload.get("signal_grade")
+        confidence = watch_payload.get("confidence")
+        fast_track_ready = (
+            score >= 74
+            and entry_score >= 68
+            and watch_bucket == "WATCH_CONFIRMATION_PENDING"
+            and confidence in {"MEDIUM", "HIGH"}
+        )
+        strong_watch_setup = (
+            score >= 76
+            and entry_score >= 70
+            and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP"}
+        )
+
+        if watch_bucket == "WATCH_CONTEXT" and not strong_watch_setup:
             self._clear_pending_entry_watch()
             return
         if score < 68 and entry_score < 60:
@@ -276,15 +317,17 @@ class SignalService:
             "first_target_price": watch_payload.get("first_target_price"),
             "score": score,
             "entry_score": entry_score,
-            "confidence": watch_payload.get("confidence"),
+            "confidence": confidence,
             "signal_type": watch_payload.get("setup"),
-            "signal_grade": watch_payload.get("signal_grade"),
+            "signal_grade": signal_grade,
             "watch_bucket": watch_payload.get("watch_bucket"),
             "quality": (balanced_pro or {}).get("quality"),
             "time_regime": (balanced_pro or {}).get("time_regime"),
             "created_at": candle_5m["time"],
             "last_checked_minute": None,
             "reason": watch_payload.get("reason"),
+            "fast_track_ready": fast_track_ready,
+            "strong_watch_setup": strong_watch_setup,
         }
 
     def _evaluate_pending_entry_watch(self, recent_1m_candles):
@@ -314,7 +357,10 @@ class SignalService:
         trigger_price = pending["trigger_price"]
         invalidate_price = pending.get("invalidate_price")
         direction = pending["direction"]
+        fast_track_ready = pending.get("fast_track_ready", False)
         one_min_buffer = 2 if self.instrument == "NIFTY" else 5
+        if fast_track_ready:
+            one_min_buffer = 1 if self.instrument == "NIFTY" else 3
 
         if not self._pending_watch_risk_reward_ok(pending):
             return {"status": "INVALIDATED", "reason": "Watch risk-reward not attractive for 1m trigger"}
@@ -337,6 +383,13 @@ class SignalService:
             )
 
         volume_ok = self._one_minute_trigger_volume_ok(recent_1m_candles)
+        if fast_track_ready and trigger_hit and volume_ok:
+            if direction == "CE":
+                body_ok = body_ok or latest["high"] >= trigger_price + (one_min_buffer * 2)
+                follow_through_ok = follow_through_ok or latest["close"] >= trigger_price
+            else:
+                body_ok = body_ok or latest["low"] <= trigger_price - (one_min_buffer * 2)
+                follow_through_ok = follow_through_ok or latest["close"] <= trigger_price
         if trigger_hit and not self._pending_watch_not_too_late(pending, latest["close"]):
             return {"status": "INVALIDATED", "reason": "1m trigger arrived too late after move extension"}
         if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
@@ -1861,13 +1914,9 @@ class SignalService:
                 if loop_count % 10 == 0:  # Log every 10th iteration
                     self._log(f"DEBUG Main loop iteration {loop_count}")
                 
-                # Sleep detection - check if system was asleep/locked
-                current_loop_time = time_module.time()
-                loop_gap = current_loop_time - self.last_loop_time
-                if loop_gap > self.sleep_threshold_seconds:
-                    self._log(f"⚠️  SYSTEM SLEEP DETECTED! Gap: {loop_gap:.1f}s ({loop_gap/60:.1f} min). Recovering...")
-                    self._handle_wake_from_sleep()
-                self.last_loop_time = current_loop_time
+                gap_event = self.runtime_gap_detector.check()
+                if gap_event:
+                    self._handle_runtime_gap(gap_event)
                 
                 data_ok, pause_reason = self._get_data_health_status()
                 if not data_ok:

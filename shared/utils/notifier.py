@@ -279,49 +279,59 @@ class Notifier:
         lines.append(header)
         summary = []
         if setup and setup != "NONE":
-            summary.append(f"Setup: {setup_label}")
-        if watch_bucket:
-            summary.append(f"Type: {_watch_bucket_label(watch_bucket)}")
+            summary.append(setup_label)
         if score is not None:
-            summary.append(f"Score: {score}")
+            summary.append(f"S:{score}")
         if entry_score is not None:
-            summary.append(f"EntryScore: {entry_score}")
+            summary.append(f"E:{entry_score}")
         if confidence:
-            summary.append(f"Confidence: {confidence}")
+            summary.append(confidence)
         if grade and grade != "SKIP":
-            summary.append(f"Grade: {grade}")
+            summary.append(f"G:{grade}")
         if summary:
             lines.append(" | ".join(summary))
         levels = []
         if spot_price is not None:
-            levels.append(f"Spot: {spot_price}")
+            levels.append(f"Spot {spot_price}")
         if trigger_price is not None:
-            levels.append(f"Trigger: {trigger_price}")
+            levels.append(f"Trig {trigger_price}")
         if invalidate_price is not None:
-            levels.append(f"Risk level: {invalidate_price}")
-        if first_target_price is not None:
-            levels.append(f"If confirms target: {first_target_price}")
+            levels.append(f"SL {invalidate_price}")
+        if first_target_price is not None and grade in {"A", "B", "WATCH"}:
+            levels.append(f"T1 {first_target_price}")
         if levels:
             lines.append(" | ".join(levels))
-        if context:
-            lines.append(f"Context: {context}")
+        compact_read = []
+        if watch_bucket and watch_bucket != "WATCH_CONTEXT":
+            compact_read.append(_watch_bucket_label(watch_bucket))
         if confidence_summary:
-            lines.append(f"Read: {confidence_summary}")
+            compact_read.append(confidence_summary)
+        elif short_reason:
+            compact_read.append(short_reason)
+        if compact_read:
+            lines.append(" | ".join(compact_read[:2]))
+
+        flags = []
         if participation_read:
-            lines.append(f"Participation: {participation_read}")
-        if short_reason:
-            lines.append(f"Why: {short_reason}")
+            flags.append(participation_read.split("|", 1)[0].strip())
         if blockers:
-            lines.append("Missing: " + ", ".join(_humanize_flag(flag) for flag in blockers[:3]))
+            flags.append("Missing: " + ", ".join(_humanize_flag(flag) for flag in blockers[:2]))
         if cautions:
-            lines.append("Caution: " + ", ".join(_humanize_flag(flag) for flag in cautions[:3]))
+            flags.append("Caution: " + ", ".join(_humanize_flag(flag) for flag in cautions[:2]))
+        if flags:
+            lines.append(" | ".join(flags[:2]))
+
+        actions = []
         if entry_if:
-            lines.append(f"Entry if: {entry_if}")
+            actions.append(f"Entry: {entry_if}")
         if avoid_if:
-            lines.append(f"Avoid if: {avoid_if}")
-        plan = action_hint or _action_plan_for_setup(setup, direction, trigger_price, invalidate_price)
-        if plan:
-            lines.append(f"Plan: {plan}")
+            actions.append(f"Avoid: {avoid_if}")
+        if not actions:
+            plan = action_hint or _action_plan_for_setup(setup, direction, trigger_price, invalidate_price)
+            if plan:
+                actions.append(plan)
+        if actions:
+            lines.append(" | ".join(actions[:2]))
 
         message = "\n".join(lines)
 
