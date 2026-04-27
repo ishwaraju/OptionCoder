@@ -98,6 +98,7 @@ class MainConfig:
     STATE_RECOVERY_5M_BARS = int(os.getenv('STATE_RECOVERY_5M_BARS', '24'))
     SIGNAL_VALIDITY_MINUTES = int(os.getenv('SIGNAL_VALIDITY_MINUTES', '4'))
     ENABLE_1M_TRIGGER = os.getenv('ENABLE_1M_TRIGGER', 'True').lower() == 'true'
+    HYBRID_MANUAL_MODE = os.getenv('HYBRID_MANUAL_MODE', 'True').lower() == 'true'
     ENTRY_TRIGGER_VALIDITY_MINUTES = int(os.getenv('ENTRY_TRIGGER_VALIDITY_MINUTES', '2'))
     ENTRY_TRIGGER_MIN_BODY = int(os.getenv('ENTRY_TRIGGER_MIN_BODY', '5'))
     ALLOW_CONTINUATION_ENTRY = os.getenv('ALLOW_CONTINUATION_ENTRY', 'False').lower() == 'true'

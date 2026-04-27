@@ -274,6 +274,116 @@ class SignalService:
         )
         return covered <= (total_path * 0.55)
 
+    def _pending_watch_max_minutes(self, pending):
+        if not pending:
+            return 20
+
+        if pending.get("hybrid_mode"):
+            if self.instrument == "BANKNIFTY":
+                return 18
+            if self.instrument == "SENSEX":
+                return 16
+            return 30
+
+        if self.instrument == "SENSEX":
+            return 14
+        if self.instrument == "BANKNIFTY":
+            return 16
+        return 20
+
+    @staticmethod
+    def _candle_close_strength(candle, direction):
+        high = candle.get("high")
+        low = candle.get("low")
+        close = candle.get("close")
+        if high is None or low is None or close is None:
+            return 0.0
+
+        range_size = float(high) - float(low)
+        if range_size <= 0:
+            return 0.0
+
+        if direction == "CE":
+            return (float(close) - float(low)) / range_size
+        return (float(high) - float(close)) / range_size
+
+    @staticmethod
+    def _candle_body_ratio(candle):
+        high = candle.get("high")
+        low = candle.get("low")
+        open_price = candle.get("open")
+        close = candle.get("close")
+        if None in {high, low, open_price, close}:
+            return 0.0
+
+        range_size = float(high) - float(low)
+        if range_size <= 0:
+            return 0.0
+        return abs(float(close) - float(open_price)) / range_size
+
+    def _pending_watch_quality_ok(self, pending, latest, previous):
+        direction = pending.get("direction")
+        if direction not in {"CE", "PE"}:
+            return True, None
+
+        close_strength = self._candle_close_strength(latest, direction)
+        body_ratio = self._candle_body_ratio(latest)
+        hybrid_mode = pending.get("hybrid_mode", False)
+        fast_track_ready = pending.get("fast_track_ready", False)
+        strong_watch_setup = pending.get("strong_watch_setup", False)
+        minutes_since_watch = pending.get("minutes_since_watch", 0)
+        trigger_price = pending.get("trigger_price")
+        invalidate_price = pending.get("invalidate_price")
+
+        min_close_strength = 0.52
+        min_body_ratio = 0.18
+
+        if self.instrument == "BANKNIFTY":
+            min_close_strength = 0.6
+            min_body_ratio = 0.24
+        elif self.instrument == "SENSEX":
+            min_close_strength = 0.58
+            min_body_ratio = 0.22
+        elif self.instrument == "NIFTY":
+            min_close_strength = 0.55
+            min_body_ratio = 0.2
+
+        if hybrid_mode and strong_watch_setup:
+            min_close_strength -= 0.04
+            min_body_ratio -= 0.03
+        if fast_track_ready:
+            min_close_strength -= 0.03
+
+        if close_strength < min_close_strength:
+            return False, "1m trigger close weak"
+        if body_ratio < min_body_ratio:
+            return False, "1m trigger body weak"
+
+        if self.instrument == "NIFTY" and invalidate_price is not None and trigger_price is not None:
+            total_risk = abs(float(trigger_price) - float(invalidate_price))
+            if total_risk > 0:
+                current_buffer = (
+                    float(latest["close"]) - float(invalidate_price)
+                    if direction == "CE"
+                    else float(invalidate_price) - float(latest["close"])
+                )
+                if current_buffer < (total_risk * 0.28):
+                    return False, "1m trigger too close to invalidation"
+
+        if self.instrument in {"BANKNIFTY", "SENSEX"} and minutes_since_watch >= 8:
+            if close_strength < (min_close_strength + 0.06):
+                return False, "late 1m trigger close not strong enough"
+
+        prev_close = previous.get("close")
+        prev_open = previous.get("open")
+        if prev_close is not None and prev_open is not None:
+            if direction == "CE" and float(prev_close) < float(prev_open) and close_strength < 0.62 and self.instrument == "NIFTY":
+                return False, "1m trigger against fresh opposite candle"
+            if direction == "PE" and float(prev_close) > float(prev_open) and close_strength < 0.62 and self.instrument == "NIFTY":
+                return False, "1m trigger against fresh opposite candle"
+
+        return True, None
+
     def _set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m):
         if not watch_payload:
             self._clear_pending_entry_watch()
@@ -290,22 +400,39 @@ class SignalService:
         watch_bucket = watch_payload.get("watch_bucket")
         signal_grade = watch_payload.get("signal_grade")
         confidence = watch_payload.get("confidence")
+        setup = watch_payload.get("setup")
+        hybrid_mode = Config.HYBRID_MANUAL_MODE
         fast_track_ready = (
             score >= 74
             and entry_score >= 68
             and watch_bucket == "WATCH_CONFIRMATION_PENDING"
             and confidence in {"MEDIUM", "HIGH"}
         )
+        if hybrid_mode and setup in {"REVERSAL", "BREAKOUT_CONFIRM", "RETEST", "TRAP_REVERSAL"}:
+            fast_track_ready = fast_track_ready or (
+                score >= 70
+                and entry_score >= 60
+                and confidence in {"MEDIUM", "HIGH"}
+            )
         strong_watch_setup = (
             score >= 76
             and entry_score >= 70
             and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP"}
         )
+        if hybrid_mode:
+            strong_watch_setup = strong_watch_setup or (
+                score >= 70
+                and entry_score >= 60
+                and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP", "WATCH_CONTEXT"}
+                and setup in {"BREAKOUT_CONFIRM", "RETEST", "REVERSAL", "TRAP_REVERSAL"}
+            )
 
         if watch_bucket == "WATCH_CONTEXT" and not strong_watch_setup:
             self._clear_pending_entry_watch()
             return
-        if score < 68 and entry_score < 60:
+        min_context_score = 64 if hybrid_mode else 68
+        min_entry_score = 54 if hybrid_mode else 60
+        if score < min_context_score and entry_score < min_entry_score:
             self._clear_pending_entry_watch()
             return
 
@@ -328,6 +455,7 @@ class SignalService:
             "reason": watch_payload.get("reason"),
             "fast_track_ready": fast_track_ready,
             "strong_watch_setup": strong_watch_setup,
+            "hybrid_mode": hybrid_mode,
         }
 
     def _evaluate_pending_entry_watch(self, recent_1m_candles):
@@ -351,16 +479,25 @@ class SignalService:
         minutes_since_watch = int((latest["time"] - created_at).total_seconds() // 60)
         if minutes_since_watch < 1:
             return None
-        if minutes_since_watch > 20:
+        max_watch_minutes = self._pending_watch_max_minutes(pending)
+        if minutes_since_watch > max_watch_minutes:
             return {"status": "EXPIRED", "reason": "1m confirmation window expired"}
+        pending["minutes_since_watch"] = minutes_since_watch
 
         trigger_price = pending["trigger_price"]
         invalidate_price = pending.get("invalidate_price")
         direction = pending["direction"]
         fast_track_ready = pending.get("fast_track_ready", False)
+        hybrid_mode = pending.get("hybrid_mode", False)
         one_min_buffer = 2 if self.instrument == "NIFTY" else 5
         if fast_track_ready:
             one_min_buffer = 1 if self.instrument == "NIFTY" else 3
+        elif hybrid_mode:
+            one_min_buffer = 1 if self.instrument == "NIFTY" else 2
+        if self.instrument == "BANKNIFTY" and minutes_since_watch >= 6:
+            one_min_buffer = max(one_min_buffer, 4)
+        if self.instrument == "SENSEX" and minutes_since_watch >= 6:
+            one_min_buffer = max(one_min_buffer, 3)
 
         if not self._pending_watch_risk_reward_ok(pending):
             return {"status": "INVALIDATED", "reason": "Watch risk-reward not attractive for 1m trigger"}
@@ -373,6 +510,9 @@ class SignalService:
             follow_through_ok = latest["close"] > previous["high"] or (
                 previous["close"] > trigger_price and latest["close"] >= previous["close"]
             )
+            if hybrid_mode:
+                trigger_hit = trigger_hit or (latest["high"] >= trigger_price and latest["close"] >= trigger_price)
+                follow_through_ok = follow_through_ok or latest["close"] >= trigger_price
         else:
             if invalidate_price is not None and latest["high"] >= invalidate_price:
                 return {"status": "INVALIDATED", "reason": "Watch invalidated before 1m trigger"}
@@ -381,8 +521,13 @@ class SignalService:
             follow_through_ok = latest["close"] < previous["low"] or (
                 previous["close"] < trigger_price and latest["close"] <= previous["close"]
             )
+            if hybrid_mode:
+                trigger_hit = trigger_hit or (latest["low"] <= trigger_price and latest["close"] <= trigger_price)
+                follow_through_ok = follow_through_ok or latest["close"] <= trigger_price
 
         volume_ok = self._one_minute_trigger_volume_ok(recent_1m_candles)
+        if hybrid_mode and pending.get("strong_watch_setup") and latest.get("volume", 0) > 0:
+            volume_ok = True if latest["volume"] >= max(previous.get("volume", 0) * 0.8, 1) else volume_ok
         if fast_track_ready and trigger_hit and volume_ok:
             if direction == "CE":
                 body_ok = body_ok or latest["high"] >= trigger_price + (one_min_buffer * 2)
@@ -390,8 +535,14 @@ class SignalService:
             else:
                 body_ok = body_ok or latest["low"] <= trigger_price - (one_min_buffer * 2)
                 follow_through_ok = follow_through_ok or latest["close"] <= trigger_price
+        elif hybrid_mode and trigger_hit and volume_ok:
+            body_ok = body_ok or abs((latest["close"] or 0) - (latest["open"] or 0)) > 0
         if trigger_hit and not self._pending_watch_not_too_late(pending, latest["close"]):
             return {"status": "INVALIDATED", "reason": "1m trigger arrived too late after move extension"}
+        if trigger_hit:
+            quality_ok, quality_reason = self._pending_watch_quality_ok(pending, latest, previous)
+            if not quality_ok:
+                return {"status": "INVALIDATED", "reason": quality_reason}
         if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
             return None
 

@@ -351,14 +351,35 @@ class Notifier:
         trigger_price = trigger_data.get("trigger_price")
 
         instrument = trigger_data.get("instrument")
-        prefix = f"{instrument} | " if instrument else ""
-        message = f"{prefix}1M ENTRY TRIGGER {signal} | strike={strike} | price={price} | confidence={confidence}"
+        header_parts = []
+        if instrument:
+            header_parts.append(instrument)
+        header_parts.append(f"{signal} ENTRY")
+        header = " ".join(header_parts)
+
+        summary = []
         if signal_type:
-            message += f" | type={signal_type}"
-        if signal_grade:
-            message += f" | grade={signal_grade}"
+            summary.append(_setup_label(signal_type))
+        if confidence:
+            summary.append(confidence)
+        if signal_grade and signal_grade != "SKIP":
+            summary.append(f"G:{signal_grade}")
+        if strike is not None:
+            summary.append(f"Strike {strike}")
+
+        levels = []
+        if price is not None:
+            levels.append(f"Price {price}")
         if trigger_price is not None:
-            message += f" | trigger={trigger_price}"
+            levels.append(f"Trig {trigger_price}")
+
+        lines = [header]
+        if summary:
+            lines.append(" | ".join(summary))
+        if levels:
+            lines.append(" | ".join(levels))
+
+        message = "\n".join(lines)
 
         self.send_alert(message)
     
@@ -384,20 +405,38 @@ class Notifier:
         structure = monitor_data.get("structure")
         pnl_points = monitor_data.get("pnl_points")
         heikin_ashi = monitor_data.get("heikin_ashi")
-        structure_short = structure or ""
-        prefix = f"{instrument} | " if instrument else ""
-        message = f"{prefix}{signal} | {guidance}"
-        if pnl_points is not None:
-            message += f" | {pnl_points:+.2f}pts"
-        if structure_short:
-            message += f" | {structure_short}"
-        if heikin_ashi:
-            message += f" | HA_{heikin_ashi}"
-        if time_regime:
-            message += f" | {time_regime}"
-        if quality:
-            message += f" | Q{quality}"
-        if reason:
-            message += f"\n{reason}"
+        lines = []
+        header_parts = []
+        if instrument:
+            header_parts.append(instrument)
+        if signal:
+            header_parts.append(signal)
+        header_parts.append(guidance or "Update")
+        lines.append(" | ".join(header_parts))
 
-        self.send_alert(message)
+        summary = []
+        if pnl_points is not None:
+            summary.append(f"{pnl_points:+.2f}pts")
+        if price is not None:
+            summary.append(f"Price {price}")
+        if entry_price is not None:
+            summary.append(f"Entry {entry_price}")
+        if structure:
+            summary.append(structure)
+        if summary:
+            lines.append(" | ".join(summary))
+
+        context_bits = []
+        if heikin_ashi:
+            context_bits.append(f"HA_{heikin_ashi}")
+        if time_regime:
+            context_bits.append(time_regime)
+        if quality:
+            context_bits.append(f"Q{quality}")
+        if context_bits:
+            lines.append(" | ".join(context_bits))
+
+        if reason:
+            lines.append(reason)
+
+        self.send_alert("\n".join(lines))

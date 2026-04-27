@@ -509,6 +509,192 @@ class BreakoutStrategy:
             return candle_close < candle_open and breakout_body_ok and ha_strength != "BULLISH_STRONG"
         return False
 
+    def _reversal_setup_ready(
+        self,
+        direction,
+        price,
+        vwap,
+        support,
+        resistance,
+        prev_high,
+        prev_low,
+        prev_close,
+        candle_open,
+        candle_high,
+        candle_low,
+        candle_close,
+        buffer,
+        volume_signal,
+        score,
+        entry_score,
+        pressure_metrics,
+        pressure_conflict_level,
+        breakout_body_ok,
+        breakout_structure_ok,
+        candle_liquidity_ok,
+        ha_strength,
+        build_up_ok,
+        regime_ok,
+        time_regime,
+        cautions,
+    ):
+        if direction not in {"CE", "PE"}:
+            return False
+        if not regime_ok or not candle_liquidity_ok:
+            return False
+        if volume_signal not in {"NORMAL", "STRONG"}:
+            return False
+        if score < 60 or entry_score < 48:
+            return False
+        if not build_up_ok:
+            return False
+        if pressure_conflict_level == "HARD":
+            return False
+        if self._soft_conflict_count(cautions) > 3:
+            return False
+
+        vwap_cross_ok = False
+        sr_reclaim_ok = False
+        rejection_wick_ok = False
+
+        if direction == "CE":
+            vwap_cross_ok = self._crossed_from_below_to_above(prev_low, prev_close, candle_close, vwap)
+            sr_reclaim_ok = self._crossed_from_below_to_above(prev_low, prev_close, candle_close, support)
+            if candle_low is not None and candle_close is not None and candle_open is not None:
+                rejection_wick_ok = candle_low <= (support + max(buffer, 5)) and candle_close >= max(candle_open, support or candle_close)
+            pressure_ok = not pressure_metrics or pressure_metrics["pressure_bias"] in {"BULLISH", "NEUTRAL"}
+            if time_regime == "MIDDAY" and pressure_conflict_level == "MODERATE":
+                pressure_ok = pressure_ok and score >= 72
+        else:
+            vwap_cross_ok = self._crossed_from_above_to_below(prev_high, prev_close, candle_close, vwap)
+            sr_reclaim_ok = self._crossed_from_above_to_below(prev_high, prev_close, candle_close, resistance)
+            if candle_high is not None and candle_close is not None and candle_open is not None:
+                rejection_wick_ok = candle_high >= (resistance - max(buffer, 5)) and candle_close <= min(candle_open, resistance or candle_close)
+            pressure_ok = not pressure_metrics or pressure_metrics["pressure_bias"] in {"BEARISH", "NEUTRAL"}
+            if time_regime == "MIDDAY" and pressure_conflict_level == "MODERATE":
+                pressure_ok = pressure_ok and score >= 72
+
+        confirmation_ok = self._reversal_confirmation_ready(
+            direction, candle_open, candle_close, breakout_body_ok or rejection_wick_ok, ha_strength
+        )
+        structure_ok = breakout_structure_ok or rejection_wick_ok
+        reclaim_ok = vwap_cross_ok or sr_reclaim_ok
+        return pressure_ok and confirmation_ok and structure_ok and reclaim_ok
+
+    def _neutral_pressure_reversal_ready(
+        self,
+        scored_direction,
+        score,
+        entry_score,
+        pressure_metrics,
+        prev_high,
+        prev_low,
+        prev_close,
+        candle_close,
+        candle_high,
+        candle_low,
+        vwap,
+        support,
+        resistance,
+        breakout_body_ok,
+        breakout_structure_ok,
+        candle_liquidity_ok,
+        cautions,
+    ):
+        if scored_direction not in {"CE", "PE"}:
+            return False
+        if not pressure_metrics or pressure_metrics.get("pressure_bias") != "NEUTRAL":
+            return False
+        if score < 70 or entry_score < 58:
+            return False
+        if not candle_liquidity_ok:
+            return False
+        if self._soft_conflict_count(cautions) > 3:
+            return False
+
+        if scored_direction == "CE":
+            reclaim_ok = self._crossed_from_below_to_above(prev_low, prev_close, candle_close, vwap) or \
+                self._crossed_from_below_to_above(prev_low, prev_close, candle_close, support)
+            wick_ok = (
+                candle_low is not None
+                and support is not None
+                and candle_close is not None
+                and candle_low <= support
+                and candle_close >= support
+            )
+        else:
+            reclaim_ok = self._crossed_from_above_to_below(prev_high, prev_close, candle_close, vwap) or \
+                self._crossed_from_above_to_below(prev_high, prev_close, candle_close, resistance)
+            wick_ok = (
+                candle_high is not None
+                and resistance is not None
+                and candle_close is not None
+                and candle_high >= resistance
+                and candle_close <= resistance
+            )
+
+        return reclaim_ok and (breakout_body_ok or breakout_structure_ok or wick_ok)
+
+    def _reversal_trap_context(
+        self,
+        prev_high,
+        prev_low,
+        prev_close,
+        candle_open,
+        candle_high,
+        candle_low,
+        candle_close,
+        vwap,
+        support,
+        resistance,
+        volume_signal,
+        candle_liquidity_ok,
+    ):
+        result = {
+            "CE": {"ready": False, "score_boost": 0},
+            "PE": {"ready": False, "score_boost": 0},
+        }
+        if candle_close is None or not candle_liquidity_ok or volume_signal not in {"NORMAL", "STRONG"}:
+            return result
+
+        bullish_vwap_reclaim = self._crossed_from_below_to_above(prev_low, prev_close, candle_close, vwap)
+        bullish_support_reclaim = self._crossed_from_below_to_above(prev_low, prev_close, candle_close, support)
+        bearish_vwap_reject = self._crossed_from_above_to_below(prev_high, prev_close, candle_close, vwap)
+        bearish_resistance_reject = self._crossed_from_above_to_below(prev_high, prev_close, candle_close, resistance)
+
+        bullish_wick = (
+            candle_low is not None
+            and support is not None
+            and candle_open is not None
+            and candle_low <= support
+            and candle_close >= max(candle_open, support)
+        )
+        bearish_wick = (
+            candle_high is not None
+            and resistance is not None
+            and candle_open is not None
+            and candle_high >= resistance
+            and candle_close <= min(candle_open, resistance)
+        )
+
+        if bullish_vwap_reclaim or bullish_support_reclaim or bullish_wick:
+            result["CE"]["ready"] = True
+            result["CE"]["score_boost"] = 8
+            if bullish_vwap_reclaim and bullish_support_reclaim:
+                result["CE"]["score_boost"] += 4
+            if bullish_wick:
+                result["CE"]["score_boost"] += 2
+
+        if bearish_vwap_reject or bearish_resistance_reject or bearish_wick:
+            result["PE"]["ready"] = True
+            result["PE"]["score_boost"] = 8
+            if bearish_vwap_reject and bearish_resistance_reject:
+                result["PE"]["score_boost"] += 4
+            if bearish_wick:
+                result["PE"]["score_boost"] += 2
+
+        return result
+
     @staticmethod
     def _watch_signal_type(cautions, fallback_signal_type="NONE"):
         cautions = cautions or []
@@ -1298,6 +1484,34 @@ class BreakoutStrategy:
                 oi_bias == "BEARISH" and oi_trend in ["BEARISH", "NEUTRAL", None] and score >= 56
             )
 
+        previous_candle = self._previous_candle(recent_candles_5m)
+        prev_high = previous_candle.get("high") if previous_candle else None
+        prev_low = previous_candle.get("low") if previous_candle else None
+        prev_close = previous_candle.get("close") if previous_candle else None
+        reversal_trap_context = self._reversal_trap_context(
+            prev_high=prev_high,
+            prev_low=prev_low,
+            prev_close=prev_close,
+            candle_open=candle_open,
+            candle_high=candle_high,
+            candle_low=candle_low,
+            candle_close=candle_close,
+            vwap=vwap,
+            support=support,
+            resistance=resistance,
+            volume_signal=volume_signal,
+            candle_liquidity_ok=candle_liquidity_ok,
+        )
+        if reversal_trap_context["CE"]["ready"] and scored_direction == "CE":
+            score = min(100, score + reversal_trap_context["CE"]["score_boost"])
+            components.append("reversal_trap_reclaim")
+        elif reversal_trap_context["PE"]["ready"] and scored_direction == "PE":
+            score = min(100, score + reversal_trap_context["PE"]["score_boost"])
+            components.append("reversal_trap_reclaim")
+        self.last_score = score
+        self.last_context_score = score
+        self.last_score_components = components
+
         self._update_retest_setup(candle_time)
         self._update_confirmation_setup(candle_time)
 
@@ -1311,7 +1525,11 @@ class BreakoutStrategy:
         retest_regime_ok = regime in ["TRENDING", "EXPANDING", "RANGING"] and not (
             regime == "RANGING" and score < 68
         )
-        reversal_regime_ok = regime in ["RANGING", "CHOPPY"]
+        reversal_regime_ok = regime in ["RANGING", "CHOPPY"] or (
+            scored_direction == "CE" and reversal_trap_context["CE"]["ready"]
+        ) or (
+            scored_direction == "PE" and reversal_trap_context["PE"]["ready"]
+        )
 
         trade_start = self.time_utils._parse_clock(Config.TRADE_START_TIME)
         current_now = candle_time.time() if candle_time is not None else self.time_utils.current_time()
@@ -1356,6 +1574,10 @@ class BreakoutStrategy:
                 cautions.append("opposite_pressure")
         pressure_conflict_level = self._pressure_conflict_level(pressure_metrics, scored_direction, cautions)
         self.last_pressure_conflict_level = pressure_conflict_level
+        previous_candle = self._previous_candle(recent_candles_5m)
+        prev_high = previous_candle.get("high") if previous_candle else None
+        prev_low = previous_candle.get("low") if previous_candle else None
+        prev_close = previous_candle.get("close") if previous_candle else None
 
         provisional_confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
         time_thresholds = self._get_time_regime_thresholds(time_regime, fallback_mode)
@@ -1367,8 +1589,29 @@ class BreakoutStrategy:
             and volume_signal in ["NORMAL", "STRONG"]
             and score >= max(time_thresholds["breakout_min_score"] - 2, 52)
         )
+        neutral_pressure_reversal_ok = self._neutral_pressure_reversal_ready(
+            scored_direction=scored_direction,
+            score=score,
+            entry_score=score,
+            pressure_metrics=pressure_metrics,
+            prev_high=prev_high,
+            prev_low=prev_low,
+            prev_close=prev_close,
+            candle_close=candle_close,
+            candle_high=candle_high,
+            candle_low=candle_low,
+            vwap=vwap,
+            support=support,
+            resistance=resistance,
+            breakout_body_ok=breakout_body_ok,
+            breakout_structure_ok=breakout_structure_ok,
+            candle_liquidity_ok=candle_liquidity_ok,
+            cautions=cautions,
+        )
         if pressure_metrics and pressure_metrics["pressure_bias"] == "NEUTRAL":
-            if neutral_pressure_soft_watch:
+            if neutral_pressure_reversal_ok:
+                cautions.append("pressure_neutral")
+            elif neutral_pressure_soft_watch:
                 cautions.append("pressure_neutral")
             else:
                 blockers.append("pressure_neutral")
@@ -2107,6 +2350,90 @@ class BreakoutStrategy:
             return "PE", f"VWAP rejection confirmation below {round(reclaim_level_pe, 2)} | score={score}"
 
         # =============================
+        # Trap Reversal Entries
+        # Dedicated manual-trader reversal path for reclaim/reject + trap candles.
+        # =============================
+        if (
+                scored_direction == "CE"
+                and reversal_trap_context["CE"]["ready"]
+                and candle_close is not None
+                and price is not None
+                and vwap is not None
+                and price >= vwap
+                and not opening_session
+                and bullish_build_up_ok
+                and bullish_ha_ok
+                and candle_liquidity_ok
+                and volume_signal in ["NORMAL", "STRONG"]
+                and self.last_entry_score >= 54
+                and score >= max(time_thresholds["reversal_min_score"], 60)
+                and pressure_conflict_level in {"NONE", "MILD"}
+        ):
+            trigger_level = max(vwap, support) if support is not None else vwap
+            if not self._should_suppress_duplicate("CE", "REVERSAL", candle_time, trigger_level):
+                confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
+                self._set_diagnostics(
+                    blockers=blockers,
+                    cautions=cautions,
+                    confidence=confidence,
+                    regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                    signal_type="REVERSAL",
+                )
+                self.last_entry_plan = self._build_entry_plan(
+                    "CE",
+                    "REVERSAL",
+                    trigger_level,
+                    min(vwap or trigger_level, prev_low or trigger_level),
+                    atr,
+                    support,
+                    resistance,
+                )
+                self._reset_retest_setup()
+                self._reset_confirmation_setup()
+                self._mark_signal_emitted("CE", "REVERSAL", candle_time, level=trigger_level, buffer=buffer)
+                return "CE", f"Trap reversal reclaim above {round(trigger_level, 2)} | score={score}"
+
+        if (
+                scored_direction == "PE"
+                and reversal_trap_context["PE"]["ready"]
+                and candle_close is not None
+                and price is not None
+                and vwap is not None
+                and price <= vwap
+                and not opening_session
+                and bearish_build_up_ok
+                and bearish_ha_ok
+                and candle_liquidity_ok
+                and volume_signal in ["NORMAL", "STRONG"]
+                and self.last_entry_score >= 54
+                and score >= max(time_thresholds["reversal_min_score"], 60)
+                and pressure_conflict_level in {"NONE", "MILD"}
+        ):
+            trigger_level = min(vwap, resistance) if resistance is not None else vwap
+            if not self._should_suppress_duplicate("PE", "REVERSAL", candle_time, trigger_level):
+                confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
+                self._set_diagnostics(
+                    blockers=blockers,
+                    cautions=cautions,
+                    confidence=confidence,
+                    regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                    signal_type="REVERSAL",
+                )
+                self.last_entry_plan = self._build_entry_plan(
+                    "PE",
+                    "REVERSAL",
+                    trigger_level,
+                    max(vwap or trigger_level, prev_high or trigger_level),
+                    atr,
+                    support,
+                    resistance,
+                )
+                self._reset_retest_setup()
+                self._reset_confirmation_setup()
+                self._mark_signal_emitted("PE", "REVERSAL", candle_time, level=trigger_level, buffer=buffer)
+                return "PE", f"Trap reversal rejection below {round(trigger_level, 2)} | score={score}"
+
+        # =============================
         # CE BREAKOUT (Smart Money Confirmation)
         # =============================
         if (
@@ -2231,17 +2558,41 @@ class BreakoutStrategy:
                 not Config.FOCUSED_MANUAL_MODE
                 and
                 support is not None
-                and price <= support + buffer
+                and candle_low is not None
+                and candle_low <= support + max(buffer * 1.2, tuning["retest_zone_floor"])
                 and not opening_session
-                and volume_signal in ["NORMAL", "STRONG"]
                 and oi_trend != "BEARISH"
                 and bullish_build_up_ok
                 and score >= max(time_thresholds["reversal_min_score"], 62)
-                and pressure_metrics
-                and pressure_metrics["pressure_bias"] == "BULLISH"
-                and breakout_structure_ok
                 and reversal_regime_ok
-                and self._reversal_confirmation_ready("CE", candle_open, candle_close, breakout_body_ok, ha_strength)
+                and self._reversal_setup_ready(
+                    direction="CE",
+                    price=price,
+                    vwap=vwap,
+                    support=support,
+                    resistance=resistance,
+                    prev_high=prev_high,
+                    prev_low=prev_low,
+                    prev_close=prev_close,
+                    candle_open=candle_open,
+                    candle_high=candle_high,
+                    candle_low=candle_low,
+                    candle_close=candle_close,
+                    buffer=buffer,
+                    volume_signal=volume_signal,
+                    score=score,
+                    entry_score=self.last_entry_score,
+                    pressure_metrics=pressure_metrics,
+                    pressure_conflict_level=pressure_conflict_level,
+                    breakout_body_ok=breakout_body_ok,
+                    breakout_structure_ok=breakout_structure_ok,
+                    candle_liquidity_ok=candle_liquidity_ok,
+                    ha_strength=ha_strength,
+                    build_up_ok=bullish_build_up_ok,
+                    regime_ok=reversal_regime_ok,
+                    time_regime=time_regime,
+                    cautions=cautions,
+                )
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(
@@ -2262,17 +2613,41 @@ class BreakoutStrategy:
                 not Config.FOCUSED_MANUAL_MODE
                 and
                 resistance is not None
-                and price >= resistance - buffer
+                and candle_high is not None
+                and candle_high >= resistance - max(buffer * 1.2, tuning["retest_zone_floor"])
                 and not opening_session
-                and volume_signal in ["NORMAL", "STRONG"]
                 and oi_trend != "BULLISH"
                 and bearish_build_up_ok
                 and score >= max(time_thresholds["reversal_min_score"], 62)
-                and pressure_metrics
-                and pressure_metrics["pressure_bias"] == "BEARISH"
-                and breakout_structure_ok
                 and reversal_regime_ok
-                and self._reversal_confirmation_ready("PE", candle_open, candle_close, breakout_body_ok, ha_strength)
+                and self._reversal_setup_ready(
+                    direction="PE",
+                    price=price,
+                    vwap=vwap,
+                    support=support,
+                    resistance=resistance,
+                    prev_high=prev_high,
+                    prev_low=prev_low,
+                    prev_close=prev_close,
+                    candle_open=candle_open,
+                    candle_high=candle_high,
+                    candle_low=candle_low,
+                    candle_close=candle_close,
+                    buffer=buffer,
+                    volume_signal=volume_signal,
+                    score=score,
+                    entry_score=self.last_entry_score,
+                    pressure_metrics=pressure_metrics,
+                    pressure_conflict_level=pressure_conflict_level,
+                    breakout_body_ok=breakout_body_ok,
+                    breakout_structure_ok=breakout_structure_ok,
+                    candle_liquidity_ok=candle_liquidity_ok,
+                    ha_strength=ha_strength,
+                    build_up_ok=bearish_build_up_ok,
+                    regime_ok=reversal_regime_ok,
+                    time_regime=time_regime,
+                    cautions=cautions,
+                )
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
             self._set_diagnostics(

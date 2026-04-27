@@ -134,11 +134,11 @@ def summarize_day(cur, day):
         reviews = fetch_all(
             cur,
             """
-            SELECT instrument, alert_kind, usefulness, COUNT(*)
+            SELECT instrument, alert_kind, usefulness, outcome_tag, COUNT(*)
             FROM alert_reviews_5m
             WHERE DATE(alert_ts AT TIME ZONE 'Asia/Kolkata') = %s
-            GROUP BY instrument, alert_kind, usefulness
-            ORDER BY instrument, alert_kind, usefulness;
+            GROUP BY instrument, alert_kind, usefulness, outcome_tag
+            ORDER BY instrument, alert_kind, usefulness, outcome_tag;
             """,
             (day,),
         )
@@ -239,8 +239,8 @@ def summarize_day(cur, day):
     if reviews:
         print("\nAlert reviews")
         print("-" * 72)
-        for instrument, alert_kind, usefulness, count in reviews:
-            print(f"{instrument} {alert_kind} {usefulness}: {count}")
+        for instrument, alert_kind, usefulness, outcome_tag, count in reviews:
+            print(f"{instrument} {alert_kind} {usefulness} [{outcome_tag}]: {count}")
 
 
 def main():

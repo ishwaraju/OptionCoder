@@ -38,28 +38,60 @@ def direction_threshold(instrument):
     return 28.0, 18.0
 
 
+def build_note(max_fav, max_adv, close_move, context_label):
+    return (
+        f"{context_label} | fav={round(max_fav, 2)} | "
+        f"adv={round(max_adv, 2)} | close={round(close_move, 2)}"
+    )
+
+
 def classify_watch(instrument, direction, max_fav, max_adv, close_move, converted_to_action):
     good_move, bad_move = direction_threshold(instrument)
     if converted_to_action and max_fav >= good_move:
-        return "WATCH useful", "converted_to_action"
+        return "WATCH useful", "converted_to_action", build_note(max_fav, max_adv, close_move, "watch converted and move expanded")
     if max_fav >= good_move and max_adv <= bad_move:
-        return "WATCH useful", "setup_worked"
+        return "WATCH useful", "setup_worked", build_note(max_fav, max_adv, close_move, "watch setup worked cleanly")
     if max_adv >= good_move and max_fav < bad_move:
-        return "WATCH useful", "saved_from_bad_trade"
+        return "WATCH useful", "saved_from_bad_trade", build_note(max_fav, max_adv, close_move, "watch likely saved from bad trade")
+    if max_fav >= good_move * 0.7 and max_adv >= bad_move:
+        return "WATCH mixed", "two_way_setup", build_note(max_fav, max_adv, close_move, "watch saw both expansion and damage")
     if max_fav < bad_move and max_adv < bad_move:
-        return "WATCH noisy", "low_follow_through"
-    return "WATCH noisy", "mixed_follow_through"
+        return "WATCH noisy", "low_follow_through", build_note(max_fav, max_adv, close_move, "watch never expanded enough")
+    return "WATCH noisy", "mixed_follow_through", build_note(max_fav, max_adv, close_move, "watch stayed unclear")
 
 
 def classify_action(instrument, direction, max_fav, max_adv, close_move):
     good_move, bad_move = direction_threshold(instrument)
-    if close_move >= good_move * 0.5 and max_adv <= bad_move:
-        return "ACTION good", "follow_through"
-    if max_fav >= good_move and close_move < good_move * 0.25:
-        return "ACTION late", "gave_back_move"
-    if max_adv >= bad_move and max_fav < good_move * 0.5:
-        return "ACTION weak", "failed_early"
-    return "ACTION mixed", "unclear"
+    if close_move >= good_move * 0.5 and max_adv <= bad_move * 0.75:
+        return "ACTION good", "follow_through", build_note(max_fav, max_adv, close_move, "action held gains")
+    if max_fav >= good_move and close_move <= 0 and max_adv < good_move * 0.6:
+        return "ACTION fast-profit-only", "gave_back_after_move", build_note(max_fav, max_adv, close_move, "fast move came but holding too long hurt")
+    if max_adv >= bad_move and max_fav < good_move * 0.4:
+        return "ACTION failed", "failed_early", build_note(max_fav, max_adv, close_move, "action damaged early")
+    if max_fav >= good_move * 0.8 and close_move < good_move * 0.2:
+        return "ACTION late", "late_or_giveback", build_note(max_fav, max_adv, close_move, "move came but signal did not retain enough edge")
+    if max_fav >= good_move * 0.6 and max_adv >= bad_move:
+        return "ACTION noisy", "two_way_move", build_note(max_fav, max_adv, close_move, "move worked but path was noisy")
+    return "ACTION mixed", "unclear", build_note(max_fav, max_adv, close_move, "action remained unclear")
+
+
+def print_summary(day, review_rows):
+    summary = {}
+    for row in review_rows:
+        _, instrument, alert_kind, _, _, _, usefulness, outcome_tag, *_rest = row
+        instrument_summary = summary.setdefault(instrument, {})
+        kind_summary = instrument_summary.setdefault(alert_kind, {})
+        key = f"{usefulness} [{outcome_tag}]"
+        kind_summary[key] = kind_summary.get(key, 0) + 1
+
+    print(f"Scored {len(review_rows)} alerts for {day}.")
+    for instrument in sorted(summary):
+        print(f"\n[{instrument}]")
+        for alert_kind in sorted(summary[instrument]):
+            parts = ", ".join(
+                f"{label}={count}" for label, count in sorted(summary[instrument][alert_kind].items())
+            )
+            print(f"{alert_kind}: {parts}")
 
 
 def compute_future_move(cur, instrument, ts_ist, direction):
@@ -151,7 +183,9 @@ def score_day(day):
                     """,
                     (instrument, direction, ts_ist, ts_ist, LOOKAHEAD_MINUTES),
                 )
-                usefulness, outcome_tag = classify_watch(instrument, direction, max_fav, max_adv, close_move, bool(converted))
+                usefulness, outcome_tag, notes = classify_watch(
+                    instrument, direction, max_fav, max_adv, close_move, bool(converted)
+                )
                 review_rows.append(
                     (
                         ts_ist,
@@ -168,7 +202,7 @@ def score_day(day):
                         round(close_move, 2),
                         json.loads(blockers_json) if blockers_json else [],
                         json.loads(cautions_json) if cautions_json else [],
-                        None,
+                        notes,
                     )
                 )
 
@@ -182,7 +216,9 @@ def score_day(day):
                 max_fav = (max(highs) - entry_price) if direction == "CE" else (entry_price - min(lows))
                 max_adv = (entry_price - min(lows)) if direction == "CE" else (max(highs) - entry_price)
                 close_move = (last_close - entry_price) if direction == "CE" else (entry_price - last_close)
-                usefulness, outcome_tag = classify_action(instrument, direction, max_fav, max_adv, close_move)
+                usefulness, outcome_tag, notes = classify_action(
+                    instrument, direction, max_fav, max_adv, close_move
+                )
                 review_rows.append(
                     (
                         ts_ist,
@@ -199,13 +235,18 @@ def score_day(day):
                         round(close_move, 2),
                         [],
                         [],
-                        reason.split("|")[0].strip() if reason else None,
+                        " | ".join(
+                            part for part in [
+                                reason.split("|")[0].strip() if reason else None,
+                                notes,
+                            ] if part
+                        ),
                     )
                 )
 
     for row in review_rows:
         writer.insert_alert_review_5m(row)
-    print(f"Scored {len(review_rows)} alerts for {day}.")
+    print_summary(day, review_rows)
 
 
 def main():
