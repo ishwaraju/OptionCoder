@@ -1,0 +1,19 @@
+# Machine Learning Dependencies (FREE - Open Source)
+# Install with: pip install -r requirements_ml.txt
+
+# Core ML library
+scikit-learn>=1.3.0
+
+# Model serialization
+joblib>=1.3.0
+
+# Data manipulation (usually already installed)
+pandas>=1.5.0
+numpy>=1.24.0
+
+# Optional: For advanced ML
+# xgboost>=2.0.0  # Faster gradient boosting (optional)
+# lightgbm>=4.0.0  # Microsoft gradient boosting (optional)
+
+# Note: All packages are FREE and open source
+# No API keys or subscriptions needed

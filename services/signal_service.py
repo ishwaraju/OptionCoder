@@ -45,6 +45,15 @@ from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.option_data_cache import OptionDataCache
 
+# ML Signal Enhancement (FREE - scikit-learn)
+try:
+    from shared.ml.feature_extractor import MLFeatureExtractor
+    from shared.ml.signal_filter import MLSignalFilter
+    ML_ENABLED = True
+except ImportError as e:
+    print(f"[Signal Service] ML modules not available: {e}")
+    ML_ENABLED = False
+
 
 class SignalService:
     def __init__(self, instrument=None):
@@ -82,6 +91,15 @@ class SignalService:
         # Logging and notifications
         self.audit_logger = TradeLogger()
         self.notifier = Notifier()
+        
+        # ML Components (FREE - scikit-learn)
+        if ML_ENABLED:
+            self.ml_feature_extractor = MLFeatureExtractor()
+            self.ml_filter = MLSignalFilter(threshold=0.55)
+            self._log("[ML] Signal filter initialized (FREE - scikit-learn)")
+        else:
+            self.ml_feature_extractor = None
+            self.ml_filter = None
         
         # State tracking
         self.running = False
@@ -1802,6 +1820,72 @@ class SignalService:
         except Exception as e:
             self._log(f"DB save error (signal issued): {e}")
 
+    def _safe_save_ml_features(self, ml_features, ml_prob):
+        """Save ML features to database for training."""
+        if not ml_features:
+            return
+        try:
+            from shared.db.pool import DBPool
+            if not DBPool._enabled:
+                return
+                
+            query = """
+            INSERT INTO ml_features_log (
+                alert_ts, instrument, signal_direction, score, confidence,
+                adx, volume_ratio, oi_change_pct, vwap_distance, time_hour,
+                time_regime, iv_rank, spread_pct, atr, price_momentum,
+                pressure_conflict_level, oi_bias, oi_trend, trend_15m, trend_aligned,
+                risk_reward_ratio, has_hybrid_mode, signal_type, signal_grade,
+                entry_score, context_score, target_points, stop_points,
+                ml_predicted_prob, created_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
+            )
+            ON CONFLICT (alert_ts, instrument, signal_direction) DO UPDATE
+            SET ml_predicted_prob = EXCLUDED.ml_predicted_prob,
+                updated_at = NOW()
+            """
+            
+            with DBPool.connection() as conn:
+                cur = conn.cursor()
+                cur.execute(query, (
+                    ml_features.get('alert_ts'),
+                    ml_features.get('instrument'),
+                    ml_features.get('signal_direction'),
+                    ml_features.get('score'),
+                    ml_features.get('confidence'),
+                    ml_features.get('adx'),
+                    ml_features.get('volume_ratio'),
+                    ml_features.get('oi_change_pct'),
+                    ml_features.get('vwap_distance'),
+                    ml_features.get('time_hour'),
+                    ml_features.get('time_regime'),
+                    ml_features.get('iv_rank'),
+                    ml_features.get('spread_pct'),
+                    ml_features.get('atr'),
+                    ml_features.get('price_momentum'),
+                    ml_features.get('pressure_conflict_level'),
+                    ml_features.get('oi_bias'),
+                    ml_features.get('oi_trend'),
+                    ml_features.get('trend_15m'),
+                    ml_features.get('trend_aligned'),
+                    ml_features.get('risk_reward_ratio'),
+                    ml_features.get('has_hybrid_mode'),
+                    ml_features.get('signal_type'),
+                    ml_features.get('signal_grade'),
+                    ml_features.get('entry_score'),
+                    ml_features.get('context_score'),
+                    ml_features.get('target_points'),
+                    ml_features.get('stop_points'),
+                    round(ml_prob, 4) if ml_prob else None
+                ))
+                conn.commit()
+                cur.close()
+        except Exception as e:
+            # Silent fail - don't disrupt signal flow
+            pass
+
     def _extract_watch_direction(self, candidate_signal, balanced_pro):
         if candidate_signal in {"CE", "PE"}:
             return candidate_signal
@@ -2041,6 +2125,51 @@ class SignalService:
         candidate_signal = signal
         candidate_reason = reason
         self._current_candle_time = candle_5m["time"]
+        
+        # ML Feature Extraction and Filtering (FREE - scikit-learn)
+        ml_features = None
+        ml_prob = None
+        if signal and ML_ENABLED and self.ml_feature_extractor:
+            try:
+                # Extract features for ML
+                ml_features = self.ml_feature_extractor.extract_features(
+                    instrument=self.instrument,
+                    signal_direction=signal,
+                    price=price,
+                    vwap=vwap_value,
+                    atr=atr_value,
+                    score=self.strategy.last_score,
+                    confidence=self.strategy.last_confidence,
+                    time_regime=balanced_pro.get('time_regime', 'UNKNOWN'),
+                    oi_ladder_data=oi_ladder_data,
+                    pressure_metrics=pressure_metrics,
+                    trend_15m=trend_15m,
+                    recent_candles_5m=recent_candles_5m,
+                    strategy_context={
+                        'signal_type': self.strategy.last_signal_type,
+                        'signal_grade': self.strategy.last_signal_grade,
+                        'entry_score': self.strategy.last_entry_score,
+                        'context_score': self.strategy.last_context_score,
+                        'hybrid_mode': balanced_pro.get('setup', '').startswith('HYBRID')
+                    },
+                    entry_plan=self.strategy.last_entry_plan
+                )
+                
+                # Apply ML filter
+                should_take, ml_reason, ml_prob = self.ml_filter.should_take_signal(ml_features)
+                
+                if not should_take:
+                    # ML filtered out the signal
+                    signal = None
+                    reason = f"ML Filtered ({ml_reason})"
+                    print(f"[Signal Service] {self.instrument}: {reason}")
+                else:
+                    print(f"[Signal Service] {self.instrument}: ML Approved ({ml_reason})")
+                    
+            except Exception as e:
+                print(f"[Signal Service] ML processing error: {e}")
+                ml_features = None
+        
         signal, reason = self._apply_signal_cooldowns(signal, reason)
         balanced_pro = self._build_balanced_pro_summary(
             base_bias,
@@ -2187,6 +2316,11 @@ class SignalService:
                     if candle_5m.get("close_time") else None
                 ),
             )
+            
+            # Save ML features for training (async, don't block)
+            if ml_features:
+                self._safe_save_ml_features(ml_features, ml_prob)
+            
             self._clear_pending_entry_watch()
             self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
             self.signals_generated += 1
