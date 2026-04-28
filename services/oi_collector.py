@@ -290,7 +290,7 @@ class OICollector:
                         self.instrument,
                         int(snapshot["atm_strike"]),
                         int(snapshot["strike"]),
-                        int(abs(snapshot["strike"] - atm_strike)),
+                        int(snapshot.get("distance_from_atm", 0)),
                         snapshot["option_type"],
                         snapshot.get("security_id"),
                         int(snapshot.get("oi", 0)),

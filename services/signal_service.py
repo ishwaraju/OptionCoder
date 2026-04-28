@@ -77,7 +77,7 @@ class SignalService:
         
         # Strategy
         self.strategy = BreakoutStrategy(instrument=self.instrument)
-        self.strike_selector = StrikeSelector()
+        self.strike_selector = StrikeSelector(self.instrument)
         
         # Logging and notifications
         self.audit_logger = TradeLogger()
@@ -384,6 +384,48 @@ class SignalService:
 
         return True, None
 
+    @staticmethod
+    def _pending_watch_has_caution(pending, caution):
+        cautions = pending.get("cautions") or []
+        return caution in cautions
+
+    def _pending_watch_conflicts_too_high(self, pending):
+        setup = (pending.get("signal_type") or "NONE").upper()
+        cautions = set(pending.get("cautions") or [])
+        blockers = set(pending.get("blockers") or [])
+        pressure_conflict_level = (pending.get("pressure_conflict_level") or "NONE").upper()
+        time_regime = (pending.get("time_regime") or "").upper()
+
+        if setup != "BREAKOUT_CONFIRM":
+            return False, None
+
+        opposite_pressure = "opposite_pressure" in cautions
+        weak_participation = (
+            "participation_weak" in cautions
+            or "participation_delta_missing" in cautions
+        )
+        retest_wait = "late_confirmation_wait_retest" in cautions
+        expiry_mode = "expiry_day_mode" in cautions
+
+        if opposite_pressure and weak_participation and pressure_conflict_level in {"MILD", "MODERATE", "HIGH"}:
+            return True, "breakout watch has opposite pressure with weak participation"
+
+        if retest_wait and opposite_pressure:
+            return True, "breakout watch is already in retest-wait mode"
+
+        if self.instrument == "SENSEX" and time_regime == "LATE_DAY" and (
+            opposite_pressure or pressure_conflict_level != "NONE"
+        ):
+            return True, "late-day SENSEX breakout watch too conflicted"
+
+        if self.instrument in {"NIFTY", "BANKNIFTY"} and expiry_mode and opposite_pressure and weak_participation:
+            return True, "expiry breakout watch has poor option confirmation"
+
+        if "direction_present_but_filters_incomplete" in blockers and opposite_pressure and weak_participation:
+            return True, "direction incomplete with opposite pressure and weak participation"
+
+        return False, None
+
     def _set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m):
         if not watch_payload:
             self._clear_pending_entry_watch()
@@ -436,6 +478,22 @@ class SignalService:
             self._clear_pending_entry_watch()
             return
 
+        temp_pending = {
+            "instrument": self.instrument,
+            "signal_type": watch_payload.get("setup"),
+            "cautions": list(watch_payload.get("cautions") or []),
+            "blockers": list(watch_payload.get("blockers") or []),
+            "pressure_conflict_level": (
+                getattr(self.strategy, "last_pressure_conflict_level", None)
+                or (balanced_pro or {}).get("pressure_conflict_level")
+            ),
+            "time_regime": (balanced_pro or {}).get("time_regime"),
+        }
+        conflicts_too_high, _ = self._pending_watch_conflicts_too_high(temp_pending)
+        if conflicts_too_high:
+            self._clear_pending_entry_watch()
+            return
+
         self.pending_entry_watch = {
             "instrument": self.instrument,
             "direction": direction,
@@ -456,6 +514,12 @@ class SignalService:
             "fast_track_ready": fast_track_ready,
             "strong_watch_setup": strong_watch_setup,
             "hybrid_mode": hybrid_mode,
+            "cautions": list(watch_payload.get("cautions") or []),
+            "blockers": list(watch_payload.get("blockers") or []),
+            "pressure_conflict_level": (
+                getattr(self.strategy, "last_pressure_conflict_level", None)
+                or (balanced_pro or {}).get("pressure_conflict_level")
+            ),
         }
 
     def _evaluate_pending_entry_watch(self, recent_1m_candles):
@@ -483,6 +547,10 @@ class SignalService:
         if minutes_since_watch > max_watch_minutes:
             return {"status": "EXPIRED", "reason": "1m confirmation window expired"}
         pending["minutes_since_watch"] = minutes_since_watch
+
+        conflicts_too_high, conflict_reason = self._pending_watch_conflicts_too_high(pending)
+        if conflicts_too_high:
+            return {"status": "INVALIDATED", "reason": conflict_reason}
 
         trigger_price = pending["trigger_price"]
         invalidate_price = pending.get("invalidate_price")
@@ -749,6 +817,10 @@ class SignalService:
 
         oi_trend = oi_ladder_data["trend"] if oi_ladder_data else None
         build_up = oi_ladder_data["build_up"] if oi_ladder_data else None
+        bullish_pressure_score = float((oi_ladder_data or {}).get("bullish_pressure_score") or 0)
+        bearish_pressure_score = float((oi_ladder_data or {}).get("bearish_pressure_score") or 0)
+        support_wall_state = (oi_ladder_data or {}).get("support_wall_state")
+        resistance_wall_state = (oi_ladder_data or {}).get("resistance_wall_state")
 
         bullish_votes = 0
         bearish_votes = 0
@@ -771,6 +843,16 @@ class SignalService:
         if build_up in ["LONG_BUILDUP", "SHORT_COVERING"]:
             bullish_votes += 1
         elif build_up in ["SHORT_BUILDUP", "LONG_UNWINDING"]:
+            bearish_votes += 1
+
+        if bullish_pressure_score >= bearish_pressure_score * 1.2 and bullish_pressure_score > 0:
+            bullish_votes += 1
+        elif bearish_pressure_score >= bullish_pressure_score * 1.2 and bearish_pressure_score > 0:
+            bearish_votes += 1
+
+        if support_wall_state == "STRENGTHENING":
+            bullish_votes += 1
+        if resistance_wall_state == "STRENGTHENING":
             bearish_votes += 1
 
         if bullish_votes >= bearish_votes + 2:
@@ -861,6 +943,7 @@ class SignalService:
             "watch_bucket": self.strategy.last_watch_bucket,
             "pressure_conflict_level": self.strategy.last_pressure_conflict_level,
             "confidence_summary": self.strategy.last_confidence_summary,
+            "pressure_summary": None,
         }
 
     @staticmethod
@@ -1094,6 +1177,99 @@ class SignalService:
         if spread_pct is not None:
             bits.append(f"ATM spread {spread_pct}%")
         return " | ".join(bits) if bits else None
+
+    @staticmethod
+    def _pressure_direction_scores(pressure_metrics):
+        if not pressure_metrics:
+            return None
+
+        bullish_score = 0.0
+        bearish_score = 0.0
+
+        near_put = float(pressure_metrics.get("near_put_pressure_ratio") or 0.0)
+        near_call = float(pressure_metrics.get("near_call_pressure_ratio") or 0.0)
+        full_put = float(pressure_metrics.get("full_put_pressure_ratio") or 0.0)
+        full_call = float(pressure_metrics.get("full_call_pressure_ratio") or 0.0)
+
+        bullish_score += min(near_put * 22, 40)
+        bullish_score += min(full_put * 16, 28)
+        bearish_score += min(near_call * 22, 40)
+        bearish_score += min(full_call * 16, 28)
+
+        atm_pe_vol = float(pressure_metrics.get("atm_pe_volume") or 0.0)
+        atm_ce_vol = float(pressure_metrics.get("atm_ce_volume") or 0.0)
+        atm_pe_oi = float(pressure_metrics.get("atm_pe_oi") or 0.0)
+        atm_ce_oi = float(pressure_metrics.get("atm_ce_oi") or 0.0)
+        mid_pe_volume = float(pressure_metrics.get("mid_pe_volume") or 0.0)
+        mid_ce_volume = float(pressure_metrics.get("mid_ce_volume") or 0.0)
+        near_pe_oi = float(pressure_metrics.get("near_pe_oi") or 0.0)
+        near_ce_oi = float(pressure_metrics.get("near_ce_oi") or 0.0)
+
+        if atm_pe_vol > atm_ce_vol:
+            bullish_score += 8
+        elif atm_ce_vol > atm_pe_vol:
+            bearish_score += 8
+
+        if atm_pe_oi > atm_ce_oi:
+            bullish_score += 6
+        elif atm_ce_oi > atm_pe_oi:
+            bearish_score += 6
+
+        if mid_pe_volume > mid_ce_volume:
+            bullish_score += 6
+        elif mid_ce_volume > mid_pe_volume:
+            bearish_score += 6
+
+        if near_pe_oi > near_ce_oi:
+            bullish_score += 4
+        elif near_ce_oi > near_pe_oi:
+            bearish_score += 4
+
+        return {
+            "bullish_score": round(min(max(bullish_score, 0.0), 100.0), 1),
+            "bearish_score": round(min(max(bearish_score, 0.0), 100.0), 1),
+        }
+
+    def _build_pressure_summary(self, pressure_metrics, participation_metrics=None, direction=None):
+        scores = self._pressure_direction_scores(pressure_metrics)
+        if not scores:
+            return None
+
+        bullish_score = scores["bullish_score"]
+        bearish_score = scores["bearish_score"]
+        edge = round(abs(bullish_score - bearish_score), 1)
+
+        if bullish_score >= bearish_score + 8:
+            bias = "BULLISH"
+        elif bearish_score >= bullish_score + 8:
+            bias = "BEARISH"
+        else:
+            bias = "NEUTRAL"
+
+        strength = "STRONG" if edge >= 18 else "MODERATE" if edge >= 8 else "MIXED"
+
+        bits = [f"Pressure {bias} ({strength})", f"Bull {bullish_score} vs Bear {bearish_score}"]
+
+        if pressure_metrics:
+            near_put = pressure_metrics.get("near_put_pressure_ratio")
+            near_call = pressure_metrics.get("near_call_pressure_ratio")
+            if near_put is not None and near_call is not None:
+                bits.append(f"near PE {near_put} / CE {near_call}")
+
+        if direction in {"CE", "PE"} and participation_metrics:
+            directional = participation_metrics.get(direction) or {}
+            quality = directional.get("quality")
+            if quality:
+                bits.append(f"{direction} participation {quality}")
+
+        return {
+            "bias": bias,
+            "strength": strength,
+            "bullish_score": bullish_score,
+            "bearish_score": bearish_score,
+            "edge": edge,
+            "summary": " | ".join(bits),
+        }
 
     @staticmethod
     def _derive_15m_trend_from_5m(candles_5m):
@@ -1413,6 +1589,17 @@ class SignalService:
 
         ce_oi_ladder = self.option_data.get("ce_oi_ladder", {})
         pe_oi_ladder = self.option_data.get("pe_oi_ladder", {})
+        band_rows = self.option_data.get("band_snapshots") or []
+        ce_volume_delta = {
+            row["strike"]: int((row.get("volume") or 0) - (row.get("previous_volume") or 0))
+            for row in band_rows
+            if row.get("option_type") == "CE" and row.get("strike") is not None
+        }
+        pe_volume_delta = {
+            row["strike"]: int((row.get("volume") or 0) - (row.get("previous_volume") or 0))
+            for row in band_rows
+            if row.get("option_type") == "PE" and row.get("strike") is not None
+        }
         price_change = 0 if self.prev_price is None else price - self.prev_price
 
         self.prev_price = price
@@ -1423,6 +1610,9 @@ class SignalService:
             pe_oi_ladder,
             price_change,
             atm=self.option_data.get("atm"),
+            price=price,
+            ce_volume_delta=ce_volume_delta,
+            pe_volume_delta=pe_volume_delta,
         )
 
         if self._is_debug_enabled():
@@ -1431,6 +1621,7 @@ class SignalService:
             print("Resistance:", oi_ladder_data["resistance"])
             print("Trend:", oi_ladder_data["trend"])
             print("Build-up:", oi_ladder_data["build_up"])
+            print("OI Summary:", oi_ladder_data.get("oi_summary"))
 
         return oi_ladder_data
 
@@ -1696,6 +1887,7 @@ class SignalService:
             getattr(self.strategy, "last_participation_metrics", None),
             direction,
         )
+        pressure_summary = (balanced_pro or {}).get("pressure_summary")
 
         return {
             "instrument": self.instrument,
@@ -1719,6 +1911,7 @@ class SignalService:
             "entry_if": entry_if,
             "avoid_if": avoid_if,
             "participation_read": participation_read,
+            "pressure_read": pressure_summary.get("summary") if pressure_summary else None,
             "key": (
                 self.instrument,
                 direction,
@@ -1842,6 +2035,7 @@ class SignalService:
             recent_candles_5m=recent_candles_5m,
             trend_15m=trend_15m,
             participation_metrics=participation_metrics,
+            oi_ladder_data=oi_ladder_data,
         )
         
         candidate_signal = signal
@@ -1854,6 +2048,11 @@ class SignalService:
             fallback_context,
             pressure_metrics,
             actionable_signal=bool(signal),
+        )
+        balanced_pro["pressure_summary"] = self._build_pressure_summary(
+            pressure_metrics=pressure_metrics,
+            participation_metrics=participation_metrics,
+            direction=(signal if signal in {"CE", "PE"} else candidate_signal if candidate_signal in {"CE", "PE"} else None),
         )
 
         # Strike selection
@@ -1883,6 +2082,10 @@ class SignalService:
         )
         if balanced_pro.get("confidence_summary"):
             enriched_reason += f" | confidence_summary={balanced_pro['confidence_summary']}"
+        if oi_ladder_data and oi_ladder_data.get("oi_summary"):
+            enriched_reason += f" | oi_summary={oi_ladder_data['oi_summary']}"
+        if balanced_pro.get("pressure_summary", {}).get("summary"):
+            enriched_reason += f" | pressure_summary={balanced_pro['pressure_summary']['summary']}"
         if self.option_data_source:
             enriched_reason += f" | option_data_source={self.option_data_source}"
         if self.option_data_ts:
@@ -1965,6 +2168,8 @@ class SignalService:
                     "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
                     "time_regime": balanced_pro["time_regime"],
                     "reason": enriched_reason,
+                    "pressure_read": (balanced_pro.get("pressure_summary") or {}).get("summary"),
+                    "oi_read": (oi_ladder_data or {}).get("oi_summary"),
                 }
             )
             self._safe_save_signal_issued(

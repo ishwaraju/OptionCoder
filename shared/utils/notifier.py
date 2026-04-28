@@ -5,6 +5,8 @@ Handles notifications and alerts
 
 from config import Config
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 def _humanize_flag(flag):
@@ -140,6 +142,27 @@ def _reason_summary(reason):
     return primary
 
 
+def _ist_now_label():
+    try:
+        return datetime.now(ZoneInfo("Asia/Kolkata")).strftime("IST %H:%M")
+    except Exception:
+        return None
+
+
+def _short_pressure_read(pressure_read):
+    if not pressure_read:
+        return None
+    parts = [part.strip() for part in pressure_read.split("|") if part.strip()]
+    return " | ".join(parts[:2]) if parts else pressure_read
+
+
+def _short_oi_read(oi_read):
+    if not oi_read:
+        return None
+    parts = [part.strip() for part in oi_read.split("|") if part.strip()]
+    return " | ".join(parts[:3]) if parts else oi_read
+
+
 class Notifier:
     """Notification handler"""
     
@@ -195,47 +218,48 @@ class Notifier:
         reason = trade_data.get("reason")
         confidence_summary = trade_data.get("confidence_summary")
         first_target_price = trade_data.get("first_target_price")
+        pressure_read = trade_data.get("pressure_read")
+        oi_read = trade_data.get("oi_read")
         setup_label = _setup_label(signal_type)
-        short_reason = _reason_summary(reason)
         lines = []
         header = f"{instrument} ACTION {signal}" if instrument else f"ACTION {signal}"
         lines.append(header)
         summary = []
+        ist_label = _ist_now_label()
+        if ist_label:
+            summary.append(ist_label)
         if signal_type:
-            summary.append(f"Setup: {setup_label}")
+            summary.append(setup_label)
         if grade:
-            summary.append(f"Grade: {grade}")
+            summary.append(grade)
         if confidence:
-            summary.append(f"Confidence: {confidence}")
-        if time_regime:
-            summary.append(f"Time: {time_regime}")
+            summary.append(confidence)
         if summary:
             lines.append(" | ".join(summary))
         levels = []
-        if strike is not None:
-            levels.append(f"Strike: {strike}")
         if price is not None:
-            levels.append(f"Spot: {price}")
+            levels.append(f"Spot {price}")
         if trigger_price is not None:
-            levels.append(f"Entry zone: {trigger_price}")
+            levels.append(f"Trig {trigger_price}")
         if invalidate_price is not None:
-            levels.append(f"Avoid below/above: {invalidate_price}")
+            levels.append(f"SL {invalidate_price}")
         if first_target_price is not None:
-            levels.append(f"Target zone: {first_target_price}")
+            levels.append(f"T1 {first_target_price}")
+        if strike is not None:
+            levels.append(f"Strike {strike}")
         if levels:
             lines.append(" | ".join(levels))
-        if confidence_summary:
-            lines.append(f"Read: {confidence_summary}")
-        lines.append(
-            "Plan: " + _action_plan_for_setup(
-                signal_type,
-                signal,
-                trigger_price,
-                invalidate_price,
-            )
-        )
-        if short_reason:
-            lines.append(f"Why: {short_reason}")
+        flow = []
+        short_pressure = _short_pressure_read(pressure_read)
+        short_oi = _short_oi_read(oi_read)
+        if short_pressure:
+            flow.append(short_pressure)
+        if short_oi:
+            flow.append(short_oi)
+        elif confidence_summary:
+            flow.append(confidence_summary)
+        if flow:
+            lines.append(" | ".join(flow[:2]))
         message = "\n".join(lines)
         self.send_alert(message)
 
@@ -265,8 +289,8 @@ class Notifier:
         entry_if = watch_data.get("entry_if")
         avoid_if = watch_data.get("avoid_if")
         participation_read = watch_data.get("participation_read")
+        pressure_read = watch_data.get("pressure_read")
         setup_label = _setup_label(setup)
-        short_reason = _reason_summary(reason)
 
         lines = []
         trigger_line = _watch_trigger_line(direction, trigger_price)
@@ -278,14 +302,15 @@ class Notifier:
             header = trigger_line or f"WATCH {direction}"
         lines.append(header)
         summary = []
+        ist_label = _ist_now_label()
+        if ist_label:
+            summary.append(ist_label)
         if setup and setup != "NONE":
             summary.append(setup_label)
         if score is not None:
             summary.append(f"S:{score}")
         if entry_score is not None:
             summary.append(f"E:{entry_score}")
-        if confidence:
-            summary.append(confidence)
         if grade and grade != "SKIP":
             summary.append(f"G:{grade}")
         if summary:
@@ -301,35 +326,20 @@ class Notifier:
             levels.append(f"T1 {first_target_price}")
         if levels:
             lines.append(" | ".join(levels))
-        compact_read = []
-        if watch_bucket and watch_bucket != "WATCH_CONTEXT":
-            compact_read.append(_watch_bucket_label(watch_bucket))
-        if confidence_summary:
-            compact_read.append(confidence_summary)
-        elif short_reason:
-            compact_read.append(short_reason)
-        if compact_read:
-            lines.append(" | ".join(compact_read[:2]))
-
-        flags = []
-        if participation_read:
-            flags.append(participation_read.split("|", 1)[0].strip())
-        if blockers:
-            flags.append("Missing: " + ", ".join(_humanize_flag(flag) for flag in blockers[:2]))
-        if cautions:
-            flags.append("Caution: " + ", ".join(_humanize_flag(flag) for flag in cautions[:2]))
-        if flags:
-            lines.append(" | ".join(flags[:2]))
+        flow = []
+        short_pressure = _short_pressure_read(pressure_read)
+        if short_pressure:
+            flow.append(short_pressure)
+        elif participation_read:
+            flow.append(participation_read.split("|", 1)[0].strip())
+        if flow:
+            lines.append(" | ".join(flow[:1]))
 
         actions = []
         if entry_if:
-            actions.append(f"Entry: {entry_if}")
+            actions.append(f"Entry: 5m close {'above' if direction == 'CE' else 'below'} {trigger_price}")
         if avoid_if:
-            actions.append(f"Avoid: {avoid_if}")
-        if not actions:
-            plan = action_hint or _action_plan_for_setup(setup, direction, trigger_price, invalidate_price)
-            if plan:
-                actions.append(plan)
+            actions.append(f"Avoid: {'below' if direction == 'CE' else 'above'} {invalidate_price}")
         if actions:
             lines.append(" | ".join(actions[:2]))
 
@@ -374,6 +384,9 @@ class Notifier:
             levels.append(f"Trig {trigger_price}")
 
         lines = [header]
+        ist_label = _ist_now_label()
+        if ist_label:
+            summary.insert(0, ist_label)
         if summary:
             lines.append(" | ".join(summary))
         if levels:
@@ -411,32 +424,20 @@ class Notifier:
             header_parts.append(instrument)
         if signal:
             header_parts.append(signal)
-        header_parts.append(guidance or "Update")
+        header_parts.append((guidance or "Update").replace("_", " "))
         lines.append(" | ".join(header_parts))
 
         summary = []
+        ist_label = _ist_now_label()
+        if ist_label:
+            summary.append(ist_label)
         if pnl_points is not None:
             summary.append(f"{pnl_points:+.2f}pts")
         if price is not None:
             summary.append(f"Price {price}")
         if entry_price is not None:
             summary.append(f"Entry {entry_price}")
-        if structure:
-            summary.append(structure)
         if summary:
             lines.append(" | ".join(summary))
-
-        context_bits = []
-        if heikin_ashi:
-            context_bits.append(f"HA_{heikin_ashi}")
-        if time_regime:
-            context_bits.append(time_regime)
-        if quality:
-            context_bits.append(f"Q{quality}")
-        if context_bits:
-            lines.append(" | ".join(context_bits))
-
-        if reason:
-            lines.append(reason)
 
         self.send_alert("\n".join(lines))

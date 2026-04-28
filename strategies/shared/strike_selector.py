@@ -1,17 +1,24 @@
 from shared.utils.time_utils import TimeUtils
 from config import Config
+from shared.utils.instrument_profile import get_instrument_profile
 
 
 class StrikeSelector:
-    def __init__(self):
+    def __init__(self, instrument=None):
         self.time_utils = TimeUtils()
+        self.profile = get_instrument_profile(instrument)
+        self.instrument = self.profile["instrument"]
+        self.strike_gap = self.profile["strike_step"]
+
+    def _instrument_strike_gap(self):
+        return self.strike_gap or Config.STRIKE_STEP.get(self.instrument, 50)
 
     def get_atm_strike(self, price):
-        strike_gap = Config.STRIKE_GAP
+        strike_gap = self._instrument_strike_gap()
         return round(price / strike_gap) * strike_gap
 
     def get_itm_strike(self, price, option_type):
-        strike_gap = Config.STRIKE_GAP
+        strike_gap = self._instrument_strike_gap()
         atm = self.get_atm_strike(price)
 
         if option_type == "CE":
@@ -20,7 +27,7 @@ class StrikeSelector:
             return atm + strike_gap
 
     def get_deeper_itm_strike(self, price, option_type, steps=2):
-        strike_gap = Config.STRIKE_GAP * steps
+        strike_gap = self._instrument_strike_gap() * steps
         atm = self.get_atm_strike(price)
 
         if option_type == "CE":
@@ -52,13 +59,14 @@ class StrikeSelector:
         strongest_ce_strike = pressure_metrics.get("strongest_ce_strike") if pressure_metrics else None
         strongest_pe_strike = pressure_metrics.get("strongest_pe_strike") if pressure_metrics else None
         atm = self.get_atm_strike(price)
+        strike_gap = self._instrument_strike_gap()
 
         if signal == "CE":
             aligned_pressure = pressure_bias == "BULLISH" and near_put_ratio >= 1.2
-            strongest_nearby = strongest_pe_strike in {atm - Config.STRIKE_GAP, atm, atm + Config.STRIKE_GAP}
+            strongest_nearby = strongest_pe_strike in {atm - strike_gap, atm, atm + strike_gap}
         else:
             aligned_pressure = pressure_bias == "BEARISH" and near_call_ratio >= 1.2
-            strongest_nearby = strongest_ce_strike in {atm - Config.STRIKE_GAP, atm, atm + Config.STRIKE_GAP}
+            strongest_nearby = strongest_ce_strike in {atm - strike_gap, atm, atm + strike_gap}
 
         if strategy_score >= 85 and volume_signal == "STRONG" and aligned_pressure and strongest_nearby:
             return atm, "ATM because score, volume, and nearby pressure are strongly aligned"

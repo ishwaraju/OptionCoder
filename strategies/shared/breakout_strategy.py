@@ -1373,6 +1373,7 @@ class BreakoutStrategy:
             recent_candles_5m=None,
             trend_15m=None,
             participation_metrics=None,
+            oi_ladder_data=None,
     ):
         """
         Generate CE/PE signal using:
@@ -1463,6 +1464,43 @@ class BreakoutStrategy:
             components=components,
             participation_metrics=participation_metrics,
         )
+        self.last_score = score
+        self.last_context_score = score
+        self.last_score_components = components
+
+        oi_divergence = (oi_ladder_data or {}).get("price_vs_oi_divergence")
+        wall_break_alert = (oi_ladder_data or {}).get("wall_break_alert")
+        support_wall_state = (oi_ladder_data or {}).get("support_wall_state")
+        resistance_wall_state = (oi_ladder_data or {}).get("resistance_wall_state")
+        divergence_against_direction = (
+            (scored_direction == "CE" and oi_divergence == "BEARISH_DIVERGENCE")
+            or (scored_direction == "PE" and oi_divergence == "BULLISH_DIVERGENCE")
+        )
+        divergence_supports_direction = (
+            (scored_direction == "CE" and oi_divergence == "BULLISH_DIVERGENCE")
+            or (scored_direction == "PE" and oi_divergence == "BEARISH_DIVERGENCE")
+        )
+        wall_break_supports_direction = (
+            (scored_direction == "CE" and wall_break_alert == "RESISTANCE_BREAK_RISK")
+            or (scored_direction == "PE" and wall_break_alert == "SUPPORT_BREAK_RISK")
+        )
+        wall_strength_supports_direction = (
+            (scored_direction == "CE" and resistance_wall_state == "WEAKENING")
+            or (scored_direction == "PE" and support_wall_state == "WEAKENING")
+        )
+        if divergence_against_direction:
+            score = max(0, score - 8)
+            cautions = self._append_cautions(cautions, "oi_divergence_against")
+            components.append("oi_divergence_against")
+        elif divergence_supports_direction:
+            score = min(100, score + 4)
+            components.append("oi_divergence_support")
+        if wall_break_supports_direction:
+            score = min(100, score + 6)
+            components.append("oi_wall_break_risk_support")
+        elif wall_strength_supports_direction:
+            score = min(100, score + 3)
+            components.append("oi_wall_strength_support")
         self.last_score = score
         self.last_context_score = score
         self.last_score_components = components
@@ -1645,6 +1683,10 @@ class BreakoutStrategy:
         )
         if self.instrument == "SENSEX" and Config.FOCUSED_MANUAL_MODE and self.last_entry_score > 0:
             self.last_entry_score = min(100, self.last_entry_score + 6)
+        if wall_break_supports_direction and self.last_entry_score > 0:
+            self.last_entry_score = min(100, self.last_entry_score + 4)
+        if divergence_against_direction and self.last_entry_score > 0:
+            self.last_entry_score = max(0, self.last_entry_score - 6)
         recent_breakout_context = self._recent_breakout_context(
             scored_direction,
             candle_time,
@@ -3193,6 +3235,12 @@ class BreakoutStrategy:
                 cautions = self._append_cautions(cautions, "volume_weak")
         if not candle_liquidity_ok:
             blockers.append("low_tick_density")
+        if divergence_against_direction and (
+            volume_signal != "STRONG"
+            or self.last_entry_score < 66
+            or pressure_conflict_level not in {"NONE", "MILD"}
+        ):
+            blockers.append("oi_divergence_conflict")
         if scored_direction == "CE":
             if price <= vwap:
                 blockers.append("vwap_not_supportive")
@@ -3208,6 +3256,10 @@ class BreakoutStrategy:
                     and pressure_conflict_level == "MILD"
                     and score >= 56
                     and time_regime in {"OPENING", "MID_MORNING"}
+                ) and not (
+                    wall_break_supports_direction
+                    and self.last_entry_score >= 68
+                    and pressure_conflict_level == "MILD"
                 ):
                     blockers.append("pressure_conflict")
                 else:
@@ -3231,6 +3283,10 @@ class BreakoutStrategy:
                     and pressure_conflict_level == "MILD"
                     and score >= 56
                     and time_regime in {"OPENING", "MID_MORNING"}
+                ) and not (
+                    wall_break_supports_direction
+                    and self.last_entry_score >= 68
+                    and pressure_conflict_level == "MILD"
                 ):
                     blockers.append("pressure_conflict")
                 else:

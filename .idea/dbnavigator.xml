@@ -54,7 +54,9 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files />
+    <open-files>
+      <object connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" object-ref="schemas/public/tables/oi_snapshots_1m" />
+    </open-files>
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
     <prerequisites />

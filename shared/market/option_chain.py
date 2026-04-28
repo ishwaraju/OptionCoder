@@ -3,6 +3,7 @@ import time
 from datetime import timedelta
 from config import Config
 from shared.utils.time_utils import TimeUtils
+from shared.utils.instrument_profile import get_instrument_profile
 
 
 class OptionChain:
@@ -21,8 +22,11 @@ class OptionChain:
         }
 
         # Get security ID for instrument
-        self.instrument = (instrument or Config.SYMBOL).upper()
+        self.profile = get_instrument_profile(instrument)
+        self.instrument = self.profile["instrument"]
         self.security_id = Config.SECURITY_IDS.get(self.instrument, 13)
+        self.strike_step = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
+        self.band_strike_count = 5
 
         self.cached_data = None
         self.last_fetch_time = 0
@@ -102,8 +106,9 @@ class OptionChain:
         total_call_volume = 0
         total_put_volume = 0
 
-        for strike in [atm + i for i in range(-250, 251, 50)]:
-            distance_steps = abs(strike - atm) // Config.STRIKE_GAP
+        for offset in range(-self.band_strike_count, self.band_strike_count + 1):
+            strike = atm + (offset * self.strike_step)
+            distance_steps = abs(offset)
             base_oi = max(150000, 420000 - (distance_steps * 35000))
             base_volume = max(800, 3200 - (distance_steps * 250))
 
@@ -111,14 +116,14 @@ class OptionChain:
                 ce_oi = int(base_oi * (0.92 - (distance_steps * 0.01)))
                 pe_oi = int(base_oi * (1.08 + (0.03 if strike <= atm else 0)))
                 ce_volume = int(base_volume * 0.85)
-                pe_volume = int(base_volume * (1.35 if strike >= atm - Config.STRIKE_GAP else 1.15))
+                pe_volume = int(base_volume * (1.35 if strike >= atm - self.strike_step else 1.15))
             else:
                 ce_oi = int(base_oi * (1.08 + (0.03 if strike >= atm else 0)))
                 pe_oi = int(base_oi * (0.92 - (distance_steps * 0.01)))
-                ce_volume = int(base_volume * (1.35 if strike <= atm + Config.STRIKE_GAP else 1.15))
+                ce_volume = int(base_volume * (1.35 if strike <= atm + self.strike_step else 1.15))
                 pe_volume = int(base_volume * 0.85)
 
-            distance_from_atm = int((strike - atm) / Config.STRIKE_GAP)
+            distance_from_atm = int(offset)
             ce_price = max(5, 180 - (distance_steps * 18))
             pe_price = max(5, 180 - (distance_steps * 18))
 
@@ -291,7 +296,7 @@ class OptionChain:
     # ATM Strike
     # -------------------------------------------------
     def get_atm_strike(self, price):
-        step = Config.STRIKE_GAP
+        step = self.strike_step
         return int(round(price / step) * step)
 
     # -------------------------------------------------
@@ -335,8 +340,11 @@ class OptionChain:
 
             atm = self.get_atm_strike(self.underlying_price)
 
-            # ATM ±5 strikes
-            strikes_needed = [atm + i for i in range(-250, 251, 50)]
+            # ATM ±5 strikes using the instrument's actual strike step
+            strikes_needed = [
+                atm + (offset * self.strike_step)
+                for offset in range(-self.band_strike_count, self.band_strike_count + 1)
+            ]
 
             ce_oi_ladder = {}
             pe_oi_ladder = {}
@@ -372,7 +380,7 @@ class OptionChain:
                 total_call_volume += ce.get("volume", 0)
                 total_put_volume += pe.get("volume", 0)
 
-                distance_from_atm = int((strike - atm) / Config.STRIKE_GAP)
+                distance_from_atm = int((strike - atm) / self.strike_step)
                 band_snapshots.extend([
                     {
                         "atm_strike": atm,
