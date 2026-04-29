@@ -940,6 +940,215 @@ class BreakoutStrategy:
             and orb_low is not None and price < orb_low
         )
 
+    def _price_led_hybrid_fallback_ready(
+        self,
+        direction,
+        score,
+        entry_score,
+        time_regime,
+        price,
+        vwap,
+        orb_high,
+        orb_low,
+        candle_close,
+        candle_range,
+        atr,
+        candle_liquidity_ok,
+        breakout_body_ok,
+        breakout_structure_ok,
+        ha_ok,
+        pressure_conflict_level,
+        volume_signal,
+        trend_day_context=False,
+    ):
+        if self.instrument not in {"NIFTY", "BANKNIFTY"} or direction not in {"CE", "PE"}:
+            return False
+        if time_regime not in {"MID_MORNING", "MIDDAY"}:
+            return False
+        min_score = 68 if self.instrument == "NIFTY" else 66
+        min_entry_score = 64 if self.instrument == "NIFTY" else 60
+        if score < min_score or entry_score < min_entry_score:
+            return False
+        if volume_signal not in {"NORMAL", "STRONG"} and not trend_day_context:
+            return False
+        if not candle_liquidity_ok or not ha_ok:
+            return False
+        if pressure_conflict_level not in {"NONE", "MILD"} and not (
+            trend_day_context and pressure_conflict_level == "MODERATE"
+        ):
+            return False
+        if not (breakout_body_ok or breakout_structure_ok):
+            return False
+        if atr is not None and candle_range < atr * 0.6:
+            return False
+        trigger_level = orb_high if direction == "CE" else orb_low
+        if trigger_level is not None and self._entry_too_extended(
+            direction,
+            candle_close or price,
+            trigger_level,
+            atr,
+            max((atr or 0) * 0.18, 5),
+        ):
+            return False
+        if direction == "CE":
+            return (
+                price is not None and vwap is not None and price > vwap
+                and orb_high is not None and price > orb_high
+            )
+        return (
+                price is not None and vwap is not None and price < vwap
+                and orb_low is not None and price < orb_low
+            )
+
+    @staticmethod
+    def _candle_value(candle, key, index):
+        if candle is None:
+            return None
+        if isinstance(candle, dict):
+            return candle.get(key)
+        if isinstance(candle, (list, tuple)) and len(candle) > index:
+            return candle[index]
+        return None
+
+    def _recent_price_sequence_ready(self, recent_candles_5m, direction):
+        if not recent_candles_5m or len(recent_candles_5m) < 3:
+            return False
+        candles = recent_candles_5m[-3:]
+        closes = [self._candle_value(c, "close", 4) for c in candles]
+        opens = [self._candle_value(c, "open", 1) for c in candles]
+        highs = [self._candle_value(c, "high", 2) for c in candles]
+        lows = [self._candle_value(c, "low", 3) for c in candles]
+        if any(v is None for v in closes + opens + highs + lows):
+            return False
+
+        if direction == "CE":
+            higher_closes = closes[0] < closes[1] < closes[2]
+            higher_highs = highs[0] <= highs[1] <= highs[2]
+            supportive_bodies = sum(1 for o, c in zip(opens, closes) if c >= o) >= 2
+            return higher_closes and higher_highs and supportive_bodies
+
+        lower_closes = closes[0] > closes[1] > closes[2]
+        lower_lows = lows[0] >= lows[1] >= lows[2]
+        supportive_bodies = sum(1 for o, c in zip(opens, closes) if c <= o) >= 2
+        return lower_closes and lower_lows and supportive_bodies
+
+    def _nifty_trend_day_context_ready(
+        self,
+        direction,
+        price,
+        vwap,
+        orb_high,
+        orb_low,
+        candle_close,
+        candle_range,
+        atr,
+        time_regime,
+        volume_signal,
+        pressure_conflict_level,
+        ha_strength,
+        recent_candles_5m,
+    ):
+        if self.instrument != "NIFTY" or direction not in {"CE", "PE"}:
+            return False
+        if time_regime not in {"OPENING", "MID_MORNING", "MIDDAY"}:
+            return False
+        if pressure_conflict_level not in {"NONE", "MILD", "MODERATE"}:
+            return False
+        if volume_signal == "WEAK":
+            if atr is None or candle_range < atr * 0.65:
+                return False
+        elif volume_signal not in {"NORMAL", "STRONG"}:
+            return False
+        if not self._recent_price_sequence_ready(recent_candles_5m, direction):
+            return False
+        if direction == "CE":
+            if price is None or vwap is None or price <= vwap:
+                return False
+            if orb_high is None or price <= orb_high:
+                return False
+            if ha_strength not in {"BULLISH", "BULLISH_STRONG"}:
+                return False
+            trigger_level = orb_high
+        else:
+            if price is None or vwap is None or price >= vwap:
+                return False
+            if orb_low is None or price >= orb_low:
+                return False
+            if ha_strength not in {"BEARISH", "BEARISH_STRONG"}:
+                return False
+            trigger_level = orb_low
+        if self._entry_too_extended(
+            direction,
+            candle_close or price,
+            trigger_level,
+            atr,
+            max((atr or 0) * 1.35, 22),
+        ):
+            return False
+        return True
+
+    def _nifty_post_expiry_continuation_ready(
+        self,
+        direction,
+        score,
+        entry_score,
+        expiry_session_mode,
+        time_regime,
+        price,
+        vwap,
+        orb_high,
+        orb_low,
+        candle_close,
+        candle_range,
+        atr,
+        candle_liquidity_ok,
+        breakout_body_ok,
+        breakout_structure_ok,
+        ha_ok,
+        pressure_conflict_level,
+        volume_signal,
+        recent_breakout_context,
+    ):
+        if self.instrument != "NIFTY" or expiry_session_mode != "POST_EXPIRY_REBUILD":
+            return False
+        if direction not in {"CE", "PE"}:
+            return False
+        if time_regime not in {"MID_MORNING", "MIDDAY"}:
+            return False
+        if score < 68 or entry_score < 62:
+            return False
+        if volume_signal not in {"NORMAL", "STRONG"}:
+            return False
+        if not candle_liquidity_ok or not ha_ok:
+            return False
+        if pressure_conflict_level not in {"NONE", "MILD"}:
+            return False
+        if not (breakout_body_ok or breakout_structure_ok):
+            return False
+        if atr is not None and candle_range < atr * 0.55:
+            return False
+        if direction == "CE":
+            trigger_level = orb_high
+            if price is None or vwap is None or price <= vwap:
+                return False
+            if trigger_level is None or price <= trigger_level:
+                return False
+        else:
+            trigger_level = orb_low
+            if price is None or vwap is None or price >= vwap:
+                return False
+            if trigger_level is None or price >= trigger_level:
+                return False
+        if self._entry_too_extended(
+            direction,
+            candle_close or price,
+            trigger_level,
+            atr,
+            max((atr or 0) * 0.16, 5),
+        ):
+            return False
+        return recent_breakout_context or score >= 72
+
     def _strong_context_soft_entry_ready(
         self,
         score,
@@ -1546,6 +1755,27 @@ class BreakoutStrategy:
         elif reversal_trap_context["PE"]["ready"] and scored_direction == "PE":
             score = min(100, score + reversal_trap_context["PE"]["score_boost"])
             components.append("reversal_trap_reclaim")
+
+        nifty_trend_day_context = self._nifty_trend_day_context_ready(
+            direction=scored_direction,
+            price=price,
+            vwap=vwap,
+            orb_high=orb_high,
+            orb_low=orb_low,
+            candle_close=candle_close,
+            candle_range=candle_range,
+            atr=atr,
+            time_regime=self._derive_time_regime(
+                candle_time.time() if candle_time is not None else self.time_utils.current_time()
+            ),
+            volume_signal=volume_signal,
+            pressure_conflict_level=self._pressure_conflict_level(pressure_metrics, scored_direction, cautions),
+            ha_strength=ha_strength,
+            recent_candles_5m=recent_candles_5m,
+        )
+        if nifty_trend_day_context:
+            score = min(100, score + (10 if volume_signal == "WEAK" else 8))
+            components.append("nifty_trend_day_context")
         self.last_score = score
         self.last_context_score = score
         self.last_score_components = components
@@ -1554,6 +1784,9 @@ class BreakoutStrategy:
         self._update_confirmation_setup(candle_time)
 
         regime = self._derive_regime(price, vwap, atr, volume_signal, candle_range)
+        if nifty_trend_day_context and regime in {"CHOPPY", "RANGING", "EARLY_SESSION"}:
+            regime = "TRENDING"
+            components.append("nifty_trend_day_regime_override")
         breakout_regime_ok = regime in ["TRENDING", "EXPANDING", "OPENING_EXPANSION"] or (
             regime == "RANGING" and score >= 72 and volume_signal == "STRONG"
         )
@@ -1612,6 +1845,15 @@ class BreakoutStrategy:
                 cautions.append("opposite_pressure")
         pressure_conflict_level = self._pressure_conflict_level(pressure_metrics, scored_direction, cautions)
         self.last_pressure_conflict_level = pressure_conflict_level
+        if nifty_trend_day_context:
+            if scored_direction == "CE" and oi_bias in {"BULLISH", "NEUTRAL"} and oi_trend in {"BULLISH", "NEUTRAL", None}:
+                bullish_build_up_ok = True
+                if pressure_conflict_level == "MODERATE":
+                    cautions = self._append_cautions(cautions, "trend_day_price_override")
+            elif scored_direction == "PE" and oi_bias in {"BEARISH", "NEUTRAL"} and oi_trend in {"BEARISH", "NEUTRAL", None}:
+                bearish_build_up_ok = True
+                if pressure_conflict_level == "MODERATE":
+                    cautions = self._append_cautions(cautions, "trend_day_price_override")
         previous_candle = self._previous_candle(recent_candles_5m)
         prev_high = previous_candle.get("high") if previous_candle else None
         prev_low = previous_candle.get("low") if previous_candle else None
@@ -1710,6 +1952,10 @@ class BreakoutStrategy:
         blockers = expiry_eval["blockers"]
         cautions = expiry_eval["cautions"]
         self.last_is_expiry_day = expiry_eval["is_expiry_day"]
+        adaptive_expiry_continuation_mode = expiry_eval.get("adaptive_continuation_mode", False)
+        soften_build_up_requirement = expiry_eval.get("soften_build_up_requirement", False)
+        soften_pressure_conflict = expiry_eval.get("soften_pressure_conflict", False)
+        expiry_session_mode = expiry_eval.get("session_mode", "NORMAL")
 
         if not expiry_eval["allow_trade"]:
             self._set_diagnostics(
@@ -1720,6 +1966,48 @@ class BreakoutStrategy:
                 signal_type="NONE",
             )
             return None, f"Expiry filter blocked trade | score={score}"
+
+        if soften_build_up_requirement:
+            if scored_direction == "CE" and oi_bias == "BULLISH" and score >= max(expiry_eval["score_floor"], 64):
+                bullish_build_up_ok = True
+            elif scored_direction == "PE" and oi_bias == "BEARISH" and score >= max(expiry_eval["score_floor"], 64):
+                bearish_build_up_ok = True
+
+        adaptive_expiry_continuation_ok = (
+            adaptive_expiry_continuation_mode
+            and scored_direction in {"CE", "PE"}
+            and volume_signal in {"NORMAL", "STRONG"}
+            and candle_liquidity_ok
+            and (breakout_body_ok or breakout_structure_ok)
+            and pressure_conflict_level in {"NONE", "MILD"}
+            and self.last_entry_score >= 60
+            and (
+                (scored_direction == "CE" and bullish_ha_ok and price > vwap)
+                or (scored_direction == "PE" and bearish_ha_ok and price < vwap)
+            )
+        )
+        nifty_post_expiry_continuation_ok = self._nifty_post_expiry_continuation_ready(
+            direction=scored_direction,
+            score=score,
+            entry_score=self.last_entry_score,
+            expiry_session_mode=expiry_session_mode,
+            time_regime=time_regime,
+            price=price,
+            vwap=vwap,
+            orb_high=orb_high,
+            orb_low=orb_low,
+            candle_close=candle_close,
+            candle_range=candle_range,
+            atr=atr,
+            candle_liquidity_ok=candle_liquidity_ok,
+            breakout_body_ok=breakout_body_ok,
+            breakout_structure_ok=breakout_structure_ok,
+            ha_ok=bullish_ha_ok if scored_direction == "CE" else bearish_ha_ok,
+            pressure_conflict_level=pressure_conflict_level,
+            volume_signal=volume_signal,
+            recent_breakout_context=recent_breakout_context,
+        )
+        continuation_override_ok = adaptive_expiry_continuation_ok or nifty_post_expiry_continuation_ok or nifty_trend_day_context
 
         # =============================
         # TEST MODE LOGIC (NO ORB)
@@ -2718,8 +3006,8 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and bullish_ha_ok
-                and "opposite_pressure" not in cautions
-                and "far_from_vwap" not in cautions
+                and ("opposite_pressure" not in cautions or continuation_override_ok)
+                and ("far_from_vwap" not in cautions or continuation_override_ok)
                 and not opening_session
                 and regime in ["TRENDING", "EXPANDING", "OPENING_EXPANSION"]
                 and adx_trade_ok
@@ -2753,8 +3041,8 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and bearish_ha_ok
-                and "opposite_pressure" not in cautions
-                and "far_from_vwap" not in cautions
+                and ("opposite_pressure" not in cautions or continuation_override_ok)
+                and ("far_from_vwap" not in cautions or continuation_override_ok)
                 and not opening_session
                 and regime in ["TRENDING", "EXPANDING", "OPENING_EXPANSION"]
                 and adx_trade_ok
@@ -2795,8 +3083,9 @@ class BreakoutStrategy:
                         and pressure_metrics
                         and pressure_metrics["pressure_bias"] == "BULLISH"
                     )
+                    or continuation_override_ok
                 )
-                and "opposite_pressure" not in cautions
+                and ("opposite_pressure" not in cautions or continuation_override_ok)
                 and continuation_regime_ok
                 and adx_trade_ok
                 and mtf_trade_ok
@@ -2833,16 +3122,17 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and bullish_ha_ok
-                and "opposite_pressure" not in cautions
-                and "far_from_vwap" not in cautions
+                and ("opposite_pressure" not in cautions or continuation_override_ok)
+                and ("far_from_vwap" not in cautions or continuation_override_ok)
                 and not opening_session
                 and continuation_regime_ok
-                and (adx_trade_ok or recent_breakout_context)
-                and (mtf_trade_ok or recent_breakout_context)
-                and (recent_breakout_context or pressure_conflict_level == "NONE")
+                and (adx_trade_ok or recent_breakout_context or continuation_override_ok)
+                and (mtf_trade_ok or recent_breakout_context or continuation_override_ok)
+                and (recent_breakout_context or pressure_conflict_level == "NONE" or continuation_override_ok)
                 and (
                     not Config.FOCUSED_MANUAL_MODE
                     or recent_breakout_context
+                    or continuation_override_ok
                 )
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
@@ -2880,8 +3170,9 @@ class BreakoutStrategy:
                         and pressure_metrics
                         and pressure_metrics["pressure_bias"] == "BEARISH"
                     )
+                    or continuation_override_ok
                 )
-                and "opposite_pressure" not in cautions
+                and ("opposite_pressure" not in cautions or continuation_override_ok)
                 and continuation_regime_ok
                 and adx_trade_ok
                 and mtf_trade_ok
@@ -2918,16 +3209,17 @@ class BreakoutStrategy:
                 and breakout_body_ok
                 and breakout_structure_ok
                 and bearish_ha_ok
-                and "opposite_pressure" not in cautions
-                and "far_from_vwap" not in cautions
+                and ("opposite_pressure" not in cautions or continuation_override_ok)
+                and ("far_from_vwap" not in cautions or continuation_override_ok)
                 and not opening_session
                 and continuation_regime_ok
-                and (adx_trade_ok or recent_breakout_context)
-                and (mtf_trade_ok or recent_breakout_context)
-                and (recent_breakout_context or pressure_conflict_level == "NONE")
+                and (adx_trade_ok or recent_breakout_context or continuation_override_ok)
+                and (mtf_trade_ok or recent_breakout_context or continuation_override_ok)
+                and (recent_breakout_context or pressure_conflict_level == "NONE" or continuation_override_ok)
                 and (
                     not Config.FOCUSED_MANUAL_MODE
                     or recent_breakout_context
+                    or continuation_override_ok
                 )
         ):
             confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
@@ -2979,6 +3271,77 @@ class BreakoutStrategy:
             return "CE", f"SENSEX hybrid price-led continuation up | score={score}"
 
         if (
+                self.instrument == "NIFTY"
+                and expiry_session_mode == "POST_EXPIRY_REBUILD"
+                and nifty_trend_day_context
+                and scored_direction == "CE"
+                and price > vwap
+                and oi_bias in {"BULLISH", "NEUTRAL"}
+                and oi_trend in {"BULLISH", "NEUTRAL", None}
+                and bullish_build_up_ok
+                and score >= 68
+                and self.last_entry_score >= 58
+                and pressure_conflict_level in {"NONE", "MILD", "MODERATE"}
+                and not opening_session
+        ):
+            hybrid_cautions = self._append_cautions(cautions, "trend_day_price_override", "hybrid_price_led_setup")
+            confidence = self._confidence_from_score(
+                score,
+                "NORMAL" if volume_signal == "WEAK" else volume_signal,
+                pressure_metrics,
+                hybrid_cautions,
+            )
+            self._set_diagnostics(
+                blockers=blockers,
+                cautions=hybrid_cautions,
+                confidence=confidence,
+                regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                signal_type="CONTINUATION",
+            )
+            self.last_entry_plan = self._build_entry_plan("CE", "CONTINUATION", price, vwap, atr, support, resistance)
+            self._reset_retest_setup()
+            self._reset_confirmation_setup()
+            return "CE", f"NIFTY trend-day continuation up | score={score}"
+
+        if (
+                self._price_led_hybrid_fallback_ready(
+                    direction="CE",
+                    score=score,
+                    entry_score=self.last_entry_score,
+                    time_regime=time_regime,
+                    price=price,
+                    vwap=vwap,
+                    orb_high=orb_high,
+                    orb_low=orb_low,
+                    candle_close=candle_close,
+                    candle_range=candle_range,
+                    atr=atr,
+                    candle_liquidity_ok=candle_liquidity_ok,
+                    breakout_body_ok=breakout_body_ok,
+                    breakout_structure_ok=breakout_structure_ok,
+                    ha_ok=bullish_ha_ok,
+                    pressure_conflict_level=pressure_conflict_level,
+                    volume_signal=volume_signal,
+                    trend_day_context=nifty_trend_day_context,
+                )
+                and oi_bias in {"BULLISH", "NEUTRAL"}
+                and bullish_build_up_ok
+        ):
+            hybrid_cautions = self._append_cautions(cautions, "hybrid_price_led_setup")
+            confidence = self._confidence_from_score(score, "NORMAL" if volume_signal == "WEAK" else volume_signal, pressure_metrics, hybrid_cautions)
+            self._set_diagnostics(
+                blockers=blockers,
+                cautions=hybrid_cautions,
+                confidence=confidence,
+                regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                signal_type="CONTINUATION",
+            )
+            self.last_entry_plan = self._build_entry_plan("CE", "CONTINUATION", price, vwap, atr, support, resistance)
+            self._reset_retest_setup()
+            self._reset_confirmation_setup()
+            return "CE", f"Hybrid price-led continuation up | score={score}"
+
+        if (
                 self._sensex_hybrid_fallback_ready(
                     direction="PE",
                     score=score,
@@ -3012,6 +3375,77 @@ class BreakoutStrategy:
             self._reset_retest_setup()
             self._reset_confirmation_setup()
             return "PE", f"SENSEX hybrid price-led continuation down | score={score}"
+
+        if (
+                self.instrument == "NIFTY"
+                and expiry_session_mode == "POST_EXPIRY_REBUILD"
+                and nifty_trend_day_context
+                and scored_direction == "PE"
+                and price < vwap
+                and oi_bias in {"BEARISH", "NEUTRAL"}
+                and oi_trend in {"BEARISH", "NEUTRAL", None}
+                and bearish_build_up_ok
+                and score >= 68
+                and self.last_entry_score >= 58
+                and pressure_conflict_level in {"NONE", "MILD", "MODERATE"}
+                and not opening_session
+        ):
+            hybrid_cautions = self._append_cautions(cautions, "trend_day_price_override", "hybrid_price_led_setup")
+            confidence = self._confidence_from_score(
+                score,
+                "NORMAL" if volume_signal == "WEAK" else volume_signal,
+                pressure_metrics,
+                hybrid_cautions,
+            )
+            self._set_diagnostics(
+                blockers=blockers,
+                cautions=hybrid_cautions,
+                confidence=confidence,
+                regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                signal_type="CONTINUATION",
+            )
+            self.last_entry_plan = self._build_entry_plan("PE", "CONTINUATION", price, vwap, atr, support, resistance)
+            self._reset_retest_setup()
+            self._reset_confirmation_setup()
+            return "PE", f"NIFTY trend-day continuation down | score={score}"
+
+        if (
+                self._price_led_hybrid_fallback_ready(
+                    direction="PE",
+                    score=score,
+                    entry_score=self.last_entry_score,
+                    time_regime=time_regime,
+                    price=price,
+                    vwap=vwap,
+                    orb_high=orb_high,
+                    orb_low=orb_low,
+                    candle_close=candle_close,
+                    candle_range=candle_range,
+                    atr=atr,
+                    candle_liquidity_ok=candle_liquidity_ok,
+                    breakout_body_ok=breakout_body_ok,
+                    breakout_structure_ok=breakout_structure_ok,
+                    ha_ok=bearish_ha_ok,
+                    pressure_conflict_level=pressure_conflict_level,
+                    volume_signal=volume_signal,
+                    trend_day_context=nifty_trend_day_context,
+                )
+                and oi_bias in {"BEARISH", "NEUTRAL"}
+                and bearish_build_up_ok
+        ):
+            hybrid_cautions = self._append_cautions(cautions, "hybrid_price_led_setup")
+            confidence = self._confidence_from_score(score, "NORMAL" if volume_signal == "WEAK" else volume_signal, pressure_metrics, hybrid_cautions)
+            self._set_diagnostics(
+                blockers=blockers,
+                cautions=hybrid_cautions,
+                confidence=confidence,
+                regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else regime,
+                signal_type="CONTINUATION",
+            )
+            self.last_entry_plan = self._build_entry_plan("PE", "CONTINUATION", price, vwap, atr, support, resistance)
+            self._reset_retest_setup()
+            self._reset_confirmation_setup()
+            return "PE", f"Hybrid price-led continuation down | score={score}"
 
         if scored_direction and score >= Config.MIN_SCORE_THRESHOLD:
             pressure_conflict_ce = self._pressure_conflict(cautions, pressure_metrics, "CE")
@@ -3247,7 +3681,10 @@ class BreakoutStrategy:
             if oi_bias == "BEARISH" or oi_trend == "BEARISH":
                 blockers.append("oi_conflict")
             if not bullish_build_up_ok and not fallback_mode:
-                blockers.append("build_up_missing")
+                if soften_build_up_requirement and expiry_session_mode == "POST_EXPIRY_REBUILD" and score >= expiry_eval["score_floor"]:
+                    cautions = self._append_cautions(cautions, "build_up_missing")
+                else:
+                    blockers.append("build_up_missing")
             elif build_up not in bullish_buildups:
                 blockers.append("build_up_inferred")
             if "opposite_pressure" in cautions or (pressure_metrics and pressure_metrics["pressure_bias"] == "BEARISH"):
@@ -3260,6 +3697,11 @@ class BreakoutStrategy:
                     wall_break_supports_direction
                     and self.last_entry_score >= 68
                     and pressure_conflict_level == "MILD"
+                ) and not (
+                    soften_pressure_conflict
+                    and pressure_conflict_level == "MILD"
+                    and score >= expiry_eval["score_floor"]
+                    and self.last_entry_score >= 60
                 ):
                     blockers.append("pressure_conflict")
                 else:
@@ -3274,7 +3716,10 @@ class BreakoutStrategy:
             if oi_bias == "BULLISH" or oi_trend == "BULLISH":
                 blockers.append("oi_conflict")
             if not bearish_build_up_ok and not fallback_mode:
-                blockers.append("build_up_missing")
+                if soften_build_up_requirement and expiry_session_mode == "POST_EXPIRY_REBUILD" and score >= expiry_eval["score_floor"]:
+                    cautions = self._append_cautions(cautions, "build_up_missing")
+                else:
+                    blockers.append("build_up_missing")
             elif build_up not in bearish_buildups:
                 blockers.append("build_up_inferred")
             if "opposite_pressure" in cautions or (pressure_metrics and pressure_metrics["pressure_bias"] == "BULLISH"):
@@ -3287,6 +3732,11 @@ class BreakoutStrategy:
                     wall_break_supports_direction
                     and self.last_entry_score >= 68
                     and pressure_conflict_level == "MILD"
+                ) and not (
+                    soften_pressure_conflict
+                    and pressure_conflict_level == "MILD"
+                    and score >= expiry_eval["score_floor"]
+                    and self.last_entry_score >= 60
                 ):
                     blockers.append("pressure_conflict")
                 else:

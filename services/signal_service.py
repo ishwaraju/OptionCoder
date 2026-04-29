@@ -37,6 +37,7 @@ from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
 from strategies.shared.breakout_strategy import BreakoutStrategy
 from strategies.shared.strike_selector import StrikeSelector
 from strategies.banknifty import BankNiftyActionableRules
+from strategies.nifty import NiftyActionableRules
 from strategies.sensex import SensexActionableRules
 from shared.utils.logger import TradeLogger
 from shared.utils.notifier import Notifier
@@ -914,6 +915,9 @@ class SignalService:
                 confidence=confidence,
                 regime=regime,
                 candle_time=candle_time,
+                score=self.strategy.last_score,
+                entry_score=self.strategy.last_entry_score,
+                pressure_conflict_level=self.strategy.last_pressure_conflict_level,
             )
         if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
             return False
@@ -925,7 +929,18 @@ class SignalService:
                 confidence=confidence,
                 regime=regime,
                 candle_time=candle_time,
+                score=score,
+                pressure_conflict_level=self.strategy.last_pressure_conflict_level,
             )
+        ):
+            return True
+        if self.instrument == "NIFTY" and NiftyActionableRules.should_allow_signal(
+            signal_type=signal_type,
+            signal_grade=signal_grade,
+            confidence=confidence,
+            regime=regime,
+            score=score,
+            pressure_conflict_level=self.strategy.last_pressure_conflict_level,
         ):
             return True
         if signal_type == "BREAKOUT_CONFIRM" and signal_grade == "B" and confidence in {"MEDIUM", "HIGH"} and score >= 80:
@@ -1828,63 +1843,81 @@ class SignalService:
             from shared.db.pool import DBPool
             if not DBPool._enabled:
                 return
-                
-            query = """
+
+            columns = [
+                "alert_ts", "instrument", "signal_direction", "score", "confidence",
+                "adx", "volume_ratio", "oi_change_pct", "vwap_distance", "time_hour",
+                "time_regime", "iv_rank", "spread_pct", "atr", "price_momentum",
+                "pressure_conflict_level", "oi_bias", "oi_trend", "wall_break_alert",
+                "support_wall_state", "resistance_wall_state", "oi_divergence",
+                "trend_15m", "trend_5m", "trend_aligned",
+                "risk_reward_ratio", "has_hybrid_mode", "signal_type", "signal_grade",
+                "entry_score", "context_score", "target_points", "stop_points",
+                "ml_predicted_prob", "ml_prediction",
+            ]
+            values = (
+                ml_features.get('alert_ts'),
+                ml_features.get('instrument'),
+                ml_features.get('signal_direction'),
+                ml_features.get('score'),
+                ml_features.get('confidence'),
+                ml_features.get('adx'),
+                ml_features.get('volume_ratio'),
+                ml_features.get('oi_change_pct'),
+                ml_features.get('vwap_distance'),
+                ml_features.get('time_hour'),
+                ml_features.get('time_regime'),
+                ml_features.get('iv_rank'),
+                ml_features.get('spread_pct'),
+                ml_features.get('atr'),
+                ml_features.get('price_momentum'),
+                ml_features.get('pressure_conflict_level'),
+                ml_features.get('oi_bias'),
+                ml_features.get('oi_trend'),
+                ml_features.get('wall_break_alert'),
+                ml_features.get('support_wall_state'),
+                ml_features.get('resistance_wall_state'),
+                ml_features.get('oi_divergence'),
+                ml_features.get('trend_15m'),
+                ml_features.get('trend_5m'),
+                ml_features.get('trend_aligned'),
+                ml_features.get('risk_reward_ratio'),
+                ml_features.get('has_hybrid_mode'),
+                ml_features.get('signal_type'),
+                ml_features.get('signal_grade'),
+                ml_features.get('entry_score'),
+                ml_features.get('context_score'),
+                ml_features.get('target_points'),
+                ml_features.get('stop_points'),
+                round(ml_prob, 4) if ml_prob is not None else None,
+                'TAKE' if ml_prob is not None and ml_prob >= 0.55 else 'LOG',
+            )
+            placeholders = ", ".join(["%s"] * len(values))
+            query = f"""
             INSERT INTO ml_features_log (
-                alert_ts, instrument, signal_direction, score, confidence,
-                adx, volume_ratio, oi_change_pct, vwap_distance, time_hour,
-                time_regime, iv_rank, spread_pct, atr, price_momentum,
-                pressure_conflict_level, oi_bias, oi_trend, trend_15m, trend_aligned,
-                risk_reward_ratio, has_hybrid_mode, signal_type, signal_grade,
-                entry_score, context_score, target_points, stop_points,
-                ml_predicted_prob, created_at
+                {", ".join(columns)}, created_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
+                {placeholders}, NOW()
             )
             ON CONFLICT (alert_ts, instrument, signal_direction) DO UPDATE
             SET ml_predicted_prob = EXCLUDED.ml_predicted_prob,
+                ml_prediction = EXCLUDED.ml_prediction,
+                score = EXCLUDED.score,
+                confidence = EXCLUDED.confidence,
+                signal_type = EXCLUDED.signal_type,
+                signal_grade = EXCLUDED.signal_grade,
+                entry_score = EXCLUDED.entry_score,
+                context_score = EXCLUDED.context_score,
                 updated_at = NOW()
             """
             
             with DBPool.connection() as conn:
                 cur = conn.cursor()
-                cur.execute(query, (
-                    ml_features.get('alert_ts'),
-                    ml_features.get('instrument'),
-                    ml_features.get('signal_direction'),
-                    ml_features.get('score'),
-                    ml_features.get('confidence'),
-                    ml_features.get('adx'),
-                    ml_features.get('volume_ratio'),
-                    ml_features.get('oi_change_pct'),
-                    ml_features.get('vwap_distance'),
-                    ml_features.get('time_hour'),
-                    ml_features.get('time_regime'),
-                    ml_features.get('iv_rank'),
-                    ml_features.get('spread_pct'),
-                    ml_features.get('atr'),
-                    ml_features.get('price_momentum'),
-                    ml_features.get('pressure_conflict_level'),
-                    ml_features.get('oi_bias'),
-                    ml_features.get('oi_trend'),
-                    ml_features.get('trend_15m'),
-                    ml_features.get('trend_aligned'),
-                    ml_features.get('risk_reward_ratio'),
-                    ml_features.get('has_hybrid_mode'),
-                    ml_features.get('signal_type'),
-                    ml_features.get('signal_grade'),
-                    ml_features.get('entry_score'),
-                    ml_features.get('context_score'),
-                    ml_features.get('target_points'),
-                    ml_features.get('stop_points'),
-                    round(ml_prob, 4) if ml_prob else None
-                ))
+                cur.execute(query, values)
                 conn.commit()
                 cur.close()
         except Exception as e:
-            # Silent fail - don't disrupt signal flow
-            pass
+            self._log(f"DB save error (ml features): {e}")
 
     def _extract_watch_direction(self, candidate_signal, balanced_pro):
         if candidate_signal in {"CE", "PE"}:
@@ -2125,6 +2158,13 @@ class SignalService:
         candidate_signal = signal
         candidate_reason = reason
         self._current_candle_time = candle_5m["time"]
+        pre_ml_balanced_pro = self._build_balanced_pro_summary(
+            base_bias,
+            candidate_signal,
+            fallback_context,
+            pressure_metrics,
+            actionable_signal=bool(signal),
+        )
         
         # ML Feature Extraction and Filtering (FREE - scikit-learn)
         ml_features = None
@@ -2140,7 +2180,7 @@ class SignalService:
                     atr=atr_value,
                     score=self.strategy.last_score,
                     confidence=self.strategy.last_confidence,
-                    time_regime=balanced_pro.get('time_regime', 'UNKNOWN'),
+                    time_regime=pre_ml_balanced_pro.get('time_regime', 'UNKNOWN'),
                     oi_ladder_data=oi_ladder_data,
                     pressure_metrics=pressure_metrics,
                     trend_15m=trend_15m,
@@ -2150,7 +2190,7 @@ class SignalService:
                         'signal_grade': self.strategy.last_signal_grade,
                         'entry_score': self.strategy.last_entry_score,
                         'context_score': self.strategy.last_context_score,
-                        'hybrid_mode': balanced_pro.get('setup', '').startswith('HYBRID')
+                        'hybrid_mode': pre_ml_balanced_pro.get('setup', '').startswith('HYBRID')
                     },
                     entry_plan=self.strategy.last_entry_plan
                 )

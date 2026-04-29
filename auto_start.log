@@ -1,25 +1,24 @@
-🤖 Auto Scheduler Started
-⚠️  WARNING: System timezone is NOT set to IST (India Time)!
-   Current offset: -3600 seconds
-   IST offset should be: -19800 seconds (-05:30)
-   Fix: System Preferences → Date & Time → Time Zone → Kolkata
-   OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
-
-⏰ Current IST Time: 2026-04-14 09:23:29
-⏰ Services will auto-start at 9:14 AM IST on weekdays
-🛑 Services will auto-stop at 3:40 PM IST on weekdays
-📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST
-🛑 Press Ctrl+C to stop scheduler
-🚀 Current IST time is past 9:14 AM and before 3:40 PM - Starting services now!
-DB pool initialized successfully
-
-🔍 Pre-flight Checks:
-   ✅ Database connected
-   ✅ NIFTY future ID: 66688
-   ✅ BANKNIFTY future ID: 66689
-   ✅ SENSEX future ID: 1105863
-
-
-🌅 Auto Starting All Services - 2026-04-14 04:53:29
-==================================================
-🚀 Starting Data Collectors at 04:53:29
+[01:06:52] 🤖 Auto Scheduler Started
+[01:06:52] 🤖 Auto Scheduler Started
+[01:06:52] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[01:06:52] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[01:06:52]    Current offset: -3600 seconds
+[01:06:52]    Current offset: -3600 seconds
+[01:06:52]    IST offset should be: -19800 seconds (-05:30)
+[01:06:52]    IST offset should be: -19800 seconds (-05:30)
+[01:06:52]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[01:06:52]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[01:06:52]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[01:06:52]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[01:06:52] 
+[01:06:52] 
+[01:06:52] ⏰ Current IST Time: 2026-04-30 01:06:52
+[01:06:52] ⏰ Current IST Time: 2026-04-30 01:06:52
+[01:06:52] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[01:06:52] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[01:06:52] 🛑 Services will auto-stop at 3:40 PM IST on weekdays
+[01:06:52] 🛑 Services will auto-stop at 3:40 PM IST on weekdays
+[01:06:52] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST
+[01:06:52] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST
+[01:06:52] 🛑 Press Ctrl+C to stop scheduler
+[01:06:52] 🛑 Press Ctrl+C to stop scheduler

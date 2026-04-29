@@ -83,6 +83,7 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
         <condition><![CDATA[<br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
       </filter>
     </filter-actions>
+    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.ml_features_log" active-filter-id="" />
     <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.alert_reviews_5m" active-filter-id="a866dd51-4bc7-4a56-985c-320cbe7b5ef4">
       <filter id="a866dd51-4bc7-4a56-985c-320cbe7b5ef4" name="Filter 1" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br><br>-- enter your custom conditions here<br>DATE(alert_ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE]]></condition>

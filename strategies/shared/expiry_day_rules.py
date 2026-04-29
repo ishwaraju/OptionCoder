@@ -1,5 +1,6 @@
 from datetime import datetime, time
 from config import Config
+from strategies.shared.expiry_context import ExpirySessionContext, get_expiry_profile
 
 
 class ExpiryDayRules:
@@ -11,6 +12,7 @@ class ExpiryDayRules:
     def __init__(self, time_utils, instrument="NIFTY"):
         self.time_utils = time_utils
         self.instrument = (instrument or "NIFTY").upper()
+        self.profile = get_expiry_profile(self.instrument)
 
     @staticmethod
     def _parse_expiry(expiry_value):
@@ -74,13 +76,25 @@ class ExpiryDayRules:
             blockers,
             cautions,
     ):
-        if not self.is_expiry_day(expiry_value):
+        expiry_date = self._parse_expiry(expiry_value)
+        session_context = ExpirySessionContext(
+            current_date=self.time_utils.now_ist().date(),
+            instrument=self.instrument,
+            expiry_date=expiry_date,
+        )
+        session_mode = session_context.session_mode()
+
+        if session_mode == "NORMAL":
             return {
                 "is_expiry_day": False,
+                "session_mode": "NORMAL",
                 "allow_trade": True,
                 "blockers": list(blockers),
                 "cautions": list(cautions),
                 "score_floor": 60,
+                "adaptive_continuation_mode": False,
+                "soften_build_up_requirement": False,
+                "soften_pressure_conflict": False,
             }
 
         now = self.time_utils.current_time()
@@ -106,6 +120,61 @@ class ExpiryDayRules:
             and confidence in {"MEDIUM", "HIGH"}
             and volume_signal != "WEAK"
         )
+
+        adaptive_continuation_mode = False
+        soften_build_up_requirement = False
+        soften_pressure_conflict = False
+
+        if session_mode == "POST_EXPIRY_REBUILD":
+            score_floor = int(self.profile.get("post_expiry_score_floor", 66))
+            cautions.append("post_expiry_rebuild_mode")
+            adaptive_continuation_mode = self.instrument in {"NIFTY", "BANKNIFTY"}
+            soften_build_up_requirement = self.instrument in {"NIFTY", "BANKNIFTY"}
+            soften_pressure_conflict = self.instrument in {"NIFTY", "BANKNIFTY"}
+
+            if confidence == "LOW" and score < score_floor + 4:
+                blockers.append("post_expiry_requires_medium_plus_confidence")
+                allow_trade = False
+            if volume_signal == "WEAK" and score < score_floor + 2:
+                blockers.append("post_expiry_weak_volume")
+                allow_trade = False
+
+            return {
+                "is_expiry_day": False,
+                "session_mode": session_mode,
+                "allow_trade": allow_trade,
+                "blockers": blockers,
+                "cautions": cautions,
+                "score_floor": score_floor,
+                "adaptive_continuation_mode": adaptive_continuation_mode,
+                "soften_build_up_requirement": soften_build_up_requirement,
+                "soften_pressure_conflict": soften_pressure_conflict,
+            }
+
+        if session_mode == "PRE_EXPIRY_POSITIONING":
+            score_floor = int(self.profile.get("pre_expiry_score_floor", 70))
+            cautions.append("pre_expiry_positioning_mode")
+            adaptive_continuation_mode = self.instrument == "SENSEX"
+            soften_pressure_conflict = self.instrument == "SENSEX"
+
+            if confidence == "LOW" and score < score_floor + 4:
+                blockers.append("pre_expiry_requires_medium_plus_confidence")
+                allow_trade = False
+            if volume_signal == "WEAK" and score < score_floor + 2:
+                blockers.append("pre_expiry_weak_volume")
+                allow_trade = False
+
+            return {
+                "is_expiry_day": False,
+                "session_mode": session_mode,
+                "allow_trade": allow_trade,
+                "blockers": blockers,
+                "cautions": cautions,
+                "score_floor": score_floor,
+                "adaptive_continuation_mode": adaptive_continuation_mode,
+                "soften_build_up_requirement": soften_build_up_requirement,
+                "soften_pressure_conflict": soften_pressure_conflict,
+            }
 
         if time(9, 15) <= now < self._opening_whipsaw_cutoff() and not high_conviction_expiry_trend:
             blockers.append("expiry_opening_whipsaw_window")
@@ -144,10 +213,14 @@ class ExpiryDayRules:
 
         return {
             "is_expiry_day": True,
+            "session_mode": session_mode,
             "allow_trade": allow_trade,
             "blockers": blockers,
             "cautions": cautions,
             "score_floor": score_floor,
+            "adaptive_continuation_mode": False,
+            "soften_build_up_requirement": False,
+            "soften_pressure_conflict": False,
         }
 
     def adjust_strike_choice(self, expiry_value, signal, strike, strike_reason, price, strategy_score, confidence):
