@@ -240,6 +240,16 @@ signals_issued         -> only actual fired actionable signals
 trade_monitor_events_1m -> per-minute post-signal hold/exit guidance
 ```
 
+### IntelliJ IDE Database Browser Filters
+
+Filter `scalp_signals_1m` to show today's data only:
+```sql
+select *
+from "public"."scalp_signals_1m"
+where ts >= CURRENT_DATE
+and ts < CURRENT_DATE + interval '1 day';
+```
+
 End-of-day session summary is written to files like:
 ```text
 data/session_summary_YYYYMMDD.txt

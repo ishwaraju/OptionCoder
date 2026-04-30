@@ -6,15 +6,33 @@
   </component>
   <component name="DBNavigator.Project.DataEditorManager">
     <record-view-column-sorting-type value="BY_INDEX" />
-    <value-preview-text-wrapping value="true" />
+    <value-preview-text-wrapping value="false" />
     <value-preview-pinned value="false" />
   </component>
   <component name="DBNavigator.Project.DatabaseAssistantManager">
     <assistants>
-      <assistant-state connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" assistant-type="PUBLIC" default-profile-name="" selected-chat-id="" availability="AVAILABLE" acknowledgement="NONE" selected="true">
+      <assistant-state connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" assistant-type="PUBLIC" default-profile-name="" selected-chat-id="131167A25A6B49729CD338B61A65D60E" availability="AVAILABLE" acknowledgement="ENGAGED" selected="true">
+        <chats>
+          <chat id="131167A25A6B49729CD338B61A65D60E" title="" session-signature="" timestamp="1777573801085">
+            <messages />
+            <context provider="" profile="" model="" action="" interactive="true" />
+          </chat>
+        </chats>
         <tools />
       </assistant-state>
-      <assistant-state connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" assistant-type="SELECT_AI" default-profile-name="" selected-chat-id="" availability="UNAVAILABLE" acknowledgement="NONE">
+      <assistant-state connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" assistant-type="SELECT_AI" default-profile-name="" selected-chat-id="" availability="UNAVAILABLE" acknowledgement="NONE">
+        <tools />
+      </assistant-state>
+      <assistant-state connection-id="virtual-postgres-connection" assistant-type="PUBLIC" default-profile-name="" selected-chat-id="5DD9FA16EAE7407B8D8AC4753DC907BF" availability="AVAILABLE" acknowledgement="ENGAGED" selected="true">
+        <chats>
+          <chat id="5DD9FA16EAE7407B8D8AC4753DC907BF" title="" session-signature="" timestamp="1777573655790">
+            <messages />
+            <context provider="" profile="" model="" action="" interactive="true" />
+          </chat>
+        </chats>
+        <tools />
+      </assistant-state>
+      <assistant-state connection-id="virtual-postgres-connection" assistant-type="SELECT_AI" default-profile-name="" selected-chat-id="" availability="UNAVAILABLE" acknowledgement="NONE">
         <tools />
       </assistant-state>
     </assistants>
@@ -29,83 +47,88 @@
     <loaded-nodes />
   </component>
   <component name="DBNavigator.Project.DatabaseConsoleManager">
-    <connection id="d57161f6-fd9a-42bf-86eb-be7c5632a533">
-      <console name="Connection" type="STANDARD" schema="optioncoder" session="Main" />
+    <connection id="a84c16fc-100f-42ab-b88a-35746d584b15">
+      <console name="OptionCoder" type="STANDARD" schema="optioncoder" session="Main" />
     </connection>
   </component>
   <component name="DBNavigator.Project.DatabaseEditorStateManager">
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files>
-      <object connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" object-ref="schemas/public/tables/option_signal_outcomes_1m" />
-      <object connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" object-ref="schemas/public/tables/option_signal_candidates_5m" />
-    </open-files>
+    <open-files />
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
     <prerequisites />
   </component>
   <component name="DBNavigator.Project.DatabaseSessionManager">
-    <connection id="d57161f6-fd9a-42bf-86eb-be7c5632a533" />
+    <connection id="a84c16fc-100f-42ab-b88a-35746d584b15" />
   </component>
   <component name="DBNavigator.Project.DatasetFilterManager">
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.option_signal_outcomes_1m" active-filter-id="dd77f7b4-e40b-40ee-b5bd-2b17b305a7d2">
-      <filter id="dd77f7b4-e40b-40ee-b5bd-2b17b305a7d2" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_signal_outcomes_1m" active-filter-id="ddeea384-ed4e-4b44-b2c3-ecd5b72d7f7c">
+      <filter id="ddeea384-ed4e-4b44-b2c3-ecd5b72d7f7c" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>signal_ts >= CURRENT_DATE<br>and signal_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.option_band_snapshots_1m" active-filter-id="906f39f5-890d-4f47-a0b4-b98e986ee042">
-      <filter id="906f39f5-890d-4f47-a0b4-b98e986ee042" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
-      </filter>
-    </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.ml_features_log" active-filter-id="EMPTY_FILTER" />
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.alert_reviews_5m" active-filter-id="c381da6e-e8eb-4da9-a6b0-16d29462919d">
-      <filter id="c381da6e-e8eb-4da9-a6b0-16d29462919d" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.ml_features_log" active-filter-id="8d973c9c-6943-4edc-8fdf-deb8c2e12f4a">
+      <filter id="8d973c9c-6943-4edc-8fdf-deb8c2e12f4a" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>alert_ts >= CURRENT_DATE<br>and alert_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.signals_issued" active-filter-id="d2cd3dad-fd9e-403a-8939-50013cb77fe2">
-      <filter id="d2cd3dad-fd9e-403a-8939-50013cb77fe2" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_band_snapshots_1m" active-filter-id="81283d12-8aff-443a-bff3-c301c33a27c2">
+      <filter id="81283d12-8aff-443a-bff3-c301c33a27c2" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.oi_snapshots_1m" active-filter-id="88fc864e-0af9-4437-9ee3-8a596695fcf0">
-      <filter id="88fc864e-0af9-4437-9ee3-8a596695fcf0" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.alert_reviews_5m" active-filter-id="53a41dd7-6b3d-4b74-80c7-0985670ba13f">
+      <filter id="53a41dd7-6b3d-4b74-80c7-0985670ba13f" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>alert_ts >= CURRENT_DATE<br>and alert_ts < CURRENT_DATE + interval '1 day';]]></condition>
+      </filter>
+    </filter-actions>
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.signals_issued" active-filter-id="7888d48c-ed21-464c-bfcd-65579db85fda">
+      <filter id="7888d48c-ed21-464c-bfcd-65579db85fda" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.candles_1m" active-filter-id="70d4e906-3813-4333-a6af-91f00983be68">
-      <filter id="70d4e906-3813-4333-a6af-91f00983be68" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.oi_snapshots_1m" active-filter-id="4e41b85a-df3f-44c5-88bd-24dd516c7fdc">
+      <filter id="4e41b85a-df3f-44c5-88bd-24dd516c7fdc" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.option_signal_candidates_5m" active-filter-id="4d9ba30d-d530-4201-b188-16af5cb3b044">
-      <filter id="4d9ba30d-d530-4201-b188-16af5cb3b044" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.candles_1m" active-filter-id="ac4a7803-b52f-4d5e-8979-226aa9148160">
+      <filter id="ac4a7803-b52f-4d5e-8979-226aa9148160" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.trade_monitor_events_1m" active-filter-id="4fc30c62-47eb-438a-b89e-6a60a59b3b13">
-      <filter id="4fc30c62-47eb-438a-b89e-6a60a59b3b13" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_signal_candidates_5m" active-filter-id="7b6db499-f97a-4961-9bc5-eca318bfab77">
+      <filter id="7b6db499-f97a-4961-9bc5-eca318bfab77" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.scalp_signals_1m" active-filter-id="36128b06-80bd-41da-89b2-84cb0a498456">
-      <filter id="36128b06-80bd-41da-89b2-84cb0a498456" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.trade_monitor_events_1m" active-filter-id="75c1ee2b-a733-4f1c-ab64-9d0ef962b18d">
+      <filter id="75c1ee2b-a733-4f1c-ab64-9d0ef962b18d" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.candles_5m" active-filter-id="7e257a20-3366-463d-aaa8-66b38dc5bed5">
-      <filter id="7e257a20-3366-463d-aaa8-66b38dc5bed5" name="Filter 1" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.scalp_signals_1m" active-filter-id="0342222a-f0f2-4ed3-89ec-047a91ffaf8f">
+      <filter id="0342222a-f0f2-4ed3-89ec-047a91ffaf8f" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.strategy_decisions_5m" active-filter-id="e1cd162d-6352-44d4-9a55-96eacf975ab3">
-      <filter id="e1cd162d-6352-44d4-9a55-96eacf975ab3" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.candles_5m" active-filter-id="e9ea98dd-612d-4da1-9042-38779418f003">
+      <filter id="e9ea98dd-612d-4da1-9042-38779418f003" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.strategy_decisions_5m" active-filter-id="53268176-290c-4186-98f8-14920c68c2c2">
+      <filter id="53268176-290c-4186-98f8-14920c68c2c2" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+      </filter>
+    </filter-actions>
+  </component>
+  <component name="DBNavigator.Project.FileConnectionMappingManager">
+    <mapping file-url="file://$PROJECT_DIR$/sql/add_option_signal_tracking.sql" connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" session-id="MAIN" current-schema="optioncoder" />
+    <mapping file-url="file://$PROJECT_DIR$/sql/add_ml_features_table.sql" connection-id="virtual-postgres-connection" session-id="MAIN" current-schema="" />
   </component>
   <component name="DBNavigator.Project.ObjectQuickFilterManager">
     <last-used-operator value="EQUAL" />
@@ -113,10 +136,10 @@
   </component>
   <component name="DBNavigator.Project.Settings">
     <connections>
-      <connection source-id="" id="d57161f6-fd9a-42bf-86eb-be7c5632a533" active="true" signed="true">
+      <connection source-id="" id="a84c16fc-100f-42ab-b88a-35746d584b15" active="true" signed="true">
         <database>
-          <name value="Connection" />
-          <description value="" />
+          <name value="OptionCoder" />
+          <description value="PostGres DB for Optioncoder" />
           <database-type value="POSTGRES" />
           <config-type value="BASIC" />
           <database-version value="16.13" />
@@ -241,7 +264,7 @@
         <navigation-history-size value="100" />
         <show-object-details value="false" />
         <enable-sticky-paths value="true" />
-        <enable-quick-filters value="false" />
+        <enable-quick-filters value="true" />
       </general>
       <filters>
         <object-type-filter>
@@ -297,10 +320,10 @@
       <lookup-filters>
         <lookup-objects>
           <object-type name="SCHEMA" enabled="true" />
-          <object-type name="USER" enabled="false" />
-          <object-type name="ROLE" enabled="false" />
-          <object-type name="PRIVILEGE" enabled="false" />
-          <object-type name="CHARSET" enabled="false" />
+          <object-type name="USER" enabled="true" />
+          <object-type name="ROLE" enabled="true" />
+          <object-type name="PRIVILEGE" enabled="true" />
+          <object-type name="CHARSET" enabled="true" />
           <object-type name="TABLE" enabled="true" />
           <object-type name="VIEW" enabled="true" />
           <object-type name="JSON VIEW" enabled="true" />
@@ -309,7 +332,7 @@
           <object-type name="CONSTRAINT" enabled="true" />
           <object-type name="DATASET TRIGGER" enabled="true" />
           <object-type name="DATABASE TRIGGER" enabled="true" />
-          <object-type name="SYNONYM" enabled="false" />
+          <object-type name="SYNONYM" enabled="true" />
           <object-type name="SEQUENCE" enabled="true" />
           <object-type name="PROCEDURE" enabled="true" />
           <object-type name="FUNCTION" enabled="true" />
@@ -321,10 +344,10 @@
           <object-type name="JAVA METHOD" enabled="true" />
           <object-type name="JAVA PARAMETER" enabled="true" />
           <object-type name="JAVA RESOURCE" enabled="true" />
-          <object-type name="DIMENSION" enabled="false" />
-          <object-type name="CLUSTER" enabled="false" />
-          <object-type name="DBLINK" enabled="false" />
-          <object-type name="CREDENTIAL" enabled="false" />
+          <object-type name="DIMENSION" enabled="true" />
+          <object-type name="CLUSTER" enabled="true" />
+          <object-type name="DBLINK" enabled="true" />
+          <object-type name="CREDENTIAL" enabled="true" />
         </lookup-objects>
         <force-database-load value="false" />
         <prompt-connection-selection value="true" />
@@ -667,5 +690,9 @@
         </visibility-settings>
       </environment>
     </general-settings>
+  </component>
+  <component name="DBNavigator.Project.StatementExecutionManager">
+    <execution-variables />
+    <execution-variable-types />
   </component>
 </project>
