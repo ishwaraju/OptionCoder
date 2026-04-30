@@ -277,6 +277,74 @@ class DBReader:
 
         return snapshots
 
+    def fetch_option_contract_snapshot(self, instrument, strike, option_type, before_ts=None):
+        """Fetch the latest snapshot row for one option contract."""
+        if strike is None or option_type not in {"CE", "PE"}:
+            return None
+
+        if before_ts is None:
+            query = """
+            SELECT
+                ts, atm_strike, strike, distance_from_atm, option_type, security_id,
+                oi, volume, ltp, iv,
+                top_bid_price, top_bid_quantity, top_ask_price, top_ask_quantity,
+                spread, average_price, previous_oi, previous_volume,
+                delta, theta, gamma, vega
+            FROM option_band_snapshots_1m
+            WHERE instrument = %s
+              AND strike = %s
+              AND option_type = %s
+            ORDER BY ts DESC
+            LIMIT 1;
+            """
+            rows = self._execute(query, (instrument, strike, option_type))
+        else:
+            query = """
+            SELECT
+                ts, atm_strike, strike, distance_from_atm, option_type, security_id,
+                oi, volume, ltp, iv,
+                top_bid_price, top_bid_quantity, top_ask_price, top_ask_quantity,
+                spread, average_price, previous_oi, previous_volume,
+                delta, theta, gamma, vega
+            FROM option_band_snapshots_1m
+            WHERE instrument = %s
+              AND strike = %s
+              AND option_type = %s
+              AND ts <= %s
+            ORDER BY ts DESC
+            LIMIT 1;
+            """
+            rows = self._execute(query, (instrument, strike, option_type, before_ts))
+
+        if not rows:
+            return None
+
+        row = rows[0]
+        return {
+            "ts": row[0],
+            "atm_strike": int(row[1]) if row[1] is not None else None,
+            "strike": int(row[2]) if row[2] is not None else None,
+            "distance_from_atm": int(row[3]) if row[3] is not None else None,
+            "option_type": row[4],
+            "security_id": row[5],
+            "oi": int(row[6]) if row[6] is not None else 0,
+            "volume": int(row[7]) if row[7] is not None else 0,
+            "ltp": float(row[8]) if row[8] is not None else None,
+            "iv": float(row[9]) if row[9] is not None else None,
+            "top_bid_price": float(row[10]) if row[10] is not None else None,
+            "top_bid_quantity": int(row[11]) if row[11] is not None else 0,
+            "top_ask_price": float(row[12]) if row[12] is not None else None,
+            "top_ask_quantity": int(row[13]) if row[13] is not None else 0,
+            "spread": float(row[14]) if row[14] is not None else None,
+            "average_price": float(row[15]) if row[15] is not None else None,
+            "previous_oi": int(row[16]) if row[16] is not None else 0,
+            "previous_volume": int(row[17]) if row[17] is not None else 0,
+            "delta": float(row[18]) if row[18] is not None else None,
+            "theta": float(row[19]) if row[19] is not None else None,
+            "gamma": float(row[20]) if row[20] is not None else None,
+            "vega": float(row[21]) if row[21] is not None else None,
+        }
+
     def get_candle_count(self, instrument, start_time, end_time, timeframe="5m"):
         """Get count of candles in a range"""
         table = "candles_5m" if timeframe == "5m" else "candles_1m"

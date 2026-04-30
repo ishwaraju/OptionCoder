@@ -95,6 +95,10 @@ class DataCollector:
             item: None
             for item in self.managed_instruments
         }
+        self.recovery_backfill_anchor_dt = {
+            item: None
+            for item in self.managed_instruments
+        }
 
         # Market status tracking
         self.last_market_status_check = 0
@@ -119,6 +123,13 @@ class DataCollector:
     def _handle_runtime_gap_recovery(self, reason_label):
         """Handle recovery after a confirmed system sleep or large runtime gap."""
         self._log(f"🔄 Recovering after {reason_label}...")
+
+        # Preserve the latest completed 1m timestamp before we reset in-memory state.
+        for inst in self.managed_instruments:
+            last_completed_1m = self.candle_managers[inst].get_last_candle_time()
+            if last_completed_1m is not None:
+                self.recovery_backfill_anchor_dt[inst] = last_completed_1m
+                self._log(f"   Preserved backfill anchor for {inst}: {last_completed_1m}")
         
         # Reset connection state
         self._log("   Reconnecting WebSocket...")
@@ -135,7 +146,15 @@ class DataCollector:
         # Reset candle managers for fresh start
         for inst in self.managed_instruments:
             self.candle_managers[inst] = CandleManager()
+            self.last_processed_update_dt[inst] = None
             self._log(f"   ✅ Reset candle manager for {inst}")
+
+        # Restore recent 5m history so indicator warmup survives reconnect gaps.
+        try:
+            self._restore_indicator_state()
+            self._log("   ✅ Restored 5m warmup history after reconnect")
+        except Exception as e:
+            self._log(f"   ⚠️  Could not restore 5m warmup history: {e}")
         
         self._log("🔄 Recovery complete. Resuming data collection...")
 
@@ -417,6 +436,8 @@ class DataCollector:
             for managed_instrument in self.managed_instruments:
                 last_candle_time = self.candle_managers[managed_instrument].get_last_candle_time()
                 if not last_candle_time:
+                    last_candle_time = self.recovery_backfill_anchor_dt.get(managed_instrument)
+                if not last_candle_time:
                     continue
                 missing_candles = self.historical_backfill.get_missing_candles_for_instrument(
                     instrument=managed_instrument,
@@ -430,6 +451,7 @@ class DataCollector:
                     candle_5m = self.candle_managers[managed_instrument].add_minute_candle(candle)
                     if candle_5m:
                         self._safe_save_5m_candle(managed_instrument, candle_5m)
+                self.recovery_backfill_anchor_dt[managed_instrument] = missing_candles[-1]["datetime"]
                 total_backfilled += len(missing_candles)
 
             if total_backfilled:

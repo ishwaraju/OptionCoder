@@ -1,0 +1,16 @@
+{
+  "services": [
+    {
+      "instrument": "NIFTY",
+      "pid": 5441
+    },
+    {
+      "instrument": "BANKNIFTY",
+      "pid": 5442
+    },
+    {
+      "instrument": "SENSEX",
+      "pid": 5446
+    }
+  ]
+}

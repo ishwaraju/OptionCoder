@@ -13,6 +13,9 @@ class DBWriter:
             return
         print("DBWriter using pooled connections")
         self._strategy_decision_has_structured_columns = None
+        self._signals_issued_has_option_columns = None
+        self._option_signal_candidate_table_exists = None
+        self._option_signal_outcome_table_exists = None
 
     def close(self):
         self.conn = None
@@ -71,6 +74,20 @@ class DBWriter:
         rows = self._fetch_all(query, (table_name,))
         existing = {row[0] for row in rows}
         return all(column in existing for column in column_names)
+
+    def _table_exists(self, table_name):
+        if not self.enabled:
+            return False
+
+        query = """
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = %s
+        LIMIT 1;
+        """
+        rows = self._fetch_all(query, (table_name,))
+        return bool(rows)
 
     def insert_candle_1m(self, row):
         """
@@ -365,6 +382,72 @@ class DBWriter:
             first_target_price, telegram_sent, monitor_started, entry_window_end
         )
         """
+        option_columns = (
+            "underlying_price",
+            "atm_strike",
+            "distance_from_atm",
+            "option_entry_ltp",
+            "entry_bid",
+            "entry_ask",
+            "entry_spread",
+            "entry_iv",
+            "entry_delta",
+            "strike_reason",
+            "option_data_source",
+        )
+        if self._signals_issued_has_option_columns is None:
+            self._signals_issued_has_option_columns = self._table_has_columns(
+                "signals_issued",
+                option_columns,
+            )
+
+        if self._signals_issued_has_option_columns:
+            query = """
+            INSERT INTO signals_issued
+            (
+                ts, instrument, signal, price, underlying_price, strike, atm_strike, distance_from_atm,
+                option_entry_ltp, entry_bid, entry_ask, entry_spread, entry_iv, entry_delta,
+                strategy_score, signal_quality, setup_type, tradability, time_regime, oi_mode,
+                reason, strike_reason, option_data_source, confidence_summary, entry_above, entry_below,
+                invalidate_price, first_target_price, telegram_sent, monitor_started, entry_window_end
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ts, instrument, signal, strike) DO UPDATE
+            SET price = EXCLUDED.price,
+                underlying_price = EXCLUDED.underlying_price,
+                atm_strike = EXCLUDED.atm_strike,
+                distance_from_atm = EXCLUDED.distance_from_atm,
+                option_entry_ltp = EXCLUDED.option_entry_ltp,
+                entry_bid = EXCLUDED.entry_bid,
+                entry_ask = EXCLUDED.entry_ask,
+                entry_spread = EXCLUDED.entry_spread,
+                entry_iv = EXCLUDED.entry_iv,
+                entry_delta = EXCLUDED.entry_delta,
+                strategy_score = EXCLUDED.strategy_score,
+                signal_quality = EXCLUDED.signal_quality,
+                setup_type = EXCLUDED.setup_type,
+                tradability = EXCLUDED.tradability,
+                time_regime = EXCLUDED.time_regime,
+                oi_mode = EXCLUDED.oi_mode,
+                reason = EXCLUDED.reason,
+                strike_reason = EXCLUDED.strike_reason,
+                option_data_source = EXCLUDED.option_data_source,
+                confidence_summary = EXCLUDED.confidence_summary,
+                entry_above = EXCLUDED.entry_above,
+                entry_below = EXCLUDED.entry_below,
+                invalidate_price = EXCLUDED.invalidate_price,
+                first_target_price = EXCLUDED.first_target_price,
+                telegram_sent = EXCLUDED.telegram_sent,
+                monitor_started = EXCLUDED.monitor_started,
+                entry_window_end = EXCLUDED.entry_window_end;
+            """
+            self._execute(query, row)
+            return
+
+        legacy_row = (
+            row[0], row[1], row[2], row[3], row[5], row[14], row[15], row[16], row[17], row[18],
+            row[19], row[20], row[23], row[24], row[25], row[26], row[27], row[28], row[29], row[30]
+        )
         query = """
         INSERT INTO signals_issued
         (
@@ -391,6 +474,77 @@ class DBWriter:
             telegram_sent = EXCLUDED.telegram_sent,
             monitor_started = EXCLUDED.monitor_started,
             entry_window_end = EXCLUDED.entry_window_end;
+        """
+        self._execute(query, legacy_row)
+
+    def insert_option_signal_candidates_5m(self, rows):
+        if self._option_signal_candidate_table_exists is None:
+            self._option_signal_candidate_table_exists = self._table_exists("option_signal_candidates_5m")
+        if not self._option_signal_candidate_table_exists:
+            return
+
+        query = """
+        INSERT INTO option_signal_candidates_5m
+        (
+            ts, instrument, underlying_price, underlying_bias, setup_type, candidate_direction,
+            strike, atm_strike, distance_from_atm, option_ltp, bid_price, ask_price, spread,
+            spread_percent, iv, delta, theta, oi, volume, candidate_score, candidate_rank,
+            expected_edge, selected_for_signal, reason
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ts, instrument, candidate_direction, strike) DO UPDATE
+        SET underlying_price = EXCLUDED.underlying_price,
+            underlying_bias = EXCLUDED.underlying_bias,
+            setup_type = EXCLUDED.setup_type,
+            atm_strike = EXCLUDED.atm_strike,
+            distance_from_atm = EXCLUDED.distance_from_atm,
+            option_ltp = EXCLUDED.option_ltp,
+            bid_price = EXCLUDED.bid_price,
+            ask_price = EXCLUDED.ask_price,
+            spread = EXCLUDED.spread,
+            spread_percent = EXCLUDED.spread_percent,
+            iv = EXCLUDED.iv,
+            delta = EXCLUDED.delta,
+            theta = EXCLUDED.theta,
+            oi = EXCLUDED.oi,
+            volume = EXCLUDED.volume,
+            candidate_score = EXCLUDED.candidate_score,
+            candidate_rank = EXCLUDED.candidate_rank,
+            expected_edge = EXCLUDED.expected_edge,
+            selected_for_signal = EXCLUDED.selected_for_signal,
+            reason = EXCLUDED.reason;
+        """
+        self._execute_many(query, rows)
+
+    def insert_option_signal_outcome_1m(self, row):
+        if self._option_signal_outcome_table_exists is None:
+            self._option_signal_outcome_table_exists = self._table_exists("option_signal_outcomes_1m")
+        if not self._option_signal_outcome_table_exists:
+            return
+
+        query = """
+        INSERT INTO option_signal_outcomes_1m
+        (
+            signal_ts, observed_ts, instrument, signal, strike,
+            underlying_entry_price, underlying_price, option_entry_ltp, option_ltp,
+            option_bid, option_ask, option_spread, pnl_points, max_favorable_ltp,
+            max_adverse_ltp, minutes_since_signal, guidance, reason
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (signal_ts, observed_ts, instrument, signal, strike) DO UPDATE
+        SET underlying_entry_price = EXCLUDED.underlying_entry_price,
+            underlying_price = EXCLUDED.underlying_price,
+            option_entry_ltp = EXCLUDED.option_entry_ltp,
+            option_ltp = EXCLUDED.option_ltp,
+            option_bid = EXCLUDED.option_bid,
+            option_ask = EXCLUDED.option_ask,
+            option_spread = EXCLUDED.option_spread,
+            pnl_points = EXCLUDED.pnl_points,
+            max_favorable_ltp = EXCLUDED.max_favorable_ltp,
+            max_adverse_ltp = EXCLUDED.max_adverse_ltp,
+            minutes_since_signal = EXCLUDED.minutes_since_signal,
+            guidance = EXCLUDED.guidance,
+            reason = EXCLUDED.reason;
         """
         self._execute(query, row)
 
@@ -481,10 +635,11 @@ class DBWriter:
         FROM candles_5m
         WHERE instrument = %s
           AND DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE
-        ORDER BY ts ASC
+        ORDER BY ts DESC
         LIMIT %s;
         """
         rows = self._fetch_all(query, (instrument, limit))
+        rows = list(reversed(rows))
         return [
             {
                 "time": row[0],

@@ -212,6 +212,7 @@ class Notifier:
         grade = trade_data.get("signal_grade")
         instrument = trade_data.get("instrument")
         price = trade_data.get("price")
+        spot_price = trade_data.get("spot_price")
         trigger_price = trade_data.get("trigger_price")
         invalidate_price = trade_data.get("invalidate_price")
         time_regime = trade_data.get("time_regime")
@@ -238,7 +239,9 @@ class Notifier:
             lines.append(" | ".join(summary))
         levels = []
         if price is not None:
-            levels.append(f"Spot {price}")
+            levels.append(f"Buy {price}")
+        if spot_price is not None:
+            levels.append(f"Spot {spot_price}")
         if trigger_price is not None:
             levels.append(f"Trig {trigger_price}")
         if invalidate_price is not None:
@@ -410,6 +413,7 @@ class Notifier:
         instrument = monitor_data.get("instrument")
         signal = monitor_data.get("signal")
         price = monitor_data.get("price")
+        option_price = monitor_data.get("option_price")
         entry_price = monitor_data.get("entry_price")
         guidance = monitor_data.get("guidance")
         time_regime = monitor_data.get("time_regime")
@@ -433,8 +437,10 @@ class Notifier:
             summary.append(ist_label)
         if pnl_points is not None:
             summary.append(f"{pnl_points:+.2f}pts")
+        if option_price is not None:
+            summary.append(f"Opt {option_price}")
         if price is not None:
-            summary.append(f"Price {price}")
+            summary.append(f"Spot {price}")
         if entry_price is not None:
             summary.append(f"Entry {entry_price}")
         if summary:

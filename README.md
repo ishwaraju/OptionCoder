@@ -81,6 +81,21 @@ Compact one-line status:
 python3 /Users/ishwar/Documents/OptionCoder/tools/runtime_status.py --one-line
 ```
 
+Check whether sleep/reconnect recovery worked for the trading day logs:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/check_recovery_logs.py
+```
+
+Check a specific day:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/check_recovery_logs.py --date 20260430
+```
+
+Review whether the chosen option signal was the best available candidate:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/review_option_signals.py --date 2026-04-30
+```
+
 Start `data_collector` and `oi_collector` together for all supported instruments:
 ```bash
 python3 /Users/ishwar/Documents/OptionCoder/tools/run_collectors.py

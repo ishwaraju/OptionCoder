@@ -226,16 +226,147 @@ class SignalService:
 
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
         """Start 1-minute manual trade monitor after a signal."""
+        option_contract = self._get_option_contract_snapshot(selected_strike, signal, before_ts=candle_5m.get("close_time") or candle_5m["time"])
+        option_entry_price = option_contract.get("ltp") if option_contract else None
         self.active_trade_monitor = {
             "signal": signal,
             "entry_time": candle_5m["time"],
-            "entry_price": price,
+            "entry_price": option_entry_price if option_entry_price is not None else price,
+            "entry_underlying_price": price,
             "strike": selected_strike,
+            "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
+            "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
+            "entry_spread": option_contract.get("spread") if option_contract else None,
+            "entry_iv": option_contract.get("iv") if option_contract else None,
+            "entry_delta": option_contract.get("delta") if option_contract else None,
+            "max_favorable_option_ltp": option_entry_price,
+            "max_adverse_option_ltp": option_entry_price,
             "quality": balanced_pro["quality"],
             "time_regime": balanced_pro["time_regime"],
             "last_notified_minute": None,
             "minutes_active": 0,
         }
+
+    @staticmethod
+    def _spread_percent(option_row):
+        ltp = option_row.get("ltp") if option_row else None
+        spread = option_row.get("spread") if option_row else None
+        if not ltp or spread is None:
+            return None
+        try:
+            return round((float(spread) / float(ltp)) * 100, 4)
+        except Exception:
+            return None
+
+    def _get_option_contract_snapshot(self, strike, option_type, before_ts=None):
+        if strike is None or option_type not in {"CE", "PE"}:
+            return None
+
+        band_rows = (self.option_data or {}).get("band_snapshots") or []
+        if before_ts is None and band_rows:
+            for row in band_rows:
+                if row.get("strike") == strike and row.get("option_type") == option_type:
+                    return dict(row)
+
+        return self.db_reader.fetch_option_contract_snapshot(
+            instrument=self.instrument,
+            strike=strike,
+            option_type=option_type,
+            before_ts=before_ts,
+        )
+
+    def _score_option_candidate(self, row, direction, preferred_strike, underlying_price):
+        ltp = float(row.get("ltp") or 0)
+        spread = float(row.get("spread") or 0)
+        spread_percent = self._spread_percent(row) or 999.0
+        bid_qty = int(row.get("top_bid_quantity") or 0)
+        ask_qty = int(row.get("top_ask_quantity") or 0)
+        volume = int(row.get("volume") or 0)
+        oi = int(row.get("oi") or 0)
+        delta_abs = abs(float(row.get("delta") or 0))
+        theta_abs = abs(float(row.get("theta") or 0))
+        distance = abs(int(row.get("strike") or 0) - int(preferred_strike or row.get("strike") or 0))
+        strike_gap = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
+
+        target_delta = 0.5 if self.strategy.last_score >= 75 else 0.62
+        spread_score = max(0.0, 30.0 - min(spread_percent, 10.0) * 4.0)
+        depth_score = min(15.0, min(bid_qty, ask_qty) / 20.0)
+        volume_score = min(18.0, volume / 300.0)
+        oi_score = min(10.0, oi / 20000.0)
+        delta_score = max(0.0, 15.0 * (1.0 - min(abs(delta_abs - target_delta) / 0.45, 1.0)))
+        proximity_score = max(0.0, 12.0 - (distance / max(strike_gap, 1)) * 4.0)
+
+        target_price = (self.strategy.last_entry_plan or {}).get("first_target_price")
+        target_move = abs(float(target_price) - float(underlying_price)) if target_price is not None and underlying_price is not None else float(strike_gap)
+        expected_move = delta_abs * target_move
+        theta_penalty = theta_abs * 0.25
+        expected_edge = round(expected_move - spread - theta_penalty, 2)
+        edge_score = max(0.0, min(20.0, expected_edge))
+
+        atm_row = None
+        atm = (self.option_data or {}).get("atm")
+        if atm is not None:
+            atm_row = self._get_option_contract_snapshot(atm, direction)
+        iv_penalty = 0.0
+        if atm_row and atm_row.get("iv") and row.get("iv"):
+            atm_iv = float(atm_row["iv"])
+            if atm_iv > 0:
+                iv_markup = (float(row["iv"]) - atm_iv) / atm_iv
+                if iv_markup > 0.12:
+                    iv_penalty = min(8.0, iv_markup * 20.0)
+
+        candidate_score = round(
+            spread_score + depth_score + volume_score + oi_score + delta_score + proximity_score + edge_score - iv_penalty,
+            2,
+        )
+        reason_parts = [
+            f"spread={spread:.2f} ({spread_percent:.2f}%)",
+            f"delta={delta_abs:.2f}",
+            f"vol={volume}",
+            f"oi={oi}",
+            f"edge={expected_edge:.2f}",
+        ]
+        if iv_penalty > 0:
+            reason_parts.append("iv_rich")
+
+        return {
+            **dict(row),
+            "candidate_direction": direction,
+            "candidate_score": candidate_score,
+            "expected_edge": expected_edge,
+            "spread_percent": spread_percent,
+            "reason": " | ".join(reason_parts),
+        }
+
+    def _build_option_candidates(self, underlying_price, preferred_strikes=None, signal_direction=None, balanced_pro=None):
+        if not self.option_data:
+            return []
+
+        preferred_strikes = preferred_strikes or {}
+        band_rows = self.option_data.get("band_snapshots") or []
+        candidates = []
+        for direction in ("CE", "PE"):
+            if signal_direction and direction != signal_direction:
+                continue
+            preferred_strike = preferred_strikes.get(direction)
+            direction_rows = [
+                row for row in band_rows
+                if row.get("option_type") == direction and abs(int(row.get("distance_from_atm") or 99)) <= 3
+            ]
+            scored = [
+                self._score_option_candidate(row, direction, preferred_strike, underlying_price)
+                for row in direction_rows
+            ]
+            scored.sort(key=lambda item: (item["candidate_score"], -abs(int(item.get("distance_from_atm") or 0))), reverse=True)
+            top_rows = scored[:3]
+            for rank, item in enumerate(top_rows, start=1):
+                candidates.append({
+                    **item,
+                    "candidate_rank": rank,
+                    "underlying_bias": (balanced_pro or {}).get("bias"),
+                    "setup_type": (balanced_pro or {}).get("setup"),
+                })
+        return candidates
 
     def _clear_pending_entry_watch(self):
         self.pending_entry_watch = None
@@ -666,6 +797,7 @@ class SignalService:
         signal = pending["direction"]
         trigger_price = pending["trigger_price"]
         strike = None
+        option_contract = None
         if self.option_data:
             strike, _ = self.strike_selector.select_strike_with_reason(
                 price=evaluation["price"],
@@ -674,6 +806,7 @@ class SignalService:
                 strategy_score=pending["score"],
                 pressure_metrics=None,
             )
+            option_contract = self._get_option_contract_snapshot(strike, signal, before_ts=evaluation["time"])
 
         self.notifier.send_entry_trigger_notification(
             {
@@ -703,7 +836,7 @@ class SignalService:
         self._safe_save_signal_issued(
             ts=evaluation["time"],
             signal=signal,
-            price=evaluation["price"],
+            price=(option_contract or {}).get("ltp") if option_contract else evaluation["price"],
             strike=strike,
             reason=(
                 f"1m entry trigger after 5m watch | setup={pending.get('signal_type')} "
@@ -714,6 +847,10 @@ class SignalService:
             telegram_sent=Config.ENABLE_ALERTS,
             monitor_started=True,
             entry_window_end=evaluation["time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES),
+            underlying_price=evaluation["price"],
+            option_contract=option_contract,
+            strike_reason="watch-trigger strike selection",
+            option_data_source=self.option_data_source,
         )
         self._start_trade_monitor(signal, latest_5m_candle, evaluation["price"], balanced_pro, strike)
         self.signals_generated += 1
@@ -726,6 +863,7 @@ class SignalService:
 
         signal = self.active_trade_monitor["signal"]
         entry_price = self.active_trade_monitor["entry_price"]
+        strike = self.active_trade_monitor.get("strike")
         latest_1m = recent_1m_candles[-1]
         prior_window = recent_1m_candles[-6:-1] if len(recent_1m_candles) >= 6 else recent_1m_candles[:-1]
         if not prior_window:
@@ -735,12 +873,24 @@ class SignalService:
         recent_closes = [candle["close"] for candle in recent_1m_candles[-3:]]
         last_two_closes = [candle["close"] for candle in recent_1m_candles[-2:]]
         last_close = latest_1m["close"]
+        option_snapshot = self._get_option_contract_snapshot(strike, signal, before_ts=latest_1m["time"])
+        option_price = option_snapshot.get("ltp") if option_snapshot and option_snapshot.get("ltp") is not None else last_close
         vwap_value = self.vwap.get_vwap()
         time_regime = self.strategy.last_time_regime
-        pnl_points = last_close - entry_price if signal == "CE" else entry_price - last_close
+        pnl_points = (
+            float(option_price) - float(entry_price)
+            if option_price is not None and entry_price is not None
+            else None
+        )
         recent_5m_candles = recent_5m_candles or []
         active_5m = recent_5m_candles[-1] if recent_5m_candles else None
         prior_5m = recent_5m_candles[-2] if len(recent_5m_candles) >= 2 else active_5m
+
+        if option_price is not None:
+            max_fav = self.active_trade_monitor.get("max_favorable_option_ltp")
+            max_adv = self.active_trade_monitor.get("max_adverse_option_ltp")
+            self.active_trade_monitor["max_favorable_option_ltp"] = option_price if max_fav is None else max(max_fav, option_price)
+            self.active_trade_monitor["max_adverse_option_ltp"] = option_price if max_adv is None else min(max_adv, option_price)
 
         if signal == "CE":
             structure_break = last_close < micro_low
@@ -769,13 +919,13 @@ class SignalService:
         elif five_min_break and minutes_active >= 3:
             guidance = "EXIT_BIAS"
             reason = "Previous 5-minute structure broke against your trade. Momentum may be losing control."
-        elif minutes_active >= 5 and pnl_points <= 0:
+        elif minutes_active >= 5 and (pnl_points is not None and pnl_points <= 0):
             guidance = "TIME_DECAY_RISK"
             reason = "Move has not expanded yet. For an option buyer, slow trades can become time-decay trades."
-        elif momentum_fading and pnl_points > 0:
+        elif momentum_fading and (pnl_points is not None and pnl_points > 0):
             guidance = "BOOK_PARTIAL"
             reason = "Profit is available and momentum is slowing. Partial booking can reduce pressure."
-        elif momentum_strong and pnl_points > 0:
+        elif momentum_strong and (pnl_points is not None and pnl_points > 0):
             guidance = "HOLD_STRONG"
             reason = "Fresh momentum is expanding. Do not react to a normal 1-minute pullback."
         elif momentum_fading:
@@ -785,7 +935,7 @@ class SignalService:
             guidance = "NORMAL_PULLBACK"
             reason = "A small opposite candle is normal. No real structure damage yet."
 
-        if time_regime == "ENDGAME" and pnl_points > 0 and guidance in {"HOLD_STRONG", "HOLD_WITH_TRAIL"}:
+        if time_regime == "ENDGAME" and (pnl_points is not None and pnl_points > 0) and guidance in {"HOLD_STRONG", "HOLD_WITH_TRAIL"}:
             guidance = "BOOK_PARTIAL"
             reason = "Late-day move is in profit; partial booking is safer for an option buyer."
 
@@ -796,8 +946,16 @@ class SignalService:
             "reason": reason,
             "structure": structure_text,
             "price": last_close,
+            "option_price": option_price,
             "entry_price": entry_price,
+            "entry_underlying_price": self.active_trade_monitor.get("entry_underlying_price"),
+            "option_bid": option_snapshot.get("top_bid_price") if option_snapshot else None,
+            "option_ask": option_snapshot.get("top_ask_price") if option_snapshot else None,
+            "option_spread": option_snapshot.get("spread") if option_snapshot else None,
+            "strike": strike,
             "pnl_points": pnl_points,
+            "max_favorable_ltp": self.active_trade_monitor.get("max_favorable_option_ltp"),
+            "max_adverse_ltp": self.active_trade_monitor.get("max_adverse_option_ltp"),
             "quality": self.active_trade_monitor["quality"],
             "time_regime": time_regime,
             "heikin_ashi": (self.strategy.last_heikin_ashi or {}).get("bias"),
@@ -824,6 +982,7 @@ class SignalService:
 
         self.active_trade_monitor["last_notified_minute"] = minute_key
         self._safe_save_trade_monitor_event(minute_key, monitor_data)
+        self._safe_save_option_signal_outcome(minute_key, monitor_data)
         self.notifier.send_trade_monitor_update(monitor_data)
 
         if monitor_data["guidance"] == "EXIT_BIAS" or self.active_trade_monitor["minutes_active"] >= 20:
@@ -1794,7 +1953,7 @@ class SignalService:
                 monitor_data.get("signal"),
                 self.active_trade_monitor.get("entry_time") if self.active_trade_monitor else None,
                 float(monitor_data.get("entry_price")) if monitor_data.get("entry_price") is not None else None,
-                float(monitor_data.get("price")) if monitor_data.get("price") is not None else None,
+                float(monitor_data.get("option_price")) if monitor_data.get("option_price") is not None else None,
                 float(monitor_data.get("pnl_points")) if monitor_data.get("pnl_points") is not None else None,
                 monitor_data.get("guidance"),
                 monitor_data.get("reason"),
@@ -1806,15 +1965,86 @@ class SignalService:
         except Exception as e:
             self._log(f"DB save error (trade monitor): {e}")
 
-    def _safe_save_signal_issued(self, ts, signal, price, strike, reason, balanced_pro, oi_mode, telegram_sent=True, monitor_started=True, entry_window_end=None):
+    def _safe_save_option_signal_outcome(self, ts, monitor_data):
+        """Persist option-premium outcome snapshots for fired signals."""
+        try:
+            if not self.active_trade_monitor:
+                return
+            row = (
+                self.active_trade_monitor.get("entry_time"),
+                ts,
+                self.instrument,
+                monitor_data.get("signal"),
+                self.active_trade_monitor.get("strike"),
+                float(self.active_trade_monitor.get("entry_underlying_price")) if self.active_trade_monitor.get("entry_underlying_price") is not None else None,
+                float(monitor_data.get("price")) if monitor_data.get("price") is not None else None,
+                float(monitor_data.get("entry_price")) if monitor_data.get("entry_price") is not None else None,
+                float(monitor_data.get("option_price")) if monitor_data.get("option_price") is not None else None,
+                float(monitor_data.get("option_bid")) if monitor_data.get("option_bid") is not None else None,
+                float(monitor_data.get("option_ask")) if monitor_data.get("option_ask") is not None else None,
+                float(monitor_data.get("option_spread")) if monitor_data.get("option_spread") is not None else None,
+                float(monitor_data.get("pnl_points")) if monitor_data.get("pnl_points") is not None else None,
+                float(monitor_data.get("max_favorable_ltp")) if monitor_data.get("max_favorable_ltp") is not None else None,
+                float(monitor_data.get("max_adverse_ltp")) if monitor_data.get("max_adverse_ltp") is not None else None,
+                int(self.active_trade_monitor.get("minutes_active") or 0),
+                monitor_data.get("guidance"),
+                monitor_data.get("reason"),
+            )
+            self.db_writer.insert_option_signal_outcome_1m(row)
+        except Exception as e:
+            self._log(f"DB save error (option outcome): {e}")
+
+    def _safe_save_signal_issued(
+        self,
+        ts,
+        signal,
+        price,
+        strike,
+        reason,
+        balanced_pro,
+        oi_mode,
+        telegram_sent=True,
+        monitor_started=True,
+        entry_window_end=None,
+        underlying_price=None,
+        option_contract=None,
+        strike_reason=None,
+        option_data_source=None,
+    ):
         """Persist only actual fired actionable signals to DB."""
         try:
+            atm_strike = None
+            distance_from_atm = None
+            option_entry_ltp = None
+            entry_bid = None
+            entry_ask = None
+            entry_spread = None
+            entry_iv = None
+            entry_delta = None
+            if option_contract:
+                atm_strike = option_contract.get("atm_strike")
+                distance_from_atm = option_contract.get("distance_from_atm")
+                option_entry_ltp = option_contract.get("ltp")
+                entry_bid = option_contract.get("top_bid_price")
+                entry_ask = option_contract.get("top_ask_price")
+                entry_spread = option_contract.get("spread")
+                entry_iv = option_contract.get("iv")
+                entry_delta = option_contract.get("delta")
             row = (
                 ts,
                 self.instrument,
                 signal,
                 float(price) if price is not None else None,
+                float(underlying_price) if underlying_price is not None else None,
                 int(strike) if strike is not None else None,
+                int(atm_strike) if atm_strike is not None else None,
+                int(distance_from_atm) if distance_from_atm is not None else None,
+                float(option_entry_ltp) if option_entry_ltp is not None else None,
+                float(entry_bid) if entry_bid is not None else None,
+                float(entry_ask) if entry_ask is not None else None,
+                float(entry_spread) if entry_spread is not None else None,
+                float(entry_iv) if entry_iv is not None else None,
+                float(entry_delta) if entry_delta is not None else None,
                 int(self.strategy.last_entry_score or self.strategy.last_score),
                 balanced_pro["quality"] if balanced_pro else None,
                 balanced_pro["setup"] if balanced_pro else None,
@@ -1822,6 +2052,8 @@ class SignalService:
                 balanced_pro["time_regime"] if balanced_pro else None,
                 oi_mode,
                 reason,
+                strike_reason,
+                option_data_source,
                 self.strategy.last_confidence_summary,
                 self.strategy.last_entry_plan.get("entry_above"),
                 self.strategy.last_entry_plan.get("entry_below"),
@@ -2224,17 +2456,86 @@ class SignalService:
             direction=(signal if signal in {"CE", "PE"} else candidate_signal if candidate_signal in {"CE", "PE"} else None),
         )
 
+        option_candidates = []
+        preferred_strikes = {}
+        if self.option_data:
+            for direction in ("CE", "PE"):
+                preferred_strikes[direction], _ = self.strike_selector.select_strike_with_reason(
+                    price=price,
+                    signal=direction,
+                    volume_signal=volume_signal,
+                    strategy_score=self.strategy.last_score,
+                    pressure_metrics=pressure_metrics,
+                )
+            option_candidates = self._build_option_candidates(
+                underlying_price=price,
+                preferred_strikes=preferred_strikes,
+                balanced_pro=balanced_pro,
+            )
+
         # Strike selection
         selected_strike = None
         strike_reason = None
+        selected_option_contract = None
         if signal and self.option_data:
-            selected_strike, strike_reason = self.strike_selector.select_strike_with_reason(
-                price=price,
-                signal=signal,
-                volume_signal=volume_signal,
-                strategy_score=self.strategy.last_score,
-                pressure_metrics=pressure_metrics,
-            )
+            selected_strike = preferred_strikes.get(signal)
+            direction_candidates = [item for item in option_candidates if item["candidate_direction"] == signal]
+            if direction_candidates:
+                direction_candidates.sort(
+                    key=lambda item: (
+                        item["candidate_score"] + (6 if item.get("strike") == selected_strike else 0),
+                        -abs(int(item.get("distance_from_atm") or 0)),
+                    ),
+                    reverse=True,
+                )
+                selected_option_contract = direction_candidates[0]
+                selected_strike = selected_option_contract.get("strike")
+                strike_reason = (
+                    f"Option-ranked candidate selected | score={selected_option_contract.get('candidate_score')} "
+                    f"| edge={selected_option_contract.get('expected_edge')} | {selected_option_contract.get('reason')}"
+                )
+            if not strike_reason:
+                selected_strike, strike_reason = self.strike_selector.select_strike_with_reason(
+                    price=price,
+                    signal=signal,
+                    volume_signal=volume_signal,
+                    strategy_score=self.strategy.last_score,
+                    pressure_metrics=pressure_metrics,
+                )
+                selected_option_contract = self._get_option_contract_snapshot(selected_strike, signal, before_ts=candle_5m.get("close_time") or candle_5m["time"])
+
+        if option_candidates:
+            candidate_rows = []
+            for item in option_candidates:
+                candidate_rows.append(
+                    (
+                        candle_5m["time"],
+                        self.instrument,
+                        float(price) if price is not None else None,
+                        item.get("underlying_bias"),
+                        item.get("setup_type"),
+                        item.get("candidate_direction"),
+                        int(item.get("strike")) if item.get("strike") is not None else None,
+                        int(item.get("atm_strike")) if item.get("atm_strike") is not None else None,
+                        int(item.get("distance_from_atm")) if item.get("distance_from_atm") is not None else None,
+                        float(item.get("ltp")) if item.get("ltp") is not None else None,
+                        float(item.get("top_bid_price")) if item.get("top_bid_price") is not None else None,
+                        float(item.get("top_ask_price")) if item.get("top_ask_price") is not None else None,
+                        float(item.get("spread")) if item.get("spread") is not None else None,
+                        float(item.get("spread_percent")) if item.get("spread_percent") is not None else None,
+                        float(item.get("iv")) if item.get("iv") is not None else None,
+                        float(item.get("delta")) if item.get("delta") is not None else None,
+                        float(item.get("theta")) if item.get("theta") is not None else None,
+                        int(item.get("oi")) if item.get("oi") is not None else None,
+                        int(item.get("volume")) if item.get("volume") is not None else None,
+                        float(item.get("candidate_score")) if item.get("candidate_score") is not None else None,
+                        int(item.get("candidate_rank")) if item.get("candidate_rank") is not None else None,
+                        float(item.get("expected_edge")) if item.get("expected_edge") is not None else None,
+                        bool(signal and item.get("candidate_direction") == signal and item.get("strike") == selected_strike),
+                        item.get("reason"),
+                    )
+                )
+            self.db_writer.insert_option_signal_candidates_5m(candidate_rows)
 
         # Enrich reason
         enriched_reason = reason
@@ -2318,10 +2619,11 @@ class SignalService:
 
         # Send notification if signal
         if signal:
+            option_signal_price = (selected_option_contract or {}).get("ltp") if selected_option_contract else price
             print(f"\n[Signal Service] SIGNAL GENERATED: {signal}")
             print(f"Score: {self.strategy.last_score} | Confidence: {self.strategy.last_confidence}")
             print(f"Strike: {selected_strike} | Reason: {reason}")
-            print(f"Price: {price} | Time: {candle_5m['time']}")
+            print(f"Price: {option_signal_price} | Spot: {price} | Time: {candle_5m['time']}")
             self.notifier.send_trade_notification(
                 {
                     "instrument": self.instrument,
@@ -2331,7 +2633,8 @@ class SignalService:
                     "confidence_summary": self.strategy.last_confidence_summary,
                     "signal_type": self.strategy.last_signal_type,
                     "signal_grade": self.strategy.last_signal_grade,
-                    "price": round(price, 2) if price is not None else None,
+                    "price": round(option_signal_price, 2) if option_signal_price is not None else None,
+                    "spot_price": round(price, 2) if price is not None else None,
                     "trigger_price": self.strategy.last_entry_plan.get("entry_above") if signal == "CE" else self.strategy.last_entry_plan.get("entry_below"),
                     "invalidate_price": self.strategy.last_entry_plan.get("invalidate_price"),
                     "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
@@ -2344,7 +2647,7 @@ class SignalService:
             self._safe_save_signal_issued(
                 ts=candle_5m["time"],
                 signal=signal,
-                price=price,
+                price=option_signal_price,
                 strike=selected_strike,
                 reason=enriched_reason,
                 balanced_pro=balanced_pro,
@@ -2355,6 +2658,10 @@ class SignalService:
                     candle_5m["close_time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
                     if candle_5m.get("close_time") else None
                 ),
+                underlying_price=price,
+                option_contract=selected_option_contract,
+                strike_reason=strike_reason,
+                option_data_source=self.option_data_source,
             )
             
             # Save ML features for training (async, don't block)

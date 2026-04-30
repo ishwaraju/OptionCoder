@@ -6,30 +6,15 @@
   </component>
   <component name="DBNavigator.Project.DataEditorManager">
     <record-view-column-sorting-type value="BY_INDEX" />
-    <value-preview-text-wrapping value="false" />
+    <value-preview-text-wrapping value="true" />
     <value-preview-pinned value="false" />
-  </component>
-  <component name="DBNavigator.Project.DataExportManager">
-    <export-instructions>
-      <create-header value="true" />
-      <friendly-headers value="false" />
-      <quote-values-containing-separator value="true" />
-      <quote-all-values value="false" />
-      <value-separator value="" />
-      <begin-quote value="&quot;" />
-      <end-quote value="&quot;" />
-      <file-name value="" />
-      <file-location value="" />
-      <scope value="GLOBAL" />
-      <destination value="FILE" />
-      <format value="EXCEL" />
-      <charset value="UTF-8" />
-      <charset value="UTF-8" />
-    </export-instructions>
   </component>
   <component name="DBNavigator.Project.DatabaseAssistantManager">
     <assistants>
-      <assistant-state connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" assistant-type="SELECT_AI" default-profile-name="" selected-chat-id="" availability="UNAVAILABLE" acknowledgement="NONE" selected="true">
+      <assistant-state connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" assistant-type="PUBLIC" default-profile-name="" selected-chat-id="" availability="AVAILABLE" acknowledgement="NONE" selected="true">
+        <tools />
+      </assistant-state>
+      <assistant-state connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" assistant-type="SELECT_AI" default-profile-name="" selected-chat-id="" availability="UNAVAILABLE" acknowledgement="NONE">
         <tools />
       </assistant-state>
     </assistants>
@@ -40,80 +25,87 @@
   <component name="DBNavigator.Project.DatabaseBrowserManager">
     <autoscroll-to-editor value="false" />
     <autoscroll-from-editor value="true" />
-    <show-object-properties value="false" />
+    <show-object-properties value="true" />
     <loaded-nodes />
   </component>
   <component name="DBNavigator.Project.DatabaseConsoleManager">
-    <connection id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355">
-      <console name="Connection" type="STANDARD" schema="postgres" session="Main"><![CDATA[SELECT COUNT(*) FROM public.candles_1m;
-
-DROP TABLE public.oi_snapshots_1m;]]></console>
+    <connection id="d57161f6-fd9a-42bf-86eb-be7c5632a533">
+      <console name="Connection" type="STANDARD" schema="optioncoder" session="Main" />
     </connection>
   </component>
   <component name="DBNavigator.Project.DatabaseEditorStateManager">
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files />
+    <open-files>
+      <object connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" object-ref="schemas/public/tables/option_signal_outcomes_1m" />
+      <object connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" object-ref="schemas/public/tables/option_signal_candidates_5m" />
+    </open-files>
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
     <prerequisites />
   </component>
   <component name="DBNavigator.Project.DatabaseSessionManager">
-    <connection id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" />
+    <connection id="d57161f6-fd9a-42bf-86eb-be7c5632a533" />
   </component>
   <component name="DBNavigator.Project.DatasetFilterManager">
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.oi_snapshots_1m" active-filter-id="e5f01067-2a0c-42e6-8517-75b424138c3d">
-      <filter id="e5f01067-2a0c-42e6-8517-75b424138c3d" name="oi_snapshots_1m" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.option_signal_outcomes_1m" active-filter-id="dd77f7b4-e40b-40ee-b5bd-2b17b305a7d2">
+      <filter id="dd77f7b4-e40b-40ee-b5bd-2b17b305a7d2" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>signal_ts >= CURRENT_DATE<br>and signal_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.candles_1m" active-filter-id="ee78d35e-9d8f-4bcc-b5fe-ffe87bf8c8a6">
-      <filter id="ee78d35e-9d8f-4bcc-b5fe-ffe87bf8c8a6" name="candles_1m" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.option_band_snapshots_1m" active-filter-id="906f39f5-890d-4f47-a0b4-b98e986ee042">
+      <filter id="906f39f5-890d-4f47-a0b4-b98e986ee042" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.option_band_snapshots_1m" active-filter-id="f79f055d-0178-48e1-bb16-7c24dba6b984">
-      <filter id="f79f055d-0178-48e1-bb16-7c24dba6b984" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.ml_features_log" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.alert_reviews_5m" active-filter-id="c381da6e-e8eb-4da9-a6b0-16d29462919d">
+      <filter id="c381da6e-e8eb-4da9-a6b0-16d29462919d" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>alert_ts >= CURRENT_DATE<br>and alert_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.trade_monitor_events_1m" active-filter-id="e9832c55-f04c-4cca-a5a1-2127fa1333c3">
-      <filter id="e9832c55-f04c-4cca-a5a1-2127fa1333c3" name="trade_monitor_events_1m" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.signals_issued" active-filter-id="d2cd3dad-fd9e-403a-8939-50013cb77fe2">
+      <filter id="d2cd3dad-fd9e-403a-8939-50013cb77fe2" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.ml_features_log" active-filter-id="" />
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.alert_reviews_5m" active-filter-id="a866dd51-4bc7-4a56-985c-320cbe7b5ef4">
-      <filter id="a866dd51-4bc7-4a56-985c-320cbe7b5ef4" name="Filter 1" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>DATE(alert_ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.oi_snapshots_1m" active-filter-id="88fc864e-0af9-4437-9ee3-8a596695fcf0">
+      <filter id="88fc864e-0af9-4437-9ee3-8a596695fcf0" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.signals_issued" active-filter-id="ca106afa-40f5-46e7-ac50-ae059275ff8a">
-      <filter id="ca106afa-40f5-46e7-ac50-ae059275ff8a" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.candles_1m" active-filter-id="70d4e906-3813-4333-a6af-91f00983be68">
+      <filter id="70d4e906-3813-4333-a6af-91f00983be68" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.scalp_signals_1m" active-filter-id="EMPTY_FILTER">
-      <filter id="5a233271-1c1b-4e26-abd5-252c36fa2b3f" name="CURRENT_DATE &amp; CURRENT_DATE + INTERVAL '..." temporary="false" custom-name="false" type="basic" join-type="AND">
-        <condition column="ts" operator="&gt;=" value="CURRENT_DATE" active="true" />
-        <condition column="ts" operator="&lt;" value="CURRENT_DATE + INTERVAL '1 day'" active="true" />
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.option_signal_candidates_5m" active-filter-id="4d9ba30d-d530-4201-b188-16af5cb3b044">
+      <filter id="4d9ba30d-d530-4201-b188-16af5cb3b044" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.candles_5m" active-filter-id="2f633ca1-d05e-4bea-a3ed-4064d733bfaf">
-      <filter id="2f633ca1-d05e-4bea-a3ed-4064d733bfaf" name="candles_5m" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.trade_monitor_events_1m" active-filter-id="4fc30c62-47eb-438a-b89e-6a60a59b3b13">
+      <filter id="4fc30c62-47eb-438a-b89e-6a60a59b3b13" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" dataset="public.strategy_decisions_5m" active-filter-id="257f8538-de9d-4c85-9e83-d3837537f586">
-      <filter id="257f8538-de9d-4c85-9e83-d3837537f586" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>DATE(ts AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE<br>ORDER BY ts]]></condition>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.scalp_signals_1m" active-filter-id="36128b06-80bd-41da-89b2-84cb0a498456">
+      <filter id="36128b06-80bd-41da-89b2-84cb0a498456" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-  </component>
-  <component name="DBNavigator.Project.ExecutionManager">
-    <retain-sticky-names value="false" />
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.candles_5m" active-filter-id="7e257a20-3366-463d-aaa8-66b38dc5bed5">
+      <filter id="7e257a20-3366-463d-aaa8-66b38dc5bed5" name="Filter 1" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+      </filter>
+    </filter-actions>
+    <filter-actions connection-id="d57161f6-fd9a-42bf-86eb-be7c5632a533" dataset="public.strategy_decisions_5m" active-filter-id="e1cd162d-6352-44d4-9a55-96eacf975ab3">
+      <filter id="e1cd162d-6352-44d4-9a55-96eacf975ab3" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+      </filter>
+    </filter-actions>
   </component>
   <component name="DBNavigator.Project.ObjectQuickFilterManager">
     <last-used-operator value="EQUAL" />
@@ -121,7 +113,7 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
   </component>
   <component name="DBNavigator.Project.Settings">
     <connections>
-      <connection source-id="" id="348a5d4b-1d61-4cd4-b49b-c0a6a677e355" active="true" signed="true">
+      <connection source-id="" id="d57161f6-fd9a-42bf-86eb-be7c5632a533" active="true" signed="true">
         <database>
           <name value="Connection" />
           <description value="" />
@@ -140,8 +132,8 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
           <server-type value="" />
           <protocol value="" />
           <url-parameters />
-          <type value="OS_CREDENTIALS" />
-          <user value="" />
+          <type value="USER" />
+          <user value="ishwar" />
           <token-type value="" />
           <token-config-file value="" />
           <token-profile value="" />
@@ -306,7 +298,7 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
         <lookup-objects>
           <object-type name="SCHEMA" enabled="true" />
           <object-type name="USER" enabled="false" />
-          <object-type name="ROLE" enabled="true" />
+          <object-type name="ROLE" enabled="false" />
           <object-type name="PRIVILEGE" enabled="false" />
           <object-type name="CHARSET" enabled="false" />
           <object-type name="TABLE" enabled="true" />
@@ -332,7 +324,7 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
           <object-type name="DIMENSION" enabled="false" />
           <object-type name="CLUSTER" enabled="false" />
           <object-type name="DBLINK" enabled="false" />
-          <object-type name="CREDENTIAL" enabled="true" />
+          <object-type name="CREDENTIAL" enabled="false" />
         </lookup-objects>
         <force-database-load value="false" />
         <prompt-connection-selection value="true" />
@@ -675,9 +667,5 @@ DROP TABLE public.oi_snapshots_1m;]]></console>
         </visibility-settings>
       </environment>
     </general-settings>
-  </component>
-  <component name="DBNavigator.Project.StatementExecutionManager">
-    <execution-variables />
-    <execution-variable-types />
   </component>
 </project>
