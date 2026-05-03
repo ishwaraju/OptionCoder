@@ -36,9 +36,7 @@ from shared.market.oi_quote_confirmation import OIQuoteConfirmation
 from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
 from strategies.shared.breakout_strategy import BreakoutStrategy
 from strategies.shared.strike_selector import StrikeSelector
-from strategies.banknifty import BankNiftyActionableRules
-from strategies.nifty import NiftyActionableRules
-from strategies.sensex import SensexActionableRules
+from strategies.shared.actionable_rules import InstrumentActionableRules
 from shared.utils.logger import TradeLogger
 from shared.utils.notifier import Notifier
 from shared.utils.instrument_profile import get_instrument_profile
@@ -2324,7 +2322,8 @@ class SignalService:
             if not (recent_breakout and signal_grade in {"A", "A+"} and confidence == "HIGH" and score >= 78):
                 return False
         if self.instrument == "SENSEX":
-            return SensexActionableRules.should_allow_signal(
+            return InstrumentActionableRules.should_allow_signal(
+                instrument=self.instrument,
                 signal_type=signal_type,
                 signal_grade=signal_grade,
                 confidence=confidence,
@@ -2336,25 +2335,15 @@ class SignalService:
             )
         if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
             return False
-        if (
-            self.instrument == "BANKNIFTY"
-            and BankNiftyActionableRules.should_allow_b_grade_breakout(
-                signal_type=signal_type,
-                signal_grade=signal_grade,
-                confidence=confidence,
-                regime=regime,
-                candle_time=candle_time,
-                score=score,
-                pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
-            )
-        ):
-            return True
-        if self.instrument == "NIFTY" and NiftyActionableRules.should_allow_signal(
+        if self.instrument in {"NIFTY", "BANKNIFTY"} and InstrumentActionableRules.should_allow_signal(
+            instrument=self.instrument,
             signal_type=signal_type,
             signal_grade=signal_grade,
             confidence=confidence,
             regime=regime,
+            candle_time=candle_time,
             score=score,
+            entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
             pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
         ):
             return True
