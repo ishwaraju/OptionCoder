@@ -1,0 +1,196 @@
+risk_profiles:
+  NIFTY:
+    EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 14.0, target: 30.0, trail: 8.0}
+        NORMAL: {sl: 12.0, target: 22.0, trail: 8.0}
+        RICH: {sl: 10.0, target: 18.0, trail: 7.5}
+        EXTREME: {sl: 8.0, target: 14.0, trail: 7.0}
+      CONTINUATION:
+        CHEAP: {sl: 13.0, target: 26.0, trail: 8.0}
+        NORMAL: {sl: 11.0, target: 19.0, trail: 8.0}
+        RICH: {sl: 9.0, target: 15.0, trail: 7.0}
+        EXTREME: {sl: 7.0, target: 11.0, trail: 7.0}
+      REVERSAL:
+        CHEAP: {sl: 18.0, target: 35.0, trail: 9.0}
+        NORMAL: {sl: 16.0, target: 28.0, trail: 8.5}
+        RICH: {sl: 14.0, target: 22.0, trail: 8.0}
+        EXTREME: {sl: 11.0, target: 18.0, trail: 7.5}
+    NON_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 18.0, target: 40.0, trail: 11.0}
+        NORMAL: {sl: 16.0, target: 32.0, trail: 10.0}
+        RICH: {sl: 14.0, target: 26.0, trail: 9.0}
+        EXTREME: {sl: 12.0, target: 20.0, trail: 8.0}
+      CONTINUATION:
+        CHEAP: {sl: 16.0, target: 32.0, trail: 10.0}
+        NORMAL: {sl: 14.0, target: 26.0, trail: 9.0}
+        RICH: {sl: 12.0, target: 21.0, trail: 8.5}
+        EXTREME: {sl: 10.0, target: 16.0, trail: 8.0}
+      REVERSAL:
+        CHEAP: {sl: 22.0, target: 46.0, trail: 12.0}
+        NORMAL: {sl: 20.0, target: 38.0, trail: 11.0}
+        RICH: {sl: 17.0, target: 30.0, trail: 10.0}
+        EXTREME: {sl: 14.0, target: 22.0, trail: 9.0}
+    PRE_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 17.0, target: 36.0, trail: 10.0}
+        NORMAL: {sl: 15.0, target: 28.0, trail: 9.0}
+        RICH: {sl: 13.0, target: 23.0, trail: 8.5}
+        EXTREME: {sl: 11.0, target: 18.0, trail: 8.0}
+      CONTINUATION:
+        CHEAP: {sl: 15.0, target: 30.0, trail: 9.5}
+        NORMAL: {sl: 13.0, target: 24.0, trail: 8.5}
+        RICH: {sl: 11.0, target: 19.0, trail: 8.0}
+        EXTREME: {sl: 9.0, target: 15.0, trail: 7.5}
+      REVERSAL:
+        CHEAP: {sl: 21.0, target: 42.0, trail: 11.0}
+        NORMAL: {sl: 19.0, target: 34.0, trail: 10.0}
+        RICH: {sl: 16.0, target: 28.0, trail: 9.0}
+        EXTREME: {sl: 13.0, target: 20.0, trail: 8.5}
+    POST_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 17.0, target: 36.0, trail: 10.0}
+        NORMAL: {sl: 15.0, target: 30.0, trail: 9.5}
+        RICH: {sl: 13.0, target: 24.0, trail: 8.5}
+        EXTREME: {sl: 11.0, target: 18.0, trail: 8.0}
+      CONTINUATION:
+        CHEAP: {sl: 16.0, target: 30.0, trail: 9.5}
+        NORMAL: {sl: 14.0, target: 24.0, trail: 8.5}
+        RICH: {sl: 12.0, target: 19.0, trail: 8.0}
+        EXTREME: {sl: 10.0, target: 15.0, trail: 7.5}
+      REVERSAL:
+        CHEAP: {sl: 21.0, target: 42.0, trail: 11.0}
+        NORMAL: {sl: 19.0, target: 34.0, trail: 10.0}
+        RICH: {sl: 16.0, target: 28.0, trail: 9.0}
+        EXTREME: {sl: 13.0, target: 20.0, trail: 8.5}
+  BANKNIFTY:
+    EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 16.0, target: 35.0, trail: 9.0}
+        NORMAL: {sl: 14.0, target: 26.0, trail: 9.0}
+        RICH: {sl: 12.0, target: 21.0, trail: 8.0}
+        EXTREME: {sl: 9.0, target: 16.0, trail: 7.5}
+      CONTINUATION:
+        CHEAP: {sl: 15.0, target: 30.0, trail: 8.5}
+        NORMAL: {sl: 13.0, target: 22.0, trail: 8.5}
+        RICH: {sl: 11.0, target: 17.0, trail: 7.5}
+        EXTREME: {sl: 8.0, target: 13.0, trail: 7.0}
+      REVERSAL:
+        CHEAP: {sl: 21.0, target: 42.0, trail: 10.0}
+        NORMAL: {sl: 18.0, target: 32.0, trail: 9.0}
+        RICH: {sl: 16.0, target: 26.0, trail: 8.5}
+        EXTREME: {sl: 13.0, target: 20.0, trail: 8.0}
+    NON_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 21.0, target: 48.0, trail: 12.0}
+        NORMAL: {sl: 18.0, target: 36.0, trail: 11.0}
+        RICH: {sl: 15.0, target: 28.0, trail: 10.0}
+        EXTREME: {sl: 12.0, target: 22.0, trail: 9.0}
+      CONTINUATION:
+        CHEAP: {sl: 18.0, target: 38.0, trail: 11.0}
+        NORMAL: {sl: 16.0, target: 30.0, trail: 10.0}
+        RICH: {sl: 13.0, target: 24.0, trail: 9.0}
+        EXTREME: {sl: 11.0, target: 18.0, trail: 8.0}
+      REVERSAL:
+        CHEAP: {sl: 25.0, target: 55.0, trail: 13.0}
+        NORMAL: {sl: 22.0, target: 42.0, trail: 12.0}
+        RICH: {sl: 19.0, target: 34.0, trail: 11.0}
+        EXTREME: {sl: 15.0, target: 24.0, trail: 9.5}
+    PRE_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 20.0, target: 44.0, trail: 11.0}
+        NORMAL: {sl: 17.0, target: 34.0, trail: 10.0}
+        RICH: {sl: 14.0, target: 27.0, trail: 9.0}
+        EXTREME: {sl: 12.0, target: 20.0, trail: 8.5}
+      CONTINUATION:
+        CHEAP: {sl: 17.0, target: 36.0, trail: 10.5}
+        NORMAL: {sl: 15.0, target: 28.0, trail: 9.5}
+        RICH: {sl: 12.0, target: 22.0, trail: 8.5}
+        EXTREME: {sl: 10.0, target: 17.0, trail: 8.0}
+      REVERSAL:
+        CHEAP: {sl: 24.0, target: 50.0, trail: 12.0}
+        NORMAL: {sl: 21.0, target: 40.0, trail: 11.0}
+        RICH: {sl: 18.0, target: 32.0, trail: 10.0}
+        EXTREME: {sl: 14.0, target: 24.0, trail: 9.0}
+    POST_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 20.0, target: 42.0, trail: 11.0}
+        NORMAL: {sl: 17.0, target: 34.0, trail: 10.0}
+        RICH: {sl: 14.0, target: 27.0, trail: 9.0}
+        EXTREME: {sl: 12.0, target: 20.0, trail: 8.5}
+      CONTINUATION:
+        CHEAP: {sl: 17.0, target: 35.0, trail: 10.5}
+        NORMAL: {sl: 15.0, target: 27.0, trail: 9.5}
+        RICH: {sl: 12.0, target: 21.0, trail: 8.5}
+        EXTREME: {sl: 10.0, target: 16.0, trail: 8.0}
+      REVERSAL:
+        CHEAP: {sl: 24.0, target: 48.0, trail: 12.0}
+        NORMAL: {sl: 21.0, target: 39.0, trail: 11.0}
+        RICH: {sl: 18.0, target: 31.0, trail: 10.0}
+        EXTREME: {sl: 14.0, target: 23.0, trail: 9.0}
+  SENSEX:
+    EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 15.0, target: 32.0, trail: 8.5}
+        NORMAL: {sl: 13.0, target: 24.0, trail: 8.5}
+        RICH: {sl: 11.0, target: 19.0, trail: 7.5}
+        EXTREME: {sl: 9.0, target: 15.0, trail: 7.0}
+      CONTINUATION:
+        CHEAP: {sl: 14.0, target: 27.0, trail: 8.5}
+        NORMAL: {sl: 12.0, target: 20.0, trail: 8.0}
+        RICH: {sl: 10.0, target: 16.0, trail: 7.5}
+        EXTREME: {sl: 8.0, target: 12.0, trail: 7.0}
+      REVERSAL:
+        CHEAP: {sl: 19.0, target: 38.0, trail: 9.5}
+        NORMAL: {sl: 17.0, target: 30.0, trail: 9.0}
+        RICH: {sl: 15.0, target: 24.0, trail: 8.0}
+        EXTREME: {sl: 12.0, target: 19.0, trail: 7.5}
+    NON_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 20.0, target: 42.0, trail: 11.0}
+        NORMAL: {sl: 17.0, target: 34.0, trail: 10.0}
+        RICH: {sl: 14.0, target: 27.0, trail: 9.0}
+        EXTREME: {sl: 12.0, target: 20.0, trail: 8.0}
+      CONTINUATION:
+        CHEAP: {sl: 17.0, target: 34.0, trail: 10.0}
+        NORMAL: {sl: 15.0, target: 28.0, trail: 9.0}
+        RICH: {sl: 13.0, target: 22.0, trail: 8.5}
+        EXTREME: {sl: 10.0, target: 17.0, trail: 8.0}
+      REVERSAL:
+        CHEAP: {sl: 23.0, target: 48.0, trail: 12.0}
+        NORMAL: {sl: 21.0, target: 40.0, trail: 11.0}
+        RICH: {sl: 18.0, target: 32.0, trail: 10.0}
+        EXTREME: {sl: 14.0, target: 24.0, trail: 9.0}
+    PRE_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 19.0, target: 38.0, trail: 10.0}
+        NORMAL: {sl: 16.0, target: 31.0, trail: 9.5}
+        RICH: {sl: 14.0, target: 24.0, trail: 8.5}
+        EXTREME: {sl: 11.0, target: 18.0, trail: 8.0}
+      CONTINUATION:
+        CHEAP: {sl: 16.0, target: 31.0, trail: 9.5}
+        NORMAL: {sl: 14.0, target: 25.0, trail: 8.5}
+        RICH: {sl: 12.0, target: 20.0, trail: 8.0}
+        EXTREME: {sl: 10.0, target: 15.0, trail: 7.5}
+      REVERSAL:
+        CHEAP: {sl: 22.0, target: 45.0, trail: 11.0}
+        NORMAL: {sl: 20.0, target: 36.0, trail: 10.0}
+        RICH: {sl: 17.0, target: 29.0, trail: 9.0}
+        EXTREME: {sl: 13.0, target: 21.0, trail: 8.5}
+    POST_EXPIRY:
+      BREAKOUT:
+        CHEAP: {sl: 19.0, target: 37.0, trail: 10.0}
+        NORMAL: {sl: 16.0, target: 30.0, trail: 9.5}
+        RICH: {sl: 14.0, target: 23.0, trail: 8.5}
+        EXTREME: {sl: 11.0, target: 17.0, trail: 8.0}
+      CONTINUATION:
+        CHEAP: {sl: 16.0, target: 30.0, trail: 9.5}
+        NORMAL: {sl: 14.0, target: 24.0, trail: 8.5}
+        RICH: {sl: 12.0, target: 19.0, trail: 8.0}
+        EXTREME: {sl: 10.0, target: 15.0, trail: 7.5}
+      REVERSAL:
+        CHEAP: {sl: 22.0, target: 44.0, trail: 11.0}
+        NORMAL: {sl: 20.0, target: 35.0, trail: 10.0}
+        RICH: {sl: 17.0, target: 28.0, trail: 9.0}
+        EXTREME: {sl: 13.0, target: 21.0, trail: 8.5}

@@ -203,6 +203,82 @@ class DBReader:
             "data_quality": row[12],
         }
 
+    def fetch_intraday_candle_health(self, instrument, session_start, end_time, timeframe="5m"):
+        """Summarize intraday candle coverage and largest gap for a session slice."""
+        table = "candles_5m" if timeframe == "5m" else "candles_1m"
+        expected_step_seconds = 300 if timeframe == "5m" else 60
+        query = f"""
+        WITH ordered AS (
+            SELECT
+                ts,
+                LAG(ts) OVER (ORDER BY ts) AS prev_ts
+            FROM {table}
+            WHERE instrument = %s
+              AND ts >= %s
+              AND ts <= %s
+        )
+        SELECT
+            COUNT(*)::int,
+            MAX(EXTRACT(EPOCH FROM (ts - prev_ts)))::int
+        FROM ordered;
+        """
+        rows = self._execute(query, (instrument, session_start, end_time))
+        count = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+        max_gap_seconds = int(rows[0][1]) if rows and rows[0][1] is not None else 0
+        elapsed_seconds = max(0.0, (end_time - session_start).total_seconds())
+        expected_count = int(elapsed_seconds // expected_step_seconds) + 1
+        coverage_pct = round((count / expected_count) * 100, 2) if expected_count > 0 else 0.0
+        return {
+            "count": count,
+            "expected_count": expected_count,
+            "coverage_pct": coverage_pct,
+            "max_gap_seconds": max_gap_seconds,
+        }
+
+    def fetch_intraday_oi_health(self, instrument, session_start, end_time):
+        """Summarize intraday OI snapshot coverage, distinct minutes, and largest gap."""
+        query = """
+        WITH ordered AS (
+            SELECT
+                ts,
+                LAG(ts) OVER (ORDER BY ts) AS prev_ts
+            FROM oi_snapshots_1m
+            WHERE instrument = %s
+              AND ts >= %s
+              AND ts <= %s
+        ),
+        minute_counts AS (
+            SELECT
+                COUNT(*)::int AS row_count,
+                COUNT(DISTINCT date_trunc('minute', ts))::int AS distinct_minutes,
+                MAX(EXTRACT(EPOCH FROM (ts - prev_ts)))::int AS max_gap_seconds,
+                COUNT(*) FILTER (WHERE data_quality <> 'GOOD')::int AS non_good_rows
+            FROM oi_snapshots_1m
+            LEFT JOIN ordered USING (ts)
+            WHERE instrument = %s
+              AND ts >= %s
+              AND ts <= %s
+        )
+        SELECT row_count, distinct_minutes, max_gap_seconds, non_good_rows
+        FROM minute_counts;
+        """
+        rows = self._execute(query, (instrument, session_start, end_time, instrument, session_start, end_time))
+        row_count = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+        distinct_minutes = int(rows[0][1]) if rows and rows[0][1] is not None else 0
+        max_gap_seconds = int(rows[0][2]) if rows and rows[0][2] is not None else 0
+        non_good_rows = int(rows[0][3]) if rows and rows[0][3] is not None else 0
+        elapsed_seconds = max(0.0, (end_time - session_start).total_seconds())
+        expected_minutes = int(elapsed_seconds // 60) + 1
+        coverage_pct = round((distinct_minutes / expected_minutes) * 100, 2) if expected_minutes > 0 else 0.0
+        return {
+            "row_count": row_count,
+            "distinct_minutes": distinct_minutes,
+            "expected_minutes": expected_minutes,
+            "coverage_pct": coverage_pct,
+            "max_gap_seconds": max_gap_seconds,
+            "non_good_rows": non_good_rows,
+        }
+
     def fetch_latest_option_band_snapshot(self, instrument, before_ts=None):
         """Fetch the latest full option-band snapshot for an instrument."""
         if before_ts is None:
@@ -343,6 +419,96 @@ class DBReader:
             "theta": float(row[19]) if row[19] is not None else None,
             "gamma": float(row[20]) if row[20] is not None else None,
             "vega": float(row[21]) if row[21] is not None else None,
+        }
+
+    def fetch_recent_atm_iv_series(self, instrument, option_type, before_ts=None, limit=20):
+        """Fetch recent ATM IV observations for one option side."""
+        if option_type not in {"CE", "PE"}:
+            return []
+
+        if before_ts is None:
+            query = """
+            SELECT ts, iv
+            FROM option_band_snapshots_1m
+            WHERE instrument = %s
+              AND option_type = %s
+              AND distance_from_atm = 0
+              AND iv IS NOT NULL
+              AND iv > 0
+            ORDER BY ts DESC
+            LIMIT %s;
+            """
+            rows = self._execute(query, (instrument, option_type, limit))
+        else:
+            query = """
+            SELECT ts, iv
+            FROM option_band_snapshots_1m
+            WHERE instrument = %s
+              AND option_type = %s
+              AND distance_from_atm = 0
+              AND ts <= %s
+              AND iv IS NOT NULL
+              AND iv > 0
+            ORDER BY ts DESC
+            LIMIT %s;
+            """
+            rows = self._execute(query, (instrument, option_type, before_ts, limit))
+
+        return [
+            {
+                "ts": row[0],
+                "iv": float(row[1]) if row[1] is not None else None,
+            }
+            for row in rows
+            if row[1] is not None
+        ]
+
+    def fetch_option_outcome_summary(self, signal_ts, instrument, signal, strike):
+        """Fetch aggregated premium outcome summary for one fired signal."""
+        query = """
+        SELECT
+            COUNT(*)::int,
+            MAX(minutes_since_signal)::int,
+            MAX(max_favorable_ltp),
+            MIN(max_adverse_ltp),
+            MAX(pnl_points),
+            MIN(pnl_points),
+            (
+                SELECT pnl_points
+                FROM option_signal_outcomes_1m o2
+                WHERE o2.signal_ts = %s
+                  AND o2.instrument = %s
+                  AND o2.signal = %s
+                  AND o2.strike = %s
+                ORDER BY observed_ts DESC
+                LIMIT 1
+            ) AS final_pnl
+        FROM option_signal_outcomes_1m o
+        WHERE o.signal_ts = %s
+          AND o.instrument = %s
+          AND o.signal = %s
+          AND o.strike = %s;
+        """
+        rows = self._execute(
+            query,
+            (
+                signal_ts, instrument, signal, strike,
+                signal_ts, instrument, signal, strike,
+            ),
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        if row[0] in (None, 0):
+            return None
+        return {
+            "samples": int(row[0]),
+            "minutes_tracked": int(row[1]) if row[1] is not None else 0,
+            "max_favorable_ltp": float(row[2]) if row[2] is not None else None,
+            "max_adverse_ltp": float(row[3]) if row[3] is not None else None,
+            "max_pnl_points": float(row[4]) if row[4] is not None else None,
+            "min_pnl_points": float(row[5]) if row[5] is not None else None,
+            "final_pnl_points": float(row[6]) if row[6] is not None else None,
         }
 
     def get_candle_count(self, instrument, start_time, end_time, timeframe="5m"):

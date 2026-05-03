@@ -196,7 +196,7 @@ def check_data_status():
 
 
 def update_outcomes():
-    print("\n🔄 Updating outcomes from alert_reviews...")
+    print("\n🔄 Updating outcomes from premium monitor + alert reviews...")
     from shared.db.pool import DBPool
 
     DBPool.initialize()
@@ -204,19 +204,52 @@ def update_outcomes():
         return
 
     update_query = """
+    WITH premium_outcomes AS (
+        SELECT
+            s.ts AS alert_ts,
+            s.instrument,
+            s.signal,
+            MAX(o.pnl_points) AS max_favorable_points,
+            MIN(o.pnl_points) AS max_adverse_points,
+            (
+                SELECT o2.pnl_points
+                FROM option_signal_outcomes_1m o2
+                WHERE o2.signal_ts = s.ts
+                  AND o2.instrument = s.instrument
+                  AND o2.signal = s.signal
+                  AND o2.strike = s.strike
+                ORDER BY o2.observed_ts DESC
+                LIMIT 1
+            ) AS close_pnl_points
+        FROM signals_issued s
+        JOIN option_signal_outcomes_1m o
+          ON o.signal_ts = s.ts
+         AND o.instrument = s.instrument
+         AND o.signal = s.signal
+         AND o.strike = s.strike
+        GROUP BY s.ts, s.instrument, s.signal, s.strike
+    )
     UPDATE ml_features_log m
     SET 
         actual_outcome = CASE 
+            WHEN p.close_pnl_points > 0 THEN 'PROFIT'
+            WHEN p.close_pnl_points < 0 THEN 'LOSS'
             WHEN a.usefulness = 'PROFITABLE' THEN 'PROFIT'
             WHEN a.usefulness = 'LOSS_MAKING' THEN 'LOSS'
             ELSE 'BREAKEVEN'
         END,
-        max_favorable_points = a.max_favorable_points,
-        max_adverse_points = a.max_adverse_points,
-        close_pnl_points = a.close_move_points,
-        outcome_tag = a.outcome_tag,
+        max_favorable_points = COALESCE(p.max_favorable_points, a.max_favorable_points),
+        max_adverse_points = COALESCE(p.max_adverse_points, a.max_adverse_points),
+        close_pnl_points = COALESCE(p.close_pnl_points, a.close_move_points),
+        outcome_tag = CASE
+            WHEN p.close_pnl_points IS NOT NULL THEN 'PREMIUM_MONITOR'
+            ELSE a.outcome_tag
+        END,
         updated_at = NOW()
     FROM alert_reviews_5m a
+    LEFT JOIN premium_outcomes p
+      ON p.alert_ts = a.alert_ts
+     AND p.instrument = a.instrument
     WHERE m.alert_ts = a.alert_ts
       AND m.instrument = a.instrument
       AND a.alert_kind = 'SWING'

@@ -52,7 +52,10 @@ def test_risk_profile_breakout_nifty_uses_twelve_percent_cap():
     profile = service._resolve_trade_risk_profile(setup_type="BREAKOUT", quality="A", confidence="HIGH")
 
     assert profile["setup_bucket"] == "BREAKOUT"
-    assert profile["hard_premium_stop_pct"] == 12.0
+    assert profile["session_bucket"] == "NON_EXPIRY"
+    assert profile["iv_bucket"] == "NORMAL"
+    assert profile["hard_premium_stop_pct"] == 16.0
+    assert profile["target_pct"] == 32.0
     assert profile["time_stop_warn_minutes"] == 3
     assert profile["time_stop_exit_minutes"] == 5
 
@@ -63,7 +66,8 @@ def test_risk_profile_breakout_sensex_uses_fifteen_percent_cap():
     profile = service._resolve_trade_risk_profile(setup_type="RETEST", quality="A", confidence="HIGH")
 
     assert profile["setup_bucket"] == "BREAKOUT"
-    assert profile["hard_premium_stop_pct"] == 15.0
+    assert profile["hard_premium_stop_pct"] == 17.0
+    assert profile["target_pct"] == 34.0
 
 
 def test_risk_profile_breakout_banknifty_uses_fifteen_percent_cap():
@@ -72,7 +76,8 @@ def test_risk_profile_breakout_banknifty_uses_fifteen_percent_cap():
     profile = service._resolve_trade_risk_profile(setup_type="BREAKOUT_CONFIRM", quality="A", confidence="HIGH")
 
     assert profile["setup_bucket"] == "BREAKOUT"
-    assert profile["hard_premium_stop_pct"] == 15.0
+    assert profile["hard_premium_stop_pct"] == 18.0
+    assert profile["target_pct"] == 36.0
 
 
 def test_risk_profile_reversal_sensex_uses_eighteen_percent_cap():
@@ -81,7 +86,8 @@ def test_risk_profile_reversal_sensex_uses_eighteen_percent_cap():
     profile = service._resolve_trade_risk_profile(setup_type="REVERSAL", quality="A", confidence="HIGH")
 
     assert profile["setup_bucket"] == "REVERSAL"
-    assert profile["hard_premium_stop_pct"] == 18.0
+    assert profile["hard_premium_stop_pct"] == 21.0
+    assert profile["target_pct"] == 40.0
 
 
 def test_risk_profile_reversal_banknifty_uses_eighteen_percent_cap():
@@ -90,7 +96,8 @@ def test_risk_profile_reversal_banknifty_uses_eighteen_percent_cap():
     profile = service._resolve_trade_risk_profile(setup_type="TRAP_REVERSAL", quality="A", confidence="HIGH")
 
     assert profile["setup_bucket"] == "REVERSAL"
-    assert profile["hard_premium_stop_pct"] == 18.0
+    assert profile["hard_premium_stop_pct"] == 22.0
+    assert profile["target_pct"] == 42.0
 
 
 def test_expiry_breakout_nifty_tightens_stop_and_time_window():
@@ -103,8 +110,9 @@ def test_expiry_breakout_nifty_tightens_stop_and_time_window():
     )
 
     assert profile["setup_bucket"] == "BREAKOUT"
-    assert profile["hard_premium_stop_pct"] == 11.0
-    assert profile["profit_lock_trigger_pct"] == 10.0
+    assert profile["session_bucket"] == "EXPIRY"
+    assert profile["hard_premium_stop_pct"] == 12.0
+    assert profile["target_pct"] == 22.0
     assert profile["time_stop_warn_minutes"] == 2
     assert profile["time_stop_exit_minutes"] == 4
     assert profile["trail_from_peak_pct"] == 8.0
@@ -121,10 +129,89 @@ def test_expiry_reversal_banknifty_keeps_wider_stop_but_tightens_time_window():
     )
 
     assert profile["setup_bucket"] == "REVERSAL"
+    assert profile["session_bucket"] == "EXPIRY"
     assert profile["hard_premium_stop_pct"] == 18.0
+    assert profile["target_pct"] == 32.0
     assert profile["time_stop_warn_minutes"] == 2
     assert profile["time_stop_exit_minutes"] == 4
     assert profile["trail_from_peak_pct"] == 8.0
+
+
+def test_non_expiry_breakout_iv_rich_compresses_stop_and_target():
+    service = build_monitor_service()
+    service._current_risk_option_contract = {"iv": 25.0}
+    service._current_risk_reference_contract = {"iv": 22.0}
+
+    profile = service._resolve_trade_risk_profile(
+        setup_type="BREAKOUT",
+        quality="A",
+        confidence="HIGH",
+    )
+
+    assert profile["iv_bucket"] == "RICH"
+    assert profile["hard_premium_stop_pct"] == 14.0
+    assert profile["target_pct"] == 26.0
+
+
+def test_non_expiry_breakout_iv_cheap_expands_stop_and_target():
+    service = build_monitor_service()
+    service._current_risk_option_contract = {"iv": 20.0}
+    service._current_risk_reference_contract = {"iv": 22.0}
+
+    profile = service._resolve_trade_risk_profile(
+        setup_type="BREAKOUT",
+        quality="A",
+        confidence="HIGH",
+    )
+
+    assert profile["iv_bucket"] == "CHEAP"
+    assert profile["hard_premium_stop_pct"] == 18.0
+    assert profile["target_pct"] == 40.0
+
+
+def test_market_iv_high_tightens_non_expiry_profile():
+    service = build_monitor_service()
+    service._current_risk_option_contract = {"iv": 22.0}
+    service._current_risk_reference_contract = {"iv": 22.0, "option_type": "CE", "ts": datetime(2026, 4, 16, 10, 0)}
+    service.db_reader = type("Reader", (), {
+        "fetch_recent_atm_iv_series": lambda self, instrument, option_type, before_ts=None, limit=20: [
+            {"ts": datetime(2026, 4, 16, 9, 59), "iv": 18.0},
+            {"ts": datetime(2026, 4, 16, 9, 58), "iv": 18.5},
+            {"ts": datetime(2026, 4, 16, 9, 57), "iv": 19.0},
+        ]
+    })()
+
+    profile = service._resolve_trade_risk_profile(setup_type="BREAKOUT", quality="A", confidence="HIGH")
+
+    assert profile["market_iv_regime"] == "HIGH"
+    assert profile["hard_premium_stop_pct"] == 15.0
+    assert profile["target_pct"] == 29.0
+
+
+def test_market_iv_event_tightens_expiry_profile_and_time_stop():
+    service = build_monitor_service()
+    service._current_risk_option_contract = {"iv": 30.0}
+    service._current_risk_reference_contract = {"iv": 30.0, "option_type": "CE", "ts": datetime(2026, 4, 16, 10, 0)}
+    service.db_reader = type("Reader", (), {
+        "fetch_recent_atm_iv_series": lambda self, instrument, option_type, before_ts=None, limit=20: [
+            {"ts": datetime(2026, 4, 16, 9, 59), "iv": 24.0},
+            {"ts": datetime(2026, 4, 16, 9, 58), "iv": 24.5},
+            {"ts": datetime(2026, 4, 16, 9, 57), "iv": 25.0},
+        ]
+    })()
+
+    profile = service._resolve_trade_risk_profile(
+        setup_type="BREAKOUT",
+        quality="A",
+        confidence="HIGH",
+        cautions=["expiry_day_mode", "expiry_fast_decay"],
+    )
+
+    assert profile["market_iv_regime"] == "EVENT"
+    assert profile["hard_premium_stop_pct"] == 10.0
+    assert profile["target_pct"] == 16.0
+    assert profile["time_stop_warn_minutes"] == 1
+    assert profile["time_stop_exit_minutes"] == 3
 
 
 def test_trade_monitor_hits_hard_stoploss():

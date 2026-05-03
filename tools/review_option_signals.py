@@ -55,19 +55,23 @@ def print_signal_review(day, rows):
             chosen_rank,
             chosen_outcome_pnl,
             chosen_max_fav,
+            chosen_max_adv,
+            chosen_minutes,
             top_strike,
             top_buy_price,
             top_candidate_score,
             top_expected_edge,
             top_outcome_pnl,
             top_max_fav,
+            top_max_adv,
+            top_minutes,
         ) = row
 
         time_label = signal_ts.strftime("%H:%M")
         print(f"\n[{instrument}] {time_label} | {signal} | setup={setup_type} | score={score}")
         print(
             "chosen: strike={strike} | buy={buy_price} | cand_score={cand_score} | "
-            "edge={edge} | rank={rank} | final_pnl={final_pnl} | best_seen={best_seen}".format(
+            "edge={edge} | rank={rank} | final_pnl={final_pnl} | best_seen={best_seen} | worst_seen={worst_seen} | mins={mins}".format(
                 strike=strike,
                 buy_price=_fmt(buy_price),
                 cand_score=_fmt(chosen_candidate_score),
@@ -75,17 +79,21 @@ def print_signal_review(day, rows):
                 rank=chosen_rank if chosen_rank is not None else "-",
                 final_pnl=_fmt(chosen_outcome_pnl),
                 best_seen=_fmt(_spread(chosen_max_fav, buy_price)),
+                worst_seen=_fmt(_spread(chosen_max_adv, buy_price)),
+                mins=chosen_minutes if chosen_minutes is not None else "-",
             )
         )
         print(
             "top_alt: strike={strike} | buy={buy_price} | cand_score={cand_score} | "
-            "edge={edge} | final_pnl={final_pnl} | best_seen={best_seen}".format(
+            "edge={edge} | final_pnl={final_pnl} | best_seen={best_seen} | worst_seen={worst_seen} | mins={mins}".format(
                 strike=top_strike if top_strike is not None else "-",
                 buy_price=_fmt(top_buy_price),
                 cand_score=_fmt(top_candidate_score),
                 edge=_fmt(top_expected_edge),
                 final_pnl=_fmt(top_outcome_pnl),
                 best_seen=_fmt(_spread(top_max_fav, top_buy_price)),
+                worst_seen=_fmt(_spread(top_max_adv, top_buy_price)),
+                mins=top_minutes if top_minutes is not None else "-",
             )
         )
 
@@ -138,6 +146,7 @@ def build_daily_summary(rows):
         "positive_pnl_count": 0,
         "sum_pnl": 0.0,
         "pnl_count": 0,
+        "weak_premium_response_count": 0,
         "time_buckets": defaultdict(lambda: {"signals": 0, "wins": 0, "sum_pnl": 0.0, "pnl_count": 0}),
         "setups": defaultdict(lambda: {"signals": 0, "wins": 0, "sum_pnl": 0.0, "pnl_count": 0}),
     }
@@ -158,16 +167,22 @@ def build_daily_summary(rows):
             chosen_rank,
             chosen_outcome_pnl,
             chosen_max_fav,
+            chosen_max_adv,
+            chosen_minutes,
             top_strike,
             top_buy_price,
             top_candidate_score,
             top_expected_edge,
             top_outcome_pnl,
             top_max_fav,
+            top_max_adv,
+            top_minutes,
         ) = row
 
         pnl = _safe_float(chosen_outcome_pnl)
         top_pnl = _safe_float(top_outcome_pnl)
+        buy_price_value = _safe_float(buy_price)
+        max_fav_value = _safe_float(chosen_max_fav)
         bucket = _time_bucket(signal_ts)
         setup_key = setup_type or "UNKNOWN"
 
@@ -186,6 +201,8 @@ def build_daily_summary(rows):
             summary["pnl_count"] += 1
             if pnl > 0:
                 summary["positive_pnl_count"] += 1
+        if buy_price_value and max_fav_value and (max_fav_value - buy_price_value) <= max(buy_price_value * 0.05, 2.0):
+            summary["weak_premium_response_count"] += 1
 
         if top_strike is not None and top_strike == strike:
             summary["chosen_top_rank_count"] += 1
@@ -203,12 +220,13 @@ def print_daily_summary(day, rows):
     print("DAILY SUMMARY")
     print("-" * 88)
     print(
-        "signals={signals} | wins={wins} | avg_pnl={avg_pnl} | chosen_top_rank={top_rank}/{signals} | better_alt={better_alt}".format(
+        "signals={signals} | wins={wins} | avg_pnl={avg_pnl} | chosen_top_rank={top_rank}/{signals} | better_alt={better_alt} | weak_premium={weak_premium}".format(
             signals=summary["total_signals"],
             wins=summary["positive_pnl_count"],
             avg_pnl=_fmt(summary["sum_pnl"] / summary["pnl_count"]) if summary["pnl_count"] else "-",
             top_rank=summary["chosen_top_rank_count"],
             better_alt=summary["better_alternative_count"],
+            weak_premium=summary["weak_premium_response_count"],
         )
     )
 
@@ -249,6 +267,10 @@ def build_recommendations(summary):
     if pnl_count >= 3 and win_count / max(pnl_count, 1) < 0.4:
         recommendations.append(
             "overall signal quality weak hai; breakout/continuation score floors 2-3 points badhao."
+        )
+    if total >= 3 and int(summary.get("weak_premium_response_count") or 0) / max(total, 1) >= 0.4:
+        recommendations.append(
+            "signals aa rahe hain par premium response weak hai; spread/IV/premium expansion checks ko aur tighten karo."
         )
 
     for bucket, stats in sorted(summary.get("time_buckets", {}).items()):
@@ -382,6 +404,8 @@ def main():
                 o.strike,
                 o.pnl_points,
                 o.max_favorable_ltp,
+                o.max_adverse_ltp,
+                o.minutes_since_signal,
                 ROW_NUMBER() OVER (
                     PARTITION BY o.signal_ts, o.instrument, o.signal, o.strike
                     ORDER BY o.observed_ts DESC
@@ -401,6 +425,8 @@ def main():
                 tc.strike,
                 o.pnl_points,
                 o.max_favorable_ltp,
+                o.max_adverse_ltp,
+                o.minutes_since_signal,
                 ROW_NUMBER() OVER (
                     PARTITION BY tc.ts, tc.instrument, tc.candidate_direction, tc.strike
                     ORDER BY o.observed_ts DESC
@@ -429,12 +455,16 @@ def main():
         cc.candidate_rank,
         co.pnl_points,
         co.max_favorable_ltp,
+        co.max_adverse_ltp,
+        co.minutes_since_signal,
         tc.strike,
         tc.option_ltp,
         tc.candidate_score,
         tc.expected_edge,
         to2.pnl_points,
-        to2.max_favorable_ltp
+        to2.max_favorable_ltp,
+        to2.max_adverse_ltp,
+        to2.minutes_since_signal
     FROM signals s
     LEFT JOIN chosen_candidate cc
       ON cc.ts = s.ts

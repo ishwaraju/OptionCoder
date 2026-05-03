@@ -167,6 +167,19 @@ class OICollector:
             return None
 
         return option_data
+
+    @staticmethod
+    def _derive_oi_levels(option_data):
+        max_call_strike = int(option_data.get("max_call_oi_strike") or 0)
+        max_put_strike = int(option_data.get("max_put_oi_strike") or 0)
+        support_level = float(max_put_strike) if max_put_strike > 0 else 0.0
+        resistance_level = float(max_call_strike) if max_call_strike > 0 else 0.0
+        oi_range_width = (
+            round(abs(resistance_level - support_level), 2)
+            if support_level > 0 and resistance_level > 0
+            else 0.0
+        )
+        return support_level, resistance_level, oi_range_width
     
     def _print_startup_status(self):
         """Print startup status"""
@@ -234,6 +247,7 @@ class OICollector:
             max_pe_oi_strike = int(option_data.get("max_put_oi_strike") or 0)
             max_ce_oi_amount = max((row["oi"] for row in ce_rows), default=0)
             max_pe_oi_amount = max((row["oi"] for row in pe_rows), default=0)
+            support_level, resistance_level, oi_range_width = self._derive_oi_levels(option_data)
 
             oi_data = self._build_oi_snapshot_row(
                 timestamp=current_time,
@@ -249,6 +263,9 @@ class OICollector:
                 volume_pcr=(total_pe_volume / total_ce_volume) if total_ce_volume > 0 else 0.0,
                 max_ce_oi_strike=max_ce_oi_strike,
                 max_pe_oi_strike=max_pe_oi_strike,
+                support_level=support_level,
+                resistance_level=resistance_level,
+                oi_range_width=oi_range_width,
                 previous_ts=current_time,
                 max_ce_oi_amount=max_ce_oi_amount,
                 max_pe_oi_amount=max_pe_oi_amount,
@@ -395,7 +412,7 @@ class OICollector:
                     current_time, ce_oi_change, pe_oi_change,
                     ce_volume_change, pe_volume_change,
                     total_ce_oi, total_pe_oi,
-                    total_ce_volume, total_pe_volume
+                    total_ce_volume, total_pe_volume, option_data
                 )
                 
                 self.oi_changes_detected += 1
@@ -414,13 +431,16 @@ class OICollector:
             self._log(f"Error tracking OI changes: {e}")
             return False
     
-    def _save_oi_change_snapshot(self, timestamp, ce_oi_change, pe_oi_change, ce_volume_change, pe_volume_change, total_ce_oi, total_pe_oi, total_ce_volume=0, total_pe_volume=0):
+    def _save_oi_change_snapshot(self, timestamp, ce_oi_change, pe_oi_change, ce_volume_change, pe_volume_change, total_ce_oi, total_pe_oi, total_ce_volume=0, total_pe_volume=0, option_data=None):
         """Save OI change snapshot to database"""
         try:
-            current_price = self._get_current_price()
+            current_price = (option_data or {}).get("underlying_price") or self._get_current_price()
             pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0
             ce_volume_band = total_ce_volume
             pe_volume_band = total_pe_volume
+            max_ce_oi_strike = int((option_data or {}).get("max_call_oi_strike") or 0)
+            max_pe_oi_strike = int((option_data or {}).get("max_put_oi_strike") or 0)
+            support_level, resistance_level, oi_range_width = self._derive_oi_levels(option_data or {})
             
             # Determine sentiment based on changes
             if ce_oi_change > 0 and pe_oi_change < 0:
@@ -458,8 +478,13 @@ class OICollector:
                 total_volume=ce_volume_change + pe_volume_change,
                 volume_change=ce_volume_change + pe_volume_change,
                 volume_pcr=0.0,
+                max_ce_oi_strike=max_ce_oi_strike,
+                max_pe_oi_strike=max_pe_oi_strike,
                 oi_trend=sentiment,
                 trend_strength=strength,
+                support_level=support_level,
+                resistance_level=resistance_level,
+                oi_range_width=oi_range_width,
                 previous_ts=timestamp,
                 data_age_seconds=0,
                 data_quality="GOOD",

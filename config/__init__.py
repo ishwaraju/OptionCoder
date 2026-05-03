@@ -7,6 +7,7 @@ from .nifty_config import NiftyConfig
 from .sensex_config import SensexConfig
 from .banknifty_config import BankNiftyConfig
 from .db_config import DBConfig
+from .risk_profiles import get_risk_profile_matrix
 
 # For backward compatibility
 Config = MainConfig

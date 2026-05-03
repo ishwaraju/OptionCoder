@@ -19,6 +19,11 @@ class PressureAnalyzer:
     def _sum(rows, key):
         return sum((row.get(key) or 0) for row in rows)
 
+    @staticmethod
+    def _top_rows(rows, key, limit=2):
+        ordered = sorted(rows, key=lambda row: row.get(key, 0), reverse=True)
+        return ordered[:limit]
+
     def analyze(self, option_data):
         band_snapshots = option_data.get("band_snapshots", []) if option_data else []
         atm = option_data.get("atm") if option_data else None
@@ -37,6 +42,8 @@ class PressureAnalyzer:
 
         strongest_ce = max(ce_rows, key=lambda row: row.get("volume", 0), default=None)
         strongest_pe = max(pe_rows, key=lambda row: row.get("volume", 0), default=None)
+        top_ce_oi_rows = self._top_rows(ce_rows, "oi", limit=2)
+        top_pe_oi_rows = self._top_rows(pe_rows, "oi", limit=2)
 
         near_ce_volume = self._sum(near_ce_rows, "volume")
         near_pe_volume = self._sum(near_pe_rows, "volume")
@@ -110,7 +117,25 @@ class PressureAnalyzer:
             "strongest_pe_volume": strongest_pe.get("volume", 0) if strongest_pe else 0,
             "strongest_ce_distance": strongest_ce.get("distance_from_atm") if strongest_ce else None,
             "strongest_pe_distance": strongest_pe.get("distance_from_atm") if strongest_pe else None,
+            "top_call_wall_strike": top_ce_oi_rows[0].get("strike") if top_ce_oi_rows else None,
+            "top_put_wall_strike": top_pe_oi_rows[0].get("strike") if top_pe_oi_rows else None,
+            "top_call_wall_oi": top_ce_oi_rows[0].get("oi", 0) if top_ce_oi_rows else 0,
+            "top_put_wall_oi": top_pe_oi_rows[0].get("oi", 0) if top_pe_oi_rows else 0,
+            "second_call_wall_strike": top_ce_oi_rows[1].get("strike") if len(top_ce_oi_rows) > 1 else None,
+            "second_put_wall_strike": top_pe_oi_rows[1].get("strike") if len(top_pe_oi_rows) > 1 else None,
+            "second_call_wall_oi": top_ce_oi_rows[1].get("oi", 0) if len(top_ce_oi_rows) > 1 else 0,
+            "second_put_wall_oi": top_pe_oi_rows[1].get("oi", 0) if len(top_pe_oi_rows) > 1 else 0,
         }
+
+        top_call_wall_oi = metrics["top_call_wall_oi"] or 0
+        top_put_wall_oi = metrics["top_put_wall_oi"] or 0
+        second_call_wall_oi = metrics["second_call_wall_oi"] or 0
+        second_put_wall_oi = metrics["second_put_wall_oi"] or 0
+        call_wall_strength = self._safe_ratio(top_call_wall_oi, second_call_wall_oi) if second_call_wall_oi else (1.0 if top_call_wall_oi else 0.0)
+        put_wall_strength = self._safe_ratio(top_put_wall_oi, second_put_wall_oi) if second_put_wall_oi else (1.0 if top_put_wall_oi else 0.0)
+        metrics["call_wall_strength_ratio"] = round(call_wall_strength, 2) if call_wall_strength is not None else 0.0
+        metrics["put_wall_strength_ratio"] = round(put_wall_strength, 2) if put_wall_strength is not None else 0.0
+        metrics["wall_pressure_edge"] = round(abs(metrics["call_wall_strength_ratio"] - metrics["put_wall_strength_ratio"]), 2)
 
         self.last_metrics = metrics
         return metrics
