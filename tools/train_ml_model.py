@@ -1,61 +1,48 @@
 #!/usr/bin/env python3
-"""
-ML Model Trainer for Signal Prediction
-FREE - Trains on your historical data from alert_reviews_5m
-Usage: python3 tools/train_ml_model.py
-"""
+"""Train a time-series-safe ML model for signal prediction."""
 
+import argparse
+import json
 import sys
-import os
+from datetime import datetime
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.append(str(Path(__file__).parent.parent))
-
-import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-import json
+import pandas as pd
 
-def train_model():
-    """
-    Train ML model on historical signal data
-    """
-    print("="*70)
-    print("🤖 ML Model Trainer - FREE (scikit-learn)")
-    print("="*70)
-    
-    # Check if scikit-learn is installed
-    try:
-        from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-        from sklearn.model_selection import train_test_split, cross_val_score, TimeSeriesSplit
-        from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
-        from sklearn.preprocessing import StandardScaler
-        import joblib
-        print("✅ scikit-learn found")
-    except ImportError:
-        print("❌ scikit-learn not installed")
-        print("Install with: pip install scikit-learn joblib")
-        print("")
-        print("Installing now...")
-        os.system("pip install scikit-learn joblib -q")
-        print("✅ Installed! Please run again.")
-        return
-    
-    # Load data from database
-    print("\n📊 Loading training data from database...")
-    
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+
+TIME_REGIME_MAP = {
+    "PRE_MARKET": 0,
+    "OPENING": 1,
+    "MID_MORNING": 2,
+    "MIDDAY": 3,
+    "LUNCH": 3,
+    "AFTERNOON": 4,
+    "LATE_DAY": 4,
+    "ENDGAME": 5,
+    "CLOSING": 5,
+}
+PRESSURE_MAP = {"NONE": 0, "MILD": 1, "MODERATE": 2, "SEVERE": 3}
+OI_BIAS_MAP = {"BEARISH": -1, "NEUTRAL": 0, "BULLISH": 1}
+SIGNAL_TYPE_MAP = {"OPENING_DRIVE": 0, "BREAKOUT": 1, "BREAKOUT_CONFIRM": 2, "RETEST": 3, "CONTINUATION": 4}
+SIGNAL_GRADE_MAP = {"SKIP": 0, "B": 1, "A": 2, "A+": 3}
+
+
+def _load_training_frame(limit):
     from shared.db.pool import DBPool
+
     DBPool.initialize()
-    
     if not DBPool._enabled:
-        print("❌ Database not connected")
-        return
-    
-    # Query training data from ml_features_log joined with outcomes
-    query = """
+        raise RuntimeError("Database not connected")
+
+    query = f"""
     SELECT 
         m.id,
+        m.alert_ts,
         m.instrument,
         m.signal_direction,
         m.score,
@@ -73,223 +60,149 @@ def train_model():
         m.trend_aligned,
         m.risk_reward_ratio,
         m.has_hybrid_mode,
+        m.signal_type,
+        m.signal_grade,
+        m.entry_score,
+        m.context_score,
+        m.spread_pct,
         m.actual_outcome,
         m.max_favorable_points,
-        m.max_adverse_points,
-        a.usefulness,
-        a.outcome_tag
+        m.max_adverse_points
     FROM ml_features_log m
-    LEFT JOIN alert_reviews_5m a 
-        ON m.alert_ts = a.alert_ts 
-        AND m.instrument = a.instrument
-        AND a.alert_kind = 'SWING'
     WHERE m.actual_outcome IS NOT NULL
-    AND m.actual_outcome IN ('PROFIT', 'LOSS')
-    AND m.score > 0
-    ORDER BY m.alert_ts DESC
-    LIMIT 2000;
+      AND m.actual_outcome IN ('PROFIT', 'LOSS')
+      AND m.score > 0
+    ORDER BY m.alert_ts ASC
+    LIMIT {int(limit)};
     """
-    
+
     with DBPool.connection() as conn:
-        df = pd.read_sql(query, conn)
-    
-    if len(df) == 0:
-        print("❌ No training data found!")
-        print("\nYou need at least 50 completed trades with known outcomes.")
-        print("Outcomes are filled from alert_reviews_5m table.")
-        print("\nCurrent status:")
-        check_data_status()
-        return
-    
-    print(f"✅ Loaded {len(df)} training samples")
-    
-    # Check class distribution
-    outcome_counts = df['actual_outcome'].value_counts()
-    print(f"\n📈 Outcome Distribution:")
-    for outcome, count in outcome_counts.items():
-        pct = count / len(df) * 100
-        print(f"   {outcome}: {count} ({pct:.1f}%)")
-    
-    if len(df) < 50:
-        print(f"\n⚠️  Only {len(df)} samples. Need at least 50 for reliable training.")
-        print("Continue collecting data...")
-        return
-    
-    # Prepare features
-    print("\n🔧 Preparing features...")
-    
-    # Encode categorical variables
-    df['time_regime_encoded'] = df['time_regime'].map({
-        'PRE_MARKET': 0, 'OPENING': 1, 'MID_MORNING': 2,
-        'LUNCH': 3, 'AFTERNOON': 4, 'CLOSING': 5
-    }).fillna(3)
-    
-    df['pressure_encoded'] = df['pressure_conflict_level'].map({
-        'NONE': 0, 'MILD': 1, 'MODERATE': 2, 'SEVERE': 3
-    }).fillna(0)
-    
-    df['oi_bias_encoded'] = df['oi_bias'].map({
-        'BEARISH': -1, 'NEUTRAL': 0, 'BULLISH': 1
-    }).fillna(0)
-    
-    df['trend_aligned_num'] = df['trend_aligned'].astype(int)
-    df['has_hybrid_num'] = df['has_hybrid_mode'].astype(int)
-    
-    # Fill missing values
-    df['adx'] = df['adx'].fillna(25)
-    df['volume_ratio'] = df['volume_ratio'].fillna(1.0)
-    df['oi_change_pct'] = df['oi_change_pct'].fillna(0)
-    df['vwap_distance'] = df['vwap_distance'].fillna(0)
-    df['risk_reward_ratio'] = df['risk_reward_ratio'].fillna(1.0)
-    
-    # Feature columns
+        return pd.read_sql(query, conn)
+
+
+def _prepare_features(df):
+    frame = df.copy()
+    frame["time_regime_encoded"] = frame["time_regime"].map(TIME_REGIME_MAP).fillna(3)
+    frame["pressure_encoded"] = frame["pressure_conflict_level"].map(PRESSURE_MAP).fillna(0)
+    frame["oi_bias_encoded"] = frame["oi_bias"].map(OI_BIAS_MAP).fillna(0)
+    frame["signal_type_encoded"] = frame["signal_type"].map(SIGNAL_TYPE_MAP).fillna(1)
+    frame["signal_grade_encoded"] = frame["signal_grade"].map(SIGNAL_GRADE_MAP).fillna(0)
+    frame["trend_aligned_num"] = frame["trend_aligned"].fillna(False).astype(int)
+    frame["has_hybrid_num"] = frame["has_hybrid_mode"].fillna(False).astype(int)
+
+    fill_defaults = {
+        "adx": 25.0,
+        "volume_ratio": 1.0,
+        "oi_change_pct": 0.0,
+        "vwap_distance": 0.0,
+        "risk_reward_ratio": 1.0,
+        "spread_pct": 3.0,
+        "atr": 0.0,
+        "price_momentum": 0.0,
+    }
+    for column, default in fill_defaults.items():
+        frame[column] = frame[column].fillna(default)
+
+    frame["entry_score"] = frame["entry_score"].fillna(frame["score"])
+    frame["context_score"] = frame["context_score"].fillna(frame["score"])
+    frame["time_hour"] = frame["time_hour"].fillna(12)
+
     feature_cols = [
-        'score', 'adx', 'volume_ratio', 'oi_change_pct', 'vwap_distance',
-        'time_hour', 'time_regime_encoded', 'pressure_encoded', 'oi_bias_encoded',
-        'trend_aligned_num', 'risk_reward_ratio', 'has_hybrid_num'
+        "score",
+        "entry_score",
+        "context_score",
+        "adx",
+        "volume_ratio",
+        "oi_change_pct",
+        "vwap_distance",
+        "time_hour",
+        "time_regime_encoded",
+        "pressure_encoded",
+        "oi_bias_encoded",
+        "trend_aligned_num",
+        "risk_reward_ratio",
+        "has_hybrid_num",
+        "signal_type_encoded",
+        "signal_grade_encoded",
+        "spread_pct",
+        "atr",
+        "price_momentum",
     ]
-    
-    X = df[feature_cols]
-    y = (df['actual_outcome'] == 'PROFIT').astype(int)
-    
-    # Feature importance analysis
-    print(f"\n📋 Features used ({len(feature_cols)}):")
-    for col in feature_cols:
-        print(f"   - {col}")
-    
-    # Time-series split for backtesting
-    print("\n🧪 Running time-series cross-validation...")
-    tscv = TimeSeriesSplit(n_splits=5)
-    
-    # Try multiple models
-    models = {
-        'RandomForest': RandomForestClassifier(
-            n_estimators=100,
-            max_depth=5,
-            min_samples_split=10,
-            min_samples_leaf=5,
-            random_state=42
-        ),
-        'GradientBoosting': GradientBoostingClassifier(
-            n_estimators=100,
-            max_depth=3,
-            learning_rate=0.1,
-            random_state=42
+    return frame, feature_cols
+
+
+def _evaluate_model(model, X, y, n_splits=5):
+    from sklearn.metrics import brier_score_loss, roc_auc_score
+    from sklearn.model_selection import TimeSeriesSplit
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    auc_scores = []
+    brier_scores = []
+    fold_rows = []
+
+    for fold, (train_idx, test_idx) in enumerate(tscv.split(X), start=1):
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        model.fit(X_train, y_train)
+        prob = model.predict_proba(X_test)[:, 1]
+        auc = roc_auc_score(y_test, prob) if len(set(y_test)) > 1 else 0.5
+        brier = brier_score_loss(y_test, prob)
+        auc_scores.append(float(auc))
+        brier_scores.append(float(brier))
+        fold_rows.append(
+            {
+                "fold": fold,
+                "test_size": len(test_idx),
+                "roc_auc": round(float(auc), 4),
+                "brier": round(float(brier), 4),
+            }
         )
+
+    return {
+        "auc_mean": float(np.mean(auc_scores)),
+        "auc_std": float(np.std(auc_scores)),
+        "brier_mean": float(np.mean(brier_scores)),
+        "folds": fold_rows,
     }
-    
-    best_model = None
-    best_score = 0
-    best_model_name = ""
-    
-    for name, model in models.items():
-        scores = cross_val_score(model, X, y, cv=tscv, scoring='roc_auc')
-        mean_score = scores.mean()
-        print(f"   {name}: ROC-AUC = {mean_score:.3f} (+/- {scores.std():.3f})")
-        
-        if mean_score > best_score:
-            best_score = mean_score
-            best_model = model
-            best_model_name = name
-    
-    print(f"\n✅ Best model: {best_model_name} (ROC-AUC: {best_score:.3f})")
-    
-    # Train on full dataset
-    print(f"\n🎯 Training final model on all {len(df)} samples...")
-    best_model.fit(X, y)
-    
-    # Feature importance
-    if hasattr(best_model, 'feature_importances_'):
-        print("\n📊 Feature Importance:")
-        importances = best_model.feature_importances_
-        for name, importance in sorted(zip(feature_cols, importances), 
-                                       key=lambda x: x[1], reverse=True):
-            bar = "█" * int(importance * 50)
-            print(f"   {name:20s}: {importance:.3f} {bar}")
-    
-    # Save model
-    model_dir = Path("models")
-    model_dir.mkdir(exist_ok=True)
-    
-    model_path = model_dir / "signal_predictor.pkl"
-    joblib.dump(best_model, model_path)
-    
-    # Save metadata
-    metadata = {
-        'model_type': best_model_name,
-        'training_samples': len(df),
-        'roc_auc': best_score,
-        'features': feature_cols,
-        'trained_at': datetime.now().isoformat(),
-        'outcome_distribution': outcome_counts.to_dict()
-    }
-    
-    metadata_path = model_dir / "model_metadata.json"
-    with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    print(f"\n💾 Model saved to: {model_path}")
-    print(f"💾 Metadata saved to: {metadata_path}")
-    
-    # Performance by instrument
-    print("\n📈 Performance by Instrument:")
-    for inst in df['instrument'].unique():
-        inst_df = df[df['instrument'] == inst]
-        win_rate = (inst_df['actual_outcome'] == 'PROFIT').mean() * 100
-        print(f"   {inst}: {len(inst_df)} trades, Win rate: {win_rate:.1f}%")
-    
-    print("\n" + "="*70)
-    print("✅ Model training complete!")
-    print("="*70)
-    print(f"\nNext steps:")
-    print(f"1. Model is now active and will filter signals")
-    print(f"2. Restart signal services to use new model")
-    print(f"3. Threshold: 55% win probability minimum")
-    print(f"4. Check logs for 'ML Approved' or 'ML Filtered' messages")
 
 
 def check_data_status():
-    """Check how much training data is available"""
     from shared.db.pool import DBPool
+
     DBPool.initialize()
-    
     if not DBPool._enabled:
         return
-    
+
     with DBPool.connection() as conn:
-        # Count signals with outcomes
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN actual_outcome IS NOT NULL THEN 1 ELSE 0 END) as with_outcome
             FROM ml_features_log
-        """)
+            """
+        )
         total, with_outcome = cur.fetchone()
-        
-        print(f"\n📊 Data Status:")
+        print("\n📊 Data Status:")
         print(f"   Total signals logged: {total}")
         print(f"   With known outcomes: {with_outcome}")
         print(f"   Missing outcomes: {total - with_outcome}")
-        
         if with_outcome < 50:
             print(f"\n   Need {50 - with_outcome} more completed trades")
-            print(f"   Outcomes come from alert_reviews_5m table")
-            print(f"   Run: python3 tools/score_alert_outcomes.py")
-        
+            print("   Outcomes come from alert_reviews_5m table")
+            print("   Run: python3 tools/score_alert_outcomes.py")
         cur.close()
 
 
 def update_outcomes():
-    """Fill missing outcomes from alert_reviews"""
     print("\n🔄 Updating outcomes from alert_reviews...")
-    
     from shared.db.pool import DBPool
+
     DBPool.initialize()
-    
     if not DBPool._enabled:
         return
-    
+
     update_query = """
     UPDATE ml_features_log m
     SET 
@@ -305,29 +218,163 @@ def update_outcomes():
         updated_at = NOW()
     FROM alert_reviews_5m a
     WHERE m.alert_ts = a.alert_ts
-    AND m.instrument = a.instrument
-    AND a.alert_kind = 'SWING'
-    AND m.actual_outcome IS NULL;
+      AND m.instrument = a.instrument
+      AND a.alert_kind = 'SWING'
+      AND m.actual_outcome IS NULL;
     """
-    
+
     with DBPool.connection() as conn:
         cur = conn.cursor()
         cur.execute(update_query)
         updated = cur.rowcount
         conn.commit()
         cur.close()
-    
+
     print(f"✅ Updated {updated} records with outcomes")
 
 
-if __name__ == "__main__":
-    import argparse
+def train_model(limit=3000, calibrate=True):
+    print("=" * 70)
+    print("ML Model Trainer - time-series safe")
+    print("=" * 70)
+
+    try:
+        from sklearn.calibration import CalibratedClassifierCV
+        from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+        import joblib
+        print("✅ scikit-learn found")
+    except ImportError:
+        print("❌ scikit-learn not installed")
+        print("Install with: pip install scikit-learn joblib")
+        return
+
+    print("\n📊 Loading training data from database...")
+    try:
+        df = _load_training_frame(limit=limit)
+    except Exception as exc:
+        print(f"❌ {exc}")
+        return
+
+    if len(df) == 0:
+        print("❌ No training data found!")
+        check_data_status()
+        return
+
+    print(f"✅ Loaded {len(df)} training samples")
+    outcome_counts = df["actual_outcome"].value_counts()
+    print("\n📈 Outcome Distribution:")
+    for outcome, count in outcome_counts.items():
+        pct = count / len(df) * 100
+        print(f"   {outcome}: {count} ({pct:.1f}%)")
+
+    if len(df) < 50:
+        print(f"\n⚠️  Only {len(df)} samples. Need at least 50 for reliable training.")
+        return
+
+    print("\n🔧 Preparing features...")
+    prepared, feature_cols = _prepare_features(df)
+    X = prepared[feature_cols]
+    y = (prepared["actual_outcome"] == "PROFIT").astype(int)
+
+    print(f"\n📋 Features used ({len(feature_cols)}):")
+    for col in feature_cols:
+        print(f"   - {col}")
+
+    print("\n🧪 Running walk-forward validation...")
+    models = {
+        "RandomForest": RandomForestClassifier(
+            n_estimators=120,
+            max_depth=5,
+            min_samples_split=10,
+            min_samples_leaf=5,
+            random_state=42,
+        ),
+        "GradientBoosting": GradientBoostingClassifier(
+            n_estimators=120,
+            learning_rate=0.08,
+            random_state=42,
+        ),
+    }
+
+    best_name = None
+    best_model = None
+    best_metrics = None
+    best_score = -1.0
+    for name, model in models.items():
+        metrics = _evaluate_model(model, X, y)
+        print(
+            f"   {name}: ROC-AUC={metrics['auc_mean']:.3f} (+/- {metrics['auc_std']:.3f}) | "
+            f"Brier={metrics['brier_mean']:.3f}"
+        )
+        if metrics["auc_mean"] > best_score:
+            best_name = name
+            best_model = model
+            best_metrics = metrics
+            best_score = metrics["auc_mean"]
+
+    print(f"\n✅ Best model: {best_name} (ROC-AUC: {best_score:.3f})")
+
+    final_model = best_model
+    calibrated = bool(calibrate and len(df) >= 120)
+    if calibrated:
+        print("\n🧭 Applying sigmoid probability calibration...")
+        final_model = CalibratedClassifierCV(best_model, method="sigmoid", cv=3)
+
+    print(f"\n🎯 Training final model on all {len(df)} samples...")
+    final_model.fit(X, y)
+
+    base_estimator = getattr(final_model, "estimator", final_model)
+    if hasattr(base_estimator, "feature_importances_"):
+        print("\n📊 Feature Importance:")
+        importances = base_estimator.feature_importances_
+        for name, importance in sorted(zip(feature_cols, importances), key=lambda item: item[1], reverse=True):
+            bar = "#" * int(importance * 50)
+            print(f"   {name:20s}: {importance:.3f} {bar}")
+
+    model_dir = ROOT / "models"
+    model_dir.mkdir(exist_ok=True)
+    model_path = model_dir / "signal_predictor.pkl"
+    metadata_path = model_dir / "model_metadata.json"
+
+    joblib.dump(final_model, model_path)
+    metadata = {
+        "model_type": best_name,
+        "calibrated": calibrated,
+        "training_samples": len(df),
+        "roc_auc": best_metrics["auc_mean"] if best_metrics else None,
+        "roc_auc_std": best_metrics["auc_std"] if best_metrics else None,
+        "brier_score": best_metrics["brier_mean"] if best_metrics else None,
+        "features": feature_cols,
+        "trained_at": datetime.now().isoformat(),
+        "outcome_distribution": outcome_counts.to_dict(),
+        "folds": best_metrics["folds"] if best_metrics else [],
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    print(f"\n💾 Model saved to: {model_path}")
+    print(f"💾 Metadata saved to: {metadata_path}")
+    print("\n📈 Performance by Instrument:")
+    for inst in prepared["instrument"].unique():
+        inst_df = prepared[prepared["instrument"] == inst]
+        win_rate = (inst_df["actual_outcome"] == "PROFIT").mean() * 100
+        print(f"   {inst}: {len(inst_df)} trades, Win rate: {win_rate:.1f}%")
+
+    print("\nNext steps:")
+    print("1. Restart signal services to load the new model")
+    print("2. Review model_metadata.json for ROC-AUC and Brier score")
+    print("3. Watch logs for ML Approved / ML Filtered decisions")
+
+
+def parse_args():
     parser = argparse.ArgumentParser(description="Train ML model on historical signals")
-    parser.add_argument("--update-outcomes", action="store_true", 
-                       help="Update missing outcomes from alert_reviews first")
-    args = parser.parse_args()
-    
+    parser.add_argument("--update-outcomes", action="store_true", help="Update missing outcomes from alert_reviews first")
+    parser.add_argument("--limit", type=int, default=3000, help="Maximum training rows to load")
+    parser.add_argument("--no-calibration", action="store_true", help="Skip probability calibration")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
     if args.update_outcomes:
         update_outcomes()
-    
-    train_model()
+    train_model(limit=args.limit, calibrate=not args.no_calibration)

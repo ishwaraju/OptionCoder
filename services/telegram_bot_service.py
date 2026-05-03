@@ -40,6 +40,7 @@ import logging
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_INSTRUMENTS = ["NIFTY", "BANKNIFTY", "SENSEX"]
 HA_BIAS_RE = re.compile(r"ha_bias=([A-Z_]+)")
+REASON_TAG_RE = re.compile(r"([a-zA-Z_]+)=([^|]+)")
 
 
 class TelegramCommandService:
@@ -586,21 +587,62 @@ class TelegramCommandService:
                 if latest_signal["score"] is not None
                 else "na"
             )
+            reason = latest_signal.get("reason") or ""
+            tags = self._parse_reason_tags(reason)
+            regime = tags.get("regime") or "na"
+            grade = tags.get("signal_grade") or latest_signal.get("quality") or "na"
             base = (
                 f"{instrument}: {latest_signal['signal']} | {signal_time} | "
-                f"score {score} | Q{latest_signal['quality']} | {latest_signal['setup_type']}"
+                f"score {score} | G{grade} | {latest_signal['setup_type']} | "
+                f"{latest_signal.get('time_regime') or 'na'}/{regime}"
             )
-            reason = latest_signal.get("reason") or ""
             ha_match = HA_BIAS_RE.search(reason)
             if ha_match:
                 base += f" | HA_{ha_match.group(1)}"
             if latest_monitor and latest_monitor.get("guidance"):
                 base += f" | {latest_monitor['guidance']}"
             lines.append(base)
+            levels = []
+            if latest_signal.get("price") is not None:
+                levels.append(f"buy {latest_signal['price']:.2f}")
+            if latest_signal.get("invalidate_price") is not None:
+                levels.append(f"sl {latest_signal['invalidate_price']:.2f}")
+            if latest_signal.get("first_target_price") is not None:
+                levels.append(f"t1 {latest_signal['first_target_price']:.2f}")
+            if levels:
+                lines.append(f"  {' | '.join(levels)}")
+            why = self._signal_reason_summary(reason, latest_signal.get("confidence_summary"))
+            if why:
+                lines.append(f"  why: {why}")
 
         if not found and all(line.endswith("NO SIGNAL") for line in lines[1:]):
             return "\n".join(lines)
         return "\n".join(lines)
+
+    @staticmethod
+    def _parse_reason_tags(reason):
+        tags = {}
+        if not reason:
+            return tags
+        for key, value in REASON_TAG_RE.findall(reason):
+            tags[key.strip()] = value.strip()
+        return tags
+
+    def _signal_reason_summary(self, reason, confidence_summary=None):
+        if not reason:
+            return confidence_summary
+        primary = reason.split("|")[0].strip()
+        tags = self._parse_reason_tags(reason)
+        bits = []
+        if primary:
+            bits.append(primary)
+        if confidence_summary:
+            bits.append(confidence_summary)
+        elif tags.get("confidence_summary"):
+            bits.append(tags["confidence_summary"])
+        if tags.get("pressure_conflict_level"):
+            bits.append(f"pressure {tags['pressure_conflict_level']}")
+        return " | ".join(bits[:3]) if bits else None
 
     def _format_scalp_signals(self):
         """Format latest scalp signals (1m timeframe)"""

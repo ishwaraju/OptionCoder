@@ -1251,7 +1251,7 @@ class BreakoutStrategy:
             return "LATE_DAY"
         return "ENDGAME"
 
-    def _get_time_regime_thresholds(self, time_regime, fallback_mode):
+    def _get_time_regime_thresholds(self, time_regime, fallback_mode, market_regime=None):
         thresholds = {
             "opening_drive_min_score": 72,
             "breakout_min_score": Config.MIN_SCORE_THRESHOLD,
@@ -1309,7 +1309,48 @@ class BreakoutStrategy:
             thresholds["allow_continuation"] = False
             thresholds["allow_fallback_continuation"] = False
 
+        if Config.ADAPTIVE_THRESHOLDS_ENABLED:
+            relax_score = max(0.0, float(Config.ADAPTIVE_THRESHOLD_RELAX_SCORE))
+            tighten_score = max(0.0, float(Config.ADAPTIVE_THRESHOLD_TIGHTEN_SCORE))
+            market_regime = (market_regime or "").upper()
+
+            if market_regime in {"TRENDING", "EXPANDING", "OPENING_EXPANSION"}:
+                thresholds["breakout_min_score"] = max(52, thresholds["breakout_min_score"] - relax_score)
+                thresholds["confirm_min_score"] = max(58, thresholds["confirm_min_score"] - min(relax_score, 1.0))
+                thresholds["continuation_min_score"] = max(60, thresholds["continuation_min_score"] - relax_score)
+                thresholds["high_continuation_min_score"] = max(72, thresholds["high_continuation_min_score"] - relax_score)
+                thresholds["retest_min_score"] = max(54, thresholds["retest_min_score"] - min(relax_score, 1.0))
+            elif market_regime in {"RANGING", "CHOPPY"}:
+                thresholds["breakout_min_score"] += tighten_score
+                thresholds["confirm_min_score"] += min(tighten_score, 2.0)
+                thresholds["continuation_min_score"] += tighten_score + 2
+                thresholds["high_continuation_min_score"] += tighten_score + 2
+                thresholds["retest_min_score"] += min(tighten_score, 2.0)
+                thresholds["allow_fallback_continuation"] = False
+
         return thresholds
+
+    def _sensex_late_day_guard(self, current_now, score, entry_score, confidence, volume_signal, pressure_conflict_level):
+        if self.instrument != "SENSEX" or current_now is None:
+            return None
+
+        confidence = (confidence or "LOW").upper()
+        pressure_conflict_level = (pressure_conflict_level or "NONE").upper()
+
+        if current_now >= self.time_utils._parse_clock("14:35"):
+            return "sensex_no_fresh_option_buys_after_1435"
+
+        if current_now >= self.time_utils._parse_clock("14:25"):
+            if volume_signal != "STRONG":
+                return "sensex_late_day_requires_strong_volume"
+            if confidence != "HIGH":
+                return "sensex_late_day_requires_high_confidence"
+            if pressure_conflict_level != "NONE":
+                return "sensex_late_day_pressure_conflict"
+            if float(score or 0) < 88 or float(entry_score or 0) < 90:
+                return "sensex_late_day_requires_elite_score"
+
+        return None
 
     @staticmethod
     def _direction_vwap_aligned(direction, price, vwap):
@@ -1860,7 +1901,7 @@ class BreakoutStrategy:
         prev_close = previous_candle.get("close") if previous_candle else None
 
         provisional_confidence = self._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
-        time_thresholds = self._get_time_regime_thresholds(time_regime, fallback_mode)
+        time_thresholds = self._get_time_regime_thresholds(time_regime, fallback_mode, market_regime=regime)
         neutral_pressure_soft_watch = (
             pressure_metrics
             and pressure_metrics["pressure_bias"] == "NEUTRAL"
@@ -1966,6 +2007,25 @@ class BreakoutStrategy:
                 signal_type="NONE",
             )
             return None, f"Expiry filter blocked trade | score={score}"
+
+        sensex_late_day_block = self._sensex_late_day_guard(
+            current_now=current_now,
+            score=score,
+            entry_score=self.last_entry_score,
+            confidence=provisional_confidence,
+            volume_signal=volume_signal,
+            pressure_conflict_level=pressure_conflict_level,
+        )
+        if sensex_late_day_block:
+            blockers.append(sensex_late_day_block)
+            self._set_diagnostics(
+                blockers=blockers,
+                cautions=cautions,
+                confidence=provisional_confidence,
+                regime=regime,
+                signal_type="NONE",
+            )
+            return None, f"SENSEX late-day guard blocked trade | score={score}"
 
         if soften_build_up_requirement:
             if scored_direction == "CE" and oi_bias == "BULLISH" and score >= max(expiry_eval["score_floor"], 64):

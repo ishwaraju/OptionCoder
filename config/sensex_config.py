@@ -25,9 +25,9 @@ class SensexConfig:
     # ==============================
     # Risk Management
     MAX_RISK_PERCENT = float(os.getenv('SENSEX_MAX_RISK_PERCENT', '2.0'))
-    STOP_LOSS_PERCENT = float(os.getenv('SENSEX_STOP_LOSS_PERCENT', '25.0'))
-    TARGET_PERCENT = float(os.getenv('SENSEX_TARGET_PERCENT', '50.0'))
-    TRAIL_PERCENT = float(os.getenv('SENSEX_TRAIL_PERCENT', '15.0'))
+    STOP_LOSS_PERCENT = float(os.getenv('SENSEX_STOP_LOSS_PERCENT', '15.0'))
+    TARGET_PERCENT = float(os.getenv('SENSEX_TARGET_PERCENT', '20.0'))
+    TRAIL_PERCENT = float(os.getenv('SENSEX_TRAIL_PERCENT', '10.0'))
 
     # Trading Limits
     MAX_TRADES_PER_DAY = int(os.getenv('SENSEX_MAX_TRADES_PER_DAY', '2'))

@@ -399,6 +399,78 @@ def test_sensex_expiry_allows_high_conviction_midday_trend_trade():
         Config.SYMBOL = original_symbol
 
 
+def test_sensex_blocks_new_signal_after_235_pm():
+    strategy = BreakoutStrategy(instrument="SENSEX")
+
+    signal, reason = strategy.generate_signal(
+        price=77000,
+        orb_high=76910,
+        orb_low=76780,
+        vwap=76920,
+        atr=55,
+        volume_signal="STRONG",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="LONG_BUILDUP",
+        support=76880,
+        resistance=77080,
+        can_trade=True,
+        buffer=12,
+        pressure_metrics={
+            "pressure_bias": "BULLISH",
+            "atm_ce_concentration": 0.10,
+            "atm_pe_concentration": 0.26,
+        },
+        candle_high=77010,
+        candle_low=76960,
+        candle_close=77000,
+        candle_open=76970,
+        candle_tick_count=6,
+        candle_time=datetime(2026, 4, 16, 14, 36),
+        candle_volume=1200000,
+    )
+
+    assert signal is None
+    assert "late-day guard blocked trade" in reason.lower()
+    assert "sensex_no_fresh_option_buys_after_1435" in strategy.last_blockers
+
+
+def test_sensex_requires_elite_quality_after_225_pm():
+    strategy = BreakoutStrategy(instrument="SENSEX")
+
+    signal, reason = strategy.generate_signal(
+        price=77000,
+        orb_high=76910,
+        orb_low=76780,
+        vwap=76920,
+        atr=55,
+        volume_signal="NORMAL",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="LONG_BUILDUP",
+        support=76880,
+        resistance=77080,
+        can_trade=True,
+        buffer=12,
+        pressure_metrics={
+            "pressure_bias": "BULLISH",
+            "atm_ce_concentration": 0.10,
+            "atm_pe_concentration": 0.26,
+        },
+        candle_high=77010,
+        candle_low=76960,
+        candle_close=77000,
+        candle_open=76970,
+        candle_tick_count=6,
+        candle_time=datetime(2026, 4, 16, 14, 28),
+        candle_volume=1200000,
+    )
+
+    assert signal is None
+    assert "late-day guard blocked trade" in reason.lower()
+    assert any(flag.startswith("sensex_late_day_requires_") for flag in strategy.last_blockers)
+
+
 def test_low_adx_context_marks_caution_when_recent_candles_available():
     strategy = BreakoutStrategy()
     recent_candles = []

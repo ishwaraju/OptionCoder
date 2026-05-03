@@ -139,6 +139,9 @@ class MainConfig:
     MIN_HIGH_QUALITY_SCORE = float(os.getenv('MIN_HIGH_QUALITY_SCORE', '65.0'))
     AGGRESSIVE_MODE = os.getenv('AGGRESSIVE_MODE', 'False').lower() == 'true'
     FOCUSED_MANUAL_MODE = os.getenv('FOCUSED_MANUAL_MODE', 'True').lower() == 'true'
+    ADAPTIVE_THRESHOLDS_ENABLED = os.getenv('ADAPTIVE_THRESHOLDS_ENABLED', 'True').lower() == 'true'
+    ADAPTIVE_THRESHOLD_TIGHTEN_SCORE = float(os.getenv('ADAPTIVE_THRESHOLD_TIGHTEN_SCORE', '3.0'))
+    ADAPTIVE_THRESHOLD_RELAX_SCORE = float(os.getenv('ADAPTIVE_THRESHOLD_RELAX_SCORE', '2.0'))
 
     # ==============================
     # DEBUG SETTINGS
@@ -233,9 +236,9 @@ class MainConfig:
     # RISK MANAGEMENT
     # ==============================
     MAX_RISK_PERCENT = float(os.getenv('MAX_RISK_PERCENT', '2.0'))
-    STOP_LOSS_PERCENT = float(os.getenv('STOP_LOSS_PERCENT', '25.0'))
-    TARGET_PERCENT = float(os.getenv('TARGET_PERCENT', '50.0'))
-    TRAIL_PERCENT = float(os.getenv('TRAIL_PERCENT', '15.0'))
+    STOP_LOSS_PERCENT = float(os.getenv('STOP_LOSS_PERCENT', '15.0'))
+    TARGET_PERCENT = float(os.getenv('TARGET_PERCENT', '20.0'))
+    TRAIL_PERCENT = float(os.getenv('TRAIL_PERCENT', '10.0'))
     MAX_TRADES_PER_DAY = int(os.getenv('MAX_TRADES_PER_DAY', '2'))
     MAX_LOSS_STREAK = int(os.getenv('MAX_LOSS_STREAK', '2'))
     DAILY_LOSS_LIMIT = float(os.getenv('DAILY_LOSS_LIMIT', '2000'))

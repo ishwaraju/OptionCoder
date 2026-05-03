@@ -11,6 +11,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from shared.indicators.adx_calculator import ADXCalculator
+
 
 class MLFeatureExtractor:
     """
@@ -37,6 +39,8 @@ class MLFeatureExtractor:
         recent_candles_5m: Optional[list] = None,
         strategy_context: Optional[Dict] = None,
         entry_plan: Optional[Dict] = None,
+        participation_metrics: Optional[Dict] = None,
+        market_regime: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Extract comprehensive feature set for ML model
@@ -57,6 +61,7 @@ class MLFeatureExtractor:
             'confidence': confidence,
             'time_hour': current_time.hour,
             'time_regime': time_regime,
+            'market_regime': market_regime or 'UNKNOWN',
         }
         
         # VWAP distance (momentum)
@@ -68,6 +73,7 @@ class MLFeatureExtractor:
             
         # ATR (volatility)
         features['atr'] = round(atr, 2) if atr else 0.0
+        features['adx'] = self._calculate_adx(recent_candles_5m)
         
         # Price momentum (last 2 candles)
         if recent_candles_5m and len(recent_candles_5m) >= 2:
@@ -117,6 +123,10 @@ class MLFeatureExtractor:
         else:
             features['pressure_conflict_level'] = 'NONE'
             features['volume_ratio'] = 1.0
+
+        derived_volume_ratio = self._calculate_volume_ratio(recent_candles_5m)
+        if derived_volume_ratio is not None:
+            features['volume_ratio'] = derived_volume_ratio
             
         # Trend alignment
         if trend_15m:
@@ -176,12 +186,61 @@ class MLFeatureExtractor:
             features['target_points'] = 0.0
             features['stop_points'] = 0.0
             features['risk_reward_ratio'] = 0.0
-            
+
+        directional_participation = (
+            (participation_metrics or {}).get(signal_direction) if signal_direction in {'CE', 'PE'} else None
+        ) or {}
+        features['participation_quality'] = directional_participation.get('quality', 'UNKNOWN')
+        features['spread_pct'] = (
+            round(float(directional_participation.get('atm_spread_pct')), 2)
+            if directional_participation.get('atm_spread_pct') is not None
+            else 0.5
+        )
+        same_breadth = float(directional_participation.get('same_side_weighted_breadth') or 0.0)
+        opp_breadth = float(directional_participation.get('opposite_side_weighted_breadth') or 0.0)
+        features['breadth_ratio'] = round(same_breadth / max(opp_breadth, 0.1), 2)
+
         # IV Rank (mock - can be enhanced with actual IV data)
         features['iv_rank'] = 50.0  # Placeholder
-        features['spread_pct'] = 0.5  # Placeholder - can calculate from option chain
         
         return features
+
+    def _calculate_adx(self, candles_5m):
+        if not candles_5m or len(candles_5m) < 15:
+            return 0.0
+
+        try:
+            adx_calc = ADXCalculator(period=14)
+            for candle in candles_5m[-15:]:
+                adx_calc.update(
+                    candle.get('high', 0),
+                    candle.get('low', 0),
+                    candle.get('close', 0),
+                )
+            adx_data = adx_calc.get_current()
+            return round(float((adx_data or {}).get('adx') or 0.0), 2)
+        except Exception:
+            return 0.0
+
+    def _calculate_volume_ratio(self, candles_5m):
+        if not candles_5m or len(candles_5m) < 4:
+            return None
+
+        try:
+            current_volume = float(candles_5m[-1].get('volume') or 0.0)
+            prior_volumes = [
+                float(candle.get('volume') or 0.0)
+                for candle in candles_5m[-9:-1]
+                if float(candle.get('volume') or 0.0) > 0
+            ]
+            if current_volume <= 0 or not prior_volumes:
+                return None
+            average_volume = sum(prior_volumes) / len(prior_volumes)
+            if average_volume <= 0:
+                return None
+            return round(current_volume / average_volume, 2)
+        except Exception:
+            return None
     
     def _calculate_5m_trend(self, candles_5m):
         """Simple trend calculation from recent 5m candles"""
@@ -210,9 +269,16 @@ class MLFeatureExtractor:
         # Encode categorical variables
         confidence_map = {'LOW': 0, 'MEDIUM': 1, 'HIGH': 2, 'VERY_HIGH': 3}
         time_regime_map = {'PRE_MARKET': 0, 'OPENING': 1, 'MID_MORNING': 2, 
-                          'LUNCH': 3, 'AFTERNOON': 4, 'CLOSING': 5}
+                          'MIDDAY': 3, 'LUNCH': 3, 'AFTERNOON': 4, 'LATE_DAY': 4, 'ENDGAME': 5, 'CLOSING': 5}
         bias_map = {'BEARISH': -1, 'NEUTRAL': 0, 'BULLISH': 1}
-        
+        market_regime_map = {
+            'RANGING': 0,
+            'CHOPPY': 1,
+            'TRENDING': 2,
+            'EXPANDING': 3,
+            'OPENING_EXPANSION': 4,
+        }
+
         conflict_map = {'NONE': 0, 'MILD': 1, 'MODERATE': 2, 'SEVERE': 3}
         
         vector = [
@@ -224,6 +290,7 @@ class MLFeatureExtractor:
             features.get('vwap_distance', 0) / 2.0,  # Cap at 2%
             features.get('time_hour', 12) / 24.0,  # Hour normalized
             time_regime_map.get(features.get('time_regime', 'LUNCH'), 3) / 5.0,
+            market_regime_map.get(features.get('market_regime', 'UNKNOWN'), 1) / 4.0,
             bias_map.get(features.get('oi_bias', 'NEUTRAL'), 0),
             conflict_map.get(features.get('pressure_conflict_level', 'NONE'), 0) / 3.0,
             1.0 if features.get('trend_aligned', False) else 0.0,

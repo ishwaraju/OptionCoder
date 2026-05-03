@@ -1,35 +1,34 @@
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from strategies.shared.strike_selector import StrikeSelector
 
-ss = StrikeSelector()
 
-price = 22485
-strong_bullish_pressure = {
-    "pressure_bias": "BULLISH",
-    "near_call_pressure_ratio": 1.35,
-    "near_put_pressure_ratio": 0.74,
-    "strongest_ce_strike": 22500,
-    "strongest_pe_strike": 22450,
-}
-strong_bearish_pressure = {
-    "pressure_bias": "BEARISH",
-    "near_call_pressure_ratio": 0.71,
-    "near_put_pressure_ratio": 1.41,
-    "strongest_ce_strike": 22450,
-    "strongest_pe_strike": 22500,
-}
-weak_pressure = {
-    "pressure_bias": "NEUTRAL",
-    "near_call_pressure_ratio": 1.02,
-    "near_put_pressure_ratio": 0.98,
-    "strongest_ce_strike": 22550,
-    "strongest_pe_strike": 22400,
-}
+def test_expiry_noise_prefers_deeper_itm():
+    selector = StrikeSelector("NIFTY")
+    strike, reason = selector.select_strike_with_reason(
+        price=22485,
+        signal="CE",
+        volume_signal="NORMAL",
+        strategy_score=74,
+        pressure_metrics={"pressure_bias": "BULLISH", "near_put_pressure_ratio": 1.1},
+        cautions=["expiry_day_mode", "expiry_fast_decay", "participation_spread_wide"],
+        setup_type="BREAKOUT",
+        time_regime="MIDDAY",
+    )
 
-print("High Score CE:", ss.select_strike(price, "CE", "STRONG", 90, strong_bullish_pressure))
-print("High Score PE:", ss.select_strike(price, "PE", "STRONG", 90, strong_bearish_pressure))
-print("Weak Volume CE:", ss.select_strike(price, "CE", "WEAK", 68, weak_pressure))
-print("Weak Pressure PE:", ss.select_strike(price, "PE", "NORMAL", 72, weak_pressure))
+    assert strike == 22400
+    assert "expiry premium is noisy" in reason
+
+
+def test_reversal_prefers_itm_for_cleaner_premium():
+    selector = StrikeSelector("BANKNIFTY")
+    strike, reason = selector.select_strike_with_reason(
+        price=51235,
+        signal="PE",
+        volume_signal="STRONG",
+        strategy_score=82,
+        pressure_metrics={"pressure_bias": "BEARISH", "near_call_pressure_ratio": 1.3},
+        setup_type="REVERSAL",
+        time_regime="MID_MORNING",
+    )
+
+    assert strike == 51300
+    assert "reversal setups" in reason

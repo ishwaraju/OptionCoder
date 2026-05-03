@@ -24,6 +24,7 @@ class SensexActionableRules:
             minute_of_day = candle_time.hour * 60 + candle_time.minute
         early_session = minute_of_day is not None and minute_of_day <= (10 * 60 + 45)
         late_session = minute_of_day is not None and (13 * 60) <= minute_of_day <= (14 * 60 + 30)
+        ultra_late_session = minute_of_day is not None and minute_of_day >= (14 * 60 + 25)
 
         if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "RETEST", "CONTINUATION"}:
             return False
@@ -32,10 +33,20 @@ class SensexActionableRules:
         if regime not in {"TRENDING", "EXPANDING", "EXPIRY_DAY", "OPENING_EXPANSION"}:
             return False
 
-        if signal_grade in {"A", "A+"}:
-            return True
+        if minute_of_day is not None and minute_of_day >= (14 * 60 + 35):
+            return False
 
-        if early_session and signal_grade == "B" and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "CONTINUATION", "RETEST"}:
+        if ultra_late_session:
+            return (
+                signal_grade == "A+"
+                and confidence == "HIGH"
+                and pressure_conflict_level == "NONE"
+                and float(score or 0) >= 88
+                and float(entry_score or 0) >= 90
+                and signal_type in {"BREAKOUT_CONFIRM", "RETEST"}
+            )
+
+        if signal_grade in {"A", "A+"}:
             return True
 
         if (

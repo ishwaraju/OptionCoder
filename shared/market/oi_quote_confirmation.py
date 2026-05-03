@@ -85,10 +85,10 @@ class OIQuoteConfirmation:
             'timestamp': timestamp,
             'ce_spread': option_data.get('ce_spread', 0),
             'pe_spread': option_data.get('pe_spread', 0),
-            'ce_bid_qty': option_data.get('ce_top_bid_price', 0),
-            'pe_bid_qty': option_data.get('pe_top_bid_price', 0),
-            'ce_ask_qty': option_data.get('ce_top_ask_price', 0),
-            'pe_ask_qty': option_data.get('pe_top_ask_price', 0),
+            'ce_bid_qty': option_data.get('ce_top_bid_quantity', 0),
+            'pe_bid_qty': option_data.get('pe_top_bid_quantity', 0),
+            'ce_ask_qty': option_data.get('ce_top_ask_quantity', 0),
+            'pe_ask_qty': option_data.get('pe_top_ask_quantity', 0),
             'atm_strike': option_data.get('atm', 0),
             'underlying_price': option_data.get('underlying_price', 0)
         }

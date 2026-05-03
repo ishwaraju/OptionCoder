@@ -46,14 +46,31 @@ class OIBuildupAnalyzer:
             return None
 
         current = self.oi_history[-1]
+        lookback = min(4, len(self.oi_history))
+        baseline = self.oi_history[-lookback]
         previous = self.oi_history[-2]
 
         # Calculate changes
-        oi_change = current['oi'] - previous['oi']
-        oi_change_percent = (oi_change / previous['oi']) * 100 if previous['oi'] > 0 else 0
+        oi_change = current['oi'] - baseline['oi']
+        oi_change_percent = (oi_change / baseline['oi']) * 100 if baseline['oi'] > 0 else 0
 
-        price_change = current['price'] - previous['price']
-        price_change_percent = (price_change / previous['price']) * 100 if previous['price'] > 0 else 0
+        price_change = current['price'] - baseline['price']
+        price_change_percent = (price_change / baseline['price']) * 100 if baseline['price'] > 0 else 0
+
+        last_oi_step = current['oi'] - previous['oi']
+        last_price_step = current['price'] - previous['price']
+        aligned_steps = 0
+        for earlier, later in zip(self.oi_history[-lookback:-1], self.oi_history[-lookback + 1:]):
+            oi_step = later['oi'] - earlier['oi']
+            if earlier['oi'] <= 0 or earlier['price'] <= 0:
+                continue
+            oi_step_pct = (oi_step / earlier['oi']) * 100
+            price_step = later['price'] - earlier['price']
+            price_step_pct = (price_step / earlier['price']) * 100
+            step_type = self._classify_buildup(oi_step_pct, price_step_pct)
+            if step_type == 'FLAT':
+                continue
+            aligned_steps += 1 if step_type == self._classify_buildup(oi_change_percent, price_change_percent) else 0
 
         # Determine buildup type
         buildup_type = self._classify_buildup(oi_change_percent, price_change_percent)
@@ -68,14 +85,21 @@ class OIBuildupAnalyzer:
             'oi_change_percent': round(oi_change_percent, 2),
             'price_change': round(price_change, 2),
             'price_change_percent': round(price_change_percent, 2),
+            'last_oi_step': int(last_oi_step),
+            'last_price_step': round(last_price_step, 2),
             'buildup_type': buildup_type,
             'strength_score': strength_score,
+            'lookback_points': lookback,
+            'aligned_steps': aligned_steps,
             'is_fresh': buildup_type in ['FRESH_LONG', 'FRESH_SHORT'],
             'is_unwinding': buildup_type in ['LONG_UNWINDING', 'SHORT_COVERING']
         }
 
     def _classify_buildup(self, oi_change_percent, price_change_percent):
         """Classify OI buildup type"""
+        if abs(oi_change_percent) < 1.0 or abs(price_change_percent) < 0.05:
+            return 'FLAT'
+
         oi_up = oi_change_percent > 0
         price_up = price_change_percent > 0
 
@@ -111,6 +135,8 @@ class OIBuildupAnalyzer:
             score += 30  # Fresh positions = strong
         elif buildup_type in ['SHORT_COVERING', 'LONG_UNWINDING']:
             score += 15  # Unwinding = weak
+        elif buildup_type == 'FLAT':
+            score -= 10
 
         return score
 
@@ -128,6 +154,9 @@ class OIBuildupAnalyzer:
         buildup_type = analysis['buildup_type']
         oi_change = analysis['oi_change_percent']
         score = analysis['strength_score']
+        aligned_steps = int(analysis.get('aligned_steps') or 0)
+        lookback_points = int(analysis.get('lookback_points') or 2)
+        persistence_ok = aligned_steps >= max(1, lookback_points - 2)
 
         # Check alignment
         if signal == "CE":
@@ -136,11 +165,14 @@ class OIBuildupAnalyzer:
                 confirmed = True
                 reason = f"✅ Strong CE: Fresh long buildup (+{oi_change:.1f}% OI)"
             elif buildup_type == 'SHORT_COVERING':
-                confirmed = True
-                reason = f"⚠️ Weak CE: Short covering (-{abs(oi_change):.1f}% OI) - be cautious"
+                confirmed = persistence_ok and score >= max(55, min_score)
+                reason = f"⚠️ Weak CE: Short covering (-{abs(oi_change):.1f}% OI)"
             elif buildup_type == 'FRESH_SHORT':
                 confirmed = False
                 reason = f"❌ CE rejected: Fresh short buildup (-{oi_change:.1f}% OI) - bearish"
+            elif buildup_type == 'FLAT':
+                confirmed = False
+                reason = "❌ CE rejected: OI/price participation flat"
             else:  # LONG_UNWINDING
                 confirmed = False
                 reason = f"❌ CE rejected: Long unwinding (-{abs(oi_change):.1f}% OI)"
@@ -151,11 +183,14 @@ class OIBuildupAnalyzer:
                 confirmed = True
                 reason = f"✅ Strong PE: Fresh short buildup (+{oi_change:.1f}% OI)"
             elif buildup_type == 'LONG_UNWINDING':
-                confirmed = True
-                reason = f"⚠️ Weak PE: Long unwinding (-{abs(oi_change):.1f}% OI) - be cautious"
+                confirmed = persistence_ok and score >= max(55, min_score)
+                reason = f"⚠️ Weak PE: Long unwinding (-{abs(oi_change):.1f}% OI)"
             elif buildup_type == 'FRESH_LONG':
                 confirmed = False
                 reason = f"❌ PE rejected: Fresh long buildup (+{oi_change:.1f}% OI) - bullish"
+            elif buildup_type == 'FLAT':
+                confirmed = False
+                reason = "❌ PE rejected: OI/price participation flat"
             else:  # SHORT_COVERING
                 confirmed = False
                 reason = f"❌ PE rejected: Short covering (+{abs(oi_change):.1f}% OI) - bullish"
@@ -164,6 +199,11 @@ class OIBuildupAnalyzer:
         if self.for_option_buyer and score < min_score:
             confirmed = False
             reason += f" | Score {score} < {min_score} (insufficient)"
+        elif confirmed and not persistence_ok and buildup_type in {'SHORT_COVERING', 'LONG_UNWINDING'}:
+            confirmed = False
+            reason += " | Persistence weak"
+        elif confirmed and persistence_ok:
+            reason += f" | persistence {aligned_steps}/{max(1, lookback_points - 1)}"
 
         return confirmed, score, reason
 
@@ -238,8 +278,8 @@ def quick_oi_check(current_oi, previous_oi, current_price, previous_price, signa
         return False, 0, "Missing OI/Price data"
 
     analyzer = OIBuildupAnalyzer(for_option_buyer=True)
-    analyzer.update(current_oi, current_price)
     analyzer.update(previous_oi, previous_price)
+    analyzer.update(current_oi, current_price)
 
     return analyzer.confirm_signal(signal)
 

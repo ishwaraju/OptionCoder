@@ -72,6 +72,89 @@ def _watch_trigger_line(direction, trigger_price):
     return f"Watch trigger {trigger_price}"
 
 
+def _flip_summary_line(flip_context):
+    if not flip_context:
+        return None
+    failed_side = flip_context.get("failed_side")
+    buy_side = flip_context.get("buy_side")
+    if failed_side and buy_side:
+        return f"{failed_side} fail lag raha hai -> {buy_side} confirm hone par dekhna"
+    return None
+
+
+def _decision_label_text(label):
+    mapping = {
+        "CONFIRMED_CE_ENTRY": "Confirmed CE Entry",
+        "CONFIRMED_PE_ENTRY": "Confirmed PE Entry",
+        "WATCH_CE_SETUP": "Watch CE Setup",
+        "WATCH_PE_SETUP": "Watch PE Setup",
+        "WATCH_CE_FLIP": "Watch CE Flip",
+        "WATCH_PE_FLIP": "Watch PE Flip",
+        "CONFIRMED_CE_FLIP": "Confirmed CE Flip",
+        "CONFIRMED_PE_FLIP": "Confirmed PE Flip",
+        "THESIS_FAILED_EXIT": "Thesis Failed Exit",
+        "HARD_STOP_EXIT": "Hard Stop Exit",
+        "TRAIL_EXIT": "Trail Exit",
+        "BOOK_PARTIAL_NOW": "Book Partial",
+        "TIME_STOP_EXIT": "Time Stop Exit",
+        "HIGH_NOISE_SKIP": "High Noise Skip",
+        "WAIT_CONFIRMATION": "Wait Confirmation",
+        "HOLD_CONTEXT": "Hold Context",
+        "HOLD_STRONG": "Hold Strong",
+    }
+    if not label:
+        return None
+    return mapping.get(label, label.replace("_", " ").title())
+
+
+def _monitor_guidance_badge(guidance, decision_label=None):
+    guidance = (guidance or "").upper()
+    decision_label = (decision_label or "").upper()
+
+    if guidance == "HOLD_STRONG":
+        return "LET WINNER RUN"
+    if guidance == "HOLD_WITH_TRAIL":
+        return "TRAIL ACTIVE"
+    if guidance == "EXIT_PROFIT_PROTECT":
+        return "PROFIT LOCK EXIT"
+    if guidance in {"EXIT_BIAS", "EXIT_STOPLOSS", "EXIT_TIMESTOP", "EXIT_TRAIL"}:
+        return "EXIT NOW"
+    if guidance == "BOOK_PARTIAL":
+        return "BOOK PARTIAL"
+    if guidance in {"THESIS_WEAKENING", "MOMENTUM_PAUSE", "TIME_DECAY_RISK"}:
+        return "WATCH CLOSELY"
+    if decision_label in {"THESIS_FAILED_EXIT", "HARD_STOP_EXIT", "TRAIL_EXIT", "TIME_STOP_EXIT"}:
+        return "EXIT NOW"
+    return "MONITOR"
+
+
+def _monitor_action_line(guidance, action_text, reason=None):
+    guidance = (guidance or "").upper()
+    if guidance == "HOLD_STRONG":
+        return "Winner chal raha hai. Jab tak trail ya thesis break na ho, jaldi exit mat karo."
+    if guidance == "HOLD_WITH_TRAIL":
+        return "Profit protect ho raha hai. Position hold rakho, trail ko respect karo."
+    if guidance == "EXIT_PROFIT_PROTECT":
+        return "Profit bachao aur exit lo. Trade ka best phase shayad nikal chuka hai."
+    if guidance in {"EXIT_BIAS", "EXIT_STOPLOSS", "EXIT_TIMESTOP", "EXIT_TRAIL"}:
+        return action_text or "Abhi exit karo."
+    if guidance == "BOOK_PARTIAL":
+        return "Kuch profit book karo, baaki ko trail par chalne do."
+    if guidance in {"THESIS_WEAKENING", "MOMENTUM_PAUSE", "TIME_DECAY_RISK"}:
+        return action_text or "Agli candle closely dekho."
+    return action_text or reason
+
+
+def _no_trade_zone_line(no_trade_zone):
+    if not no_trade_zone:
+        return None
+    label = _decision_label_text(no_trade_zone.get("label"))
+    reason = no_trade_zone.get("reason")
+    if label and reason:
+        return f"{label}: {reason}"
+    return label or reason
+
+
 def _action_plan_for_setup(setup, direction, trigger_price, invalidate_price):
     setup = (setup or "WATCH").upper()
     direction_word = "upside" if direction == "CE" else "downside"
@@ -140,6 +223,39 @@ def _reason_summary(reason):
         return "Time window ke hisaab se abhi trade avoid karna better hai."
 
     return primary
+
+
+def _extract_reason_tags(reason):
+    tags = {}
+    if not reason:
+        return tags
+    for part in [item.strip() for item in reason.split("|") if item.strip()]:
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        tags[key.strip()] = value.strip()
+    return tags
+
+
+def _signal_explainer(reason, confidence_summary=None):
+    summary = _reason_summary(reason)
+    tags = _extract_reason_tags(reason)
+    bullets = []
+    if summary:
+        bullets.append(summary)
+    if tags.get("confidence_summary") and tags.get("confidence_summary") != confidence_summary:
+        bullets.append(tags.get("confidence_summary"))
+    blockers = tags.get("blockers")
+    if blockers:
+        compact = ", ".join([item.strip() for item in blockers.split(",")[:2] if item.strip()])
+        if compact:
+            bullets.append(f"Blockers: {compact}")
+    cautions = tags.get("cautions")
+    if cautions:
+        compact = ", ".join([item.strip() for item in cautions.split(",")[:2] if item.strip()])
+        if compact:
+            bullets.append(f"Cautions: {compact}")
+    return bullets[:3]
 
 
 def _ist_now_label():
@@ -219,6 +335,18 @@ class Notifier:
         reason = trade_data.get("reason")
         confidence_summary = trade_data.get("confidence_summary")
         first_target_price = trade_data.get("first_target_price")
+        setup_bucket = trade_data.get("setup_bucket")
+        option_stop_loss_pct = trade_data.get("option_stop_loss_pct")
+        option_target_pct = trade_data.get("option_target_pct")
+        option_trail_pct = trade_data.get("option_trail_pct")
+        time_stop_warn_minutes = trade_data.get("time_stop_warn_minutes")
+        time_stop_exit_minutes = trade_data.get("time_stop_exit_minutes")
+        risk_note = trade_data.get("risk_note")
+        rr_ratio = trade_data.get("rr_ratio")
+        decision_label = trade_data.get("decision_label")
+        action_text = trade_data.get("action_text")
+        journal_note = trade_data.get("journal_note")
+        structure_suggestion = trade_data.get("structure_suggestion")
         pressure_read = trade_data.get("pressure_read")
         oi_read = trade_data.get("oi_read")
         setup_label = _setup_label(signal_type)
@@ -231,6 +359,10 @@ class Notifier:
             summary.append(ist_label)
         if signal_type:
             summary.append(setup_label)
+        if setup_bucket:
+            summary.append(setup_bucket)
+        if decision_label:
+            summary.append(_decision_label_text(decision_label))
         if grade:
             summary.append(grade)
         if confidence:
@@ -252,6 +384,19 @@ class Notifier:
             levels.append(f"Strike {strike}")
         if levels:
             lines.append(" | ".join(levels))
+        risk_bits = []
+        if option_stop_loss_pct is not None:
+            risk_bits.append(f"OptSL {option_stop_loss_pct:.0f}%")
+        if option_target_pct is not None:
+            risk_bits.append(f"OptT1 {option_target_pct:.0f}%")
+        if option_trail_pct is not None:
+            risk_bits.append(f"Trail {option_trail_pct:.0f}%")
+        if rr_ratio is not None:
+            risk_bits.append(f"RR {rr_ratio}")
+        if time_stop_warn_minutes is not None and time_stop_exit_minutes is not None:
+            risk_bits.append(f"TS {time_stop_warn_minutes}/{time_stop_exit_minutes}m")
+        if risk_bits:
+            lines.append(" | ".join(risk_bits))
         flow = []
         short_pressure = _short_pressure_read(pressure_read)
         short_oi = _short_oi_read(oi_read)
@@ -263,6 +408,23 @@ class Notifier:
             flow.append(confidence_summary)
         if flow:
             lines.append(" | ".join(flow[:2]))
+        for explainer in _signal_explainer(reason, confidence_summary=confidence_summary):
+            lines.append(explainer)
+        if action_text:
+            lines.append(action_text)
+        if structure_suggestion:
+            structure_line = (
+                f"Structure: {structure_suggestion.get('type')} | "
+                f"Buy {structure_suggestion.get('long_strike')} | "
+                f"Sell {structure_suggestion.get('short_strike')}"
+            )
+            lines.append(structure_line)
+            if structure_suggestion.get("rationale"):
+                lines.append(structure_suggestion.get("rationale"))
+        if journal_note:
+            lines.append(journal_note)
+        if risk_note:
+            lines.append(risk_note)
         message = "\n".join(lines)
         self.send_alert(message)
 
@@ -293,6 +455,19 @@ class Notifier:
         avoid_if = watch_data.get("avoid_if")
         participation_read = watch_data.get("participation_read")
         pressure_read = watch_data.get("pressure_read")
+        flip_context = watch_data.get("flip_context")
+        setup_bucket = watch_data.get("setup_bucket")
+        option_stop_loss_pct = watch_data.get("option_stop_loss_pct")
+        option_target_pct = watch_data.get("option_target_pct")
+        option_trail_pct = watch_data.get("option_trail_pct")
+        time_stop_warn_minutes = watch_data.get("time_stop_warn_minutes")
+        time_stop_exit_minutes = watch_data.get("time_stop_exit_minutes")
+        risk_note = watch_data.get("risk_note")
+        decision_label = watch_data.get("decision_label")
+        action_text = watch_data.get("action_text") or watch_data.get("action_hint")
+        no_trade_zone = watch_data.get("no_trade_zone")
+        journal_note = watch_data.get("journal_note")
+        structure_suggestion = watch_data.get("structure_suggestion")
         setup_label = _setup_label(setup)
 
         lines = []
@@ -310,6 +485,10 @@ class Notifier:
             summary.append(ist_label)
         if setup and setup != "NONE":
             summary.append(setup_label)
+        if setup_bucket:
+            summary.append(setup_bucket)
+        if decision_label:
+            summary.append(_decision_label_text(decision_label))
         if score is not None:
             summary.append(f"S:{score}")
         if entry_score is not None:
@@ -329,14 +508,30 @@ class Notifier:
             levels.append(f"T1 {first_target_price}")
         if levels:
             lines.append(" | ".join(levels))
+        risk_bits = []
+        if option_stop_loss_pct is not None:
+            risk_bits.append(f"OptSL {option_stop_loss_pct:.0f}%")
+        if option_target_pct is not None:
+            risk_bits.append(f"OptT1 {option_target_pct:.0f}%")
+        if option_trail_pct is not None:
+            risk_bits.append(f"Trail {option_trail_pct:.0f}%")
+        if time_stop_warn_minutes is not None and time_stop_exit_minutes is not None:
+            risk_bits.append(f"TS {time_stop_warn_minutes}/{time_stop_exit_minutes}m")
+        if risk_bits:
+            lines.append(" | ".join(risk_bits[:2]))
         flow = []
+        flip_line = _flip_summary_line(flip_context)
+        if flip_line:
+            flow.append(flip_line)
         short_pressure = _short_pressure_read(pressure_read)
         if short_pressure:
             flow.append(short_pressure)
-        elif participation_read:
+        elif not flip_line and participation_read:
             flow.append(participation_read.split("|", 1)[0].strip())
         if flow:
-            lines.append(" | ".join(flow[:1]))
+            lines.append(" | ".join(flow[:2]))
+        for explainer in _signal_explainer(reason, confidence_summary=confidence_summary)[:2]:
+            lines.append(explainer)
 
         actions = []
         if entry_if:
@@ -345,6 +540,19 @@ class Notifier:
             actions.append(f"Avoid: {'below' if direction == 'CE' else 'above'} {invalidate_price}")
         if actions:
             lines.append(" | ".join(actions[:2]))
+        no_trade_line = _no_trade_zone_line(no_trade_zone)
+        if no_trade_line:
+            lines.append(no_trade_line)
+        if action_text:
+            lines.append(action_text)
+        if structure_suggestion:
+            lines.append(
+                f"Structure idea: {structure_suggestion.get('type')} | Buy {structure_suggestion.get('long_strike')} | Sell {structure_suggestion.get('short_strike')}"
+            )
+        if journal_note:
+            lines.append(journal_note)
+        if risk_note:
+            lines.append(risk_note)
 
         message = "\n".join(lines)
 
@@ -394,6 +602,8 @@ class Notifier:
             lines.append(" | ".join(summary))
         if levels:
             lines.append(" | ".join(levels))
+        for explainer in _signal_explainer(trigger_data.get("reason"), confidence_summary=trigger_data.get("confidence_summary"))[:2]:
+            lines.append(explainer)
 
         message = "\n".join(lines)
 
@@ -412,6 +622,8 @@ class Notifier:
 
         instrument = monitor_data.get("instrument")
         signal = monitor_data.get("signal")
+        signal_type = monitor_data.get("signal_type")
+        setup_bucket = monitor_data.get("setup_bucket")
         price = monitor_data.get("price")
         option_price = monitor_data.get("option_price")
         entry_price = monitor_data.get("entry_price")
@@ -421,22 +633,52 @@ class Notifier:
         reason = monitor_data.get("reason")
         structure = monitor_data.get("structure")
         pnl_points = monitor_data.get("pnl_points")
+        pnl_percent = monitor_data.get("pnl_percent")
+        stop_loss_pct = monitor_data.get("stop_loss_pct")
+        target_pct = monitor_data.get("target_pct")
+        trail_pct = monitor_data.get("trail_pct")
+        stop_loss_option_price = monitor_data.get("stop_loss_option_price")
+        first_target_option_price = monitor_data.get("first_target_option_price")
+        drawdown_from_peak_pct = monitor_data.get("drawdown_from_peak_pct")
+        invalidate_underlying_price = monitor_data.get("invalidate_underlying_price")
+        time_stop_warn_minutes = monitor_data.get("time_stop_warn_minutes")
+        time_stop_exit_minutes = monitor_data.get("time_stop_exit_minutes")
+        risk_note = monitor_data.get("risk_note")
+        decision_label = monitor_data.get("decision_label")
+        action_text = monitor_data.get("action_text")
+        journal_note = monitor_data.get("journal_note")
+        expansion_ratio = monitor_data.get("expansion_ratio")
+        expected_option_move = monitor_data.get("expected_option_move")
+        actual_option_move = monitor_data.get("actual_option_move")
+        flip_score = monitor_data.get("flip_score")
+        flip_confidence = monitor_data.get("flip_confidence")
         heikin_ashi = monitor_data.get("heikin_ashi")
+        dynamic_trail_pct = monitor_data.get("dynamic_trail_pct")
+        profit_lock_armed = monitor_data.get("profit_lock_armed")
+        profit_lock_trigger_pct = monitor_data.get("profit_lock_trigger_pct")
+        psar_style_level = monitor_data.get("psar_style_level")
+        live_pressure_summary = monitor_data.get("live_pressure_summary")
         lines = []
         header_parts = []
         if instrument:
             header_parts.append(instrument)
         if signal:
             header_parts.append(signal)
-        header_parts.append((guidance or "Update").replace("_", " "))
+        header_parts.append(_monitor_guidance_badge(guidance, decision_label))
         lines.append(" | ".join(header_parts))
 
         summary = []
         ist_label = _ist_now_label()
         if ist_label:
             summary.append(ist_label)
+        if signal_type:
+            summary.append(_setup_label(signal_type))
+        if setup_bucket:
+            summary.append(setup_bucket)
         if pnl_points is not None:
             summary.append(f"{pnl_points:+.2f}pts")
+        if pnl_percent is not None:
+            summary.append(f"{pnl_percent:+.2f}%")
         if option_price is not None:
             summary.append(f"Opt {option_price}")
         if price is not None:
@@ -445,5 +687,51 @@ class Notifier:
             summary.append(f"Entry {entry_price}")
         if summary:
             lines.append(" | ".join(summary))
+
+        risk_bits = []
+        if stop_loss_option_price is not None and stop_loss_pct is not None:
+            risk_bits.append(f"Hard SL {stop_loss_option_price} ({stop_loss_pct:.0f}%)")
+        if first_target_option_price is not None and target_pct is not None:
+            risk_bits.append(f"T1 {first_target_option_price} ({target_pct:.0f}%)")
+        if dynamic_trail_pct is not None:
+            risk_bits.append(f"Trail {dynamic_trail_pct:.1f}%")
+        elif trail_pct is not None:
+            risk_bits.append(f"Trail {trail_pct:.0f}%")
+        if drawdown_from_peak_pct is not None:
+            risk_bits.append(f"PeakDD {drawdown_from_peak_pct:.2f}%")
+        if invalidate_underlying_price is not None:
+            risk_bits.append(f"Inv {invalidate_underlying_price}")
+        if time_stop_warn_minutes is not None and time_stop_exit_minutes is not None:
+            risk_bits.append(f"TS {time_stop_warn_minutes}/{time_stop_exit_minutes}m")
+        if expansion_ratio is not None:
+            risk_bits.append(f"Exp {expansion_ratio}")
+        if flip_score is not None:
+            risk_bits.append(f"Flip {flip_score:.0f}")
+        if risk_bits:
+            lines.append(" | ".join(risk_bits[:2]))
+        state_bits = []
+        if profit_lock_armed:
+            state_bits.append(
+                f"Profit lock ON{f' @ +{profit_lock_trigger_pct:.0f}%' if profit_lock_trigger_pct is not None else ''}"
+            )
+        if psar_style_level is not None:
+            state_bits.append(f"Trail level {psar_style_level}")
+        if state_bits:
+            lines.append(" | ".join(state_bits[:2]))
+        if expected_option_move is not None and actual_option_move is not None:
+            lines.append(f"Option move {actual_option_move} vs expected {expected_option_move}")
+        if flip_confidence:
+            lines.append(f"Flip confidence: {flip_confidence}")
+        if live_pressure_summary:
+            lines.append(live_pressure_summary)
+        if risk_note:
+            lines.append(risk_note)
+        action_line = _monitor_action_line(guidance, action_text, reason=reason)
+        if action_line:
+            lines.append(action_line)
+        if reason and reason != action_line:
+            lines.append(reason)
+        if journal_note:
+            lines.append(journal_note)
 
         self.send_alert("\n".join(lines))

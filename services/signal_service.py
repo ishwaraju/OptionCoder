@@ -228,11 +228,25 @@ class SignalService:
         """Start 1-minute manual trade monitor after a signal."""
         option_contract = self._get_option_contract_snapshot(selected_strike, signal, before_ts=candle_5m.get("close_time") or candle_5m["time"])
         option_entry_price = option_contract.get("ltp") if option_contract else None
+        risk_profile = self._resolve_trade_risk_profile(
+            setup_type=(balanced_pro or {}).get("setup"),
+            quality=(balanced_pro or {}).get("quality"),
+            confidence=getattr(self.strategy, "last_confidence", None),
+            cautions=getattr(self.strategy, "last_cautions", None),
+        )
+        stop_loss_pct = float(risk_profile["hard_premium_stop_pct"])
+        target_pct = float(risk_profile["target_pct"])
+        trail_pct = float(risk_profile["trail_from_peak_pct"])
+        stop_loss_price = round(option_entry_price * (1 - stop_loss_pct / 100.0), 2) if option_entry_price else None
+        first_target_option_price = round(option_entry_price * (1 + target_pct / 100.0), 2) if option_entry_price else None
+        pressure_summary = (balanced_pro or {}).get("pressure_summary") or {}
         self.active_trade_monitor = {
             "signal": signal,
+            "signal_type": (balanced_pro or {}).get("setup"),
             "entry_time": candle_5m["time"],
             "entry_price": option_entry_price if option_entry_price is not None else price,
             "entry_underlying_price": price,
+            "invalidate_underlying_price": (self.strategy.last_entry_plan or {}).get("invalidate_price"),
             "strike": selected_strike,
             "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
             "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
@@ -241,10 +255,482 @@ class SignalService:
             "entry_delta": option_contract.get("delta") if option_contract else None,
             "max_favorable_option_ltp": option_entry_price,
             "max_adverse_option_ltp": option_entry_price,
+            "stop_loss_pct": stop_loss_pct,
+            "target_pct": target_pct,
+            "trail_pct": trail_pct,
+            "setup_bucket": risk_profile["setup_bucket"],
+            "risk_note": risk_profile["risk_note"],
+            "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
+            "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
+            "profit_lock_trigger_pct": risk_profile.get("profit_lock_trigger_pct"),
+            "expiry_fast_decay": bool(risk_profile.get("expiry_fast_decay")),
+            "stop_loss_option_price": stop_loss_price,
+            "first_target_option_price": first_target_option_price,
+            "partial_booked": False,
+            "profit_lock_armed": False,
             "quality": balanced_pro["quality"],
             "time_regime": balanced_pro["time_regime"],
+            "entry_pressure_bias": pressure_summary.get("bias"),
+            "entry_pressure_strength": pressure_summary.get("strength"),
+            "psar_style_level": (self.strategy.last_entry_plan or {}).get("invalidate_price"),
+            "entry_atr": (self.strategy.last_entry_plan or {}).get("atr"),
             "last_notified_minute": None,
             "minutes_active": 0,
+        }
+
+    @staticmethod
+    def _option_pnl_percent(entry_price, option_price):
+        if entry_price in (None, 0) or option_price is None:
+            return None
+        try:
+            return round(((float(option_price) - float(entry_price)) / float(entry_price)) * 100, 2)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _drawdown_from_peak_percent(peak_price, option_price):
+        if peak_price in (None, 0) or option_price is None:
+            return None
+        try:
+            return round(((float(peak_price) - float(option_price)) / float(peak_price)) * 100, 2)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _estimate_live_atr(recent_5m_candles, fallback=None):
+        try:
+            if recent_5m_candles:
+                ranges = [
+                    abs(float(candle["high"]) - float(candle["low"]))
+                    for candle in recent_5m_candles[-4:]
+                    if candle.get("high") is not None and candle.get("low") is not None
+                ]
+                if ranges:
+                    return round(sum(ranges) / len(ranges), 2)
+        except Exception:
+            pass
+        try:
+            return round(float(fallback), 2) if fallback is not None else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _dynamic_trail_percent(base_trail_pct, setup_bucket, live_atr, underlying_price, time_regime=None):
+        trail_pct = float(base_trail_pct or 0.0)
+        if live_atr and underlying_price:
+            atr_pct = (float(live_atr) / max(float(underlying_price), 1.0)) * 100.0
+            if atr_pct >= 0.22:
+                trail_pct += 2.0
+            elif atr_pct >= 0.14:
+                trail_pct += 1.0
+            elif atr_pct <= 0.08:
+                trail_pct = max(7.0, trail_pct - 1.0)
+
+        setup_bucket = (setup_bucket or "").upper()
+        if setup_bucket == "REVERSAL":
+            trail_pct += 1.5
+        elif setup_bucket == "CONTINUATION":
+            trail_pct += 1.0
+        elif setup_bucket == "BREAKOUT":
+            trail_pct = max(7.0, trail_pct)
+
+        time_regime = (time_regime or "").upper()
+        if time_regime == "ENDGAME":
+            trail_pct = max(7.0, trail_pct - 1.0)
+        elif time_regime == "OPENING":
+            trail_pct += 0.5
+
+        return round(min(max(trail_pct, 7.0), 14.0), 2)
+
+    @staticmethod
+    def _update_psar_style_level(signal, existing_level, latest_1m, previous_1m, live_atr=None):
+        signal = (signal or "").upper()
+        level = float(existing_level) if existing_level is not None else None
+        atr_buffer = max(float(live_atr or 0.0) * 0.12, 2.0)
+
+        if signal == "CE":
+            candidate = min(
+                float(previous_1m.get("low") or latest_1m.get("low") or 0.0),
+                float(latest_1m.get("low") or 0.0),
+            ) - atr_buffer
+            return round(max(level, candidate), 2) if level is not None else round(candidate, 2)
+        if signal == "PE":
+            candidate = max(
+                float(previous_1m.get("high") or latest_1m.get("high") or 0.0),
+                float(latest_1m.get("high") or 0.0),
+            ) + atr_buffer
+            return round(min(level, candidate), 2) if level is not None else round(candidate, 2)
+        return level
+
+    @staticmethod
+    def _entry_decision_label(signal):
+        signal = (signal or "").upper()
+        if signal in {"CE", "PE"}:
+            return f"CONFIRMED_{signal}_ENTRY"
+        return "CONFIRMED_ENTRY"
+
+    @staticmethod
+    def _flip_watch_label(direction):
+        direction = (direction or "").upper()
+        if direction in {"CE", "PE"}:
+            return f"WATCH_{direction}_FLIP"
+        return "WATCH_FLIP"
+
+    @staticmethod
+    def _flip_confirmed_label(direction):
+        direction = (direction or "").upper()
+        if direction in {"CE", "PE"}:
+            return f"CONFIRMED_{direction}_FLIP"
+        return "CONFIRMED_FLIP"
+
+    def _infer_monitor_flip_signal(self, current_signal, latest_1m, previous_1m, micro_high, micro_low, vwap_break, structure_break):
+        current_signal = (current_signal or "").upper()
+        latest_close = latest_1m.get("close")
+        previous_close = previous_1m.get("close")
+        if latest_close is None or previous_close is None or not vwap_break:
+            return None
+        flip_side = "PE" if current_signal == "CE" else "CE"
+        flip_score = self._compute_flip_score(
+            direction=flip_side,
+            structure_break=structure_break,
+            vwap_break=vwap_break,
+            latest_1m=latest_1m,
+            previous_1m=previous_1m,
+        )
+
+        if current_signal == "CE":
+            if latest_close <= micro_low and latest_close < previous_close:
+                return {
+                    "label": self._flip_confirmed_label("PE") if flip_score["score"] >= 65 else "THESIS_FAILED_EXIT",
+                    "action_text": "CE thesis fail ho gayi. PE side ab confirmed lag rahi hai.",
+                    "flip_score": flip_score,
+                }
+        elif current_signal == "PE":
+            if latest_close >= micro_high and latest_close > previous_close:
+                return {
+                    "label": self._flip_confirmed_label("CE") if flip_score["score"] >= 65 else "THESIS_FAILED_EXIT",
+                    "action_text": "PE thesis fail ho gayi. CE side ab confirmed lag rahi hai.",
+                    "flip_score": flip_score,
+                }
+        return None
+
+    def _resolve_trade_risk_profile(self, setup_type=None, quality=None, confidence=None, cautions=None):
+        setup = (setup_type or "GENERAL").upper()
+        quality = (quality or "").upper()
+        confidence = (confidence or "").upper()
+        cautions = {str(item).lower() for item in (cautions or []) if item}
+        expiry_mode = "expiry_day_mode" in cautions
+        expiry_fast_decay = "expiry_fast_decay" in cautions or expiry_mode
+        target_pct = float(getattr(self.config, "TARGET_PERCENT", Config.TARGET_PERCENT))
+        trail_pct = float(getattr(self.config, "TRAIL_PERCENT", Config.TRAIL_PERCENT))
+        fallback_stop = float(getattr(self.config, "STOP_LOSS_PERCENT", Config.STOP_LOSS_PERCENT))
+
+        breakout_bucket = {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "OPENING_DRIVE"}
+        reversal_bucket = {"REVERSAL", "TRAP_REVERSAL"}
+        continuation_bucket = {"CONTINUATION", "AGGRESSIVE_CONTINUATION"}
+
+        if setup in reversal_bucket:
+            setup_bucket = "REVERSAL"
+            hard_stop = 15.0 if self.instrument == "NIFTY" else 18.0
+            time_warn = 3
+            time_exit = 5
+            risk_note = "Reversal setups get a slightly wider premium cap because IV/noise can be higher; underlying invalidation still stays primary."
+        elif setup in breakout_bucket:
+            setup_bucket = "BREAKOUT"
+            hard_stop = 12.0 if self.instrument == "NIFTY" else 15.0
+            time_warn = 3
+            time_exit = 5
+            risk_note = "Breakout/retest setups use a tighter premium cap because clean follow-through should come quickly."
+        elif setup in continuation_bucket:
+            setup_bucket = "CONTINUATION"
+            hard_stop = 12.0 if self.instrument == "NIFTY" else 15.0
+            time_warn = 3
+            time_exit = 4
+            risk_note = "Continuation setups are time-sensitive; if expansion does not come quickly, theta bleed becomes the bigger risk."
+        else:
+            setup_bucket = setup or "GENERAL"
+            hard_stop = fallback_stop
+            time_warn = 3
+            time_exit = 5
+            risk_note = "General fallback risk profile."
+
+        if quality == "C" or confidence == "LOW":
+            time_exit = min(time_exit, 4)
+
+        if expiry_mode:
+            time_warn = min(time_warn, 2)
+            time_exit = min(time_exit, 4)
+            if setup_bucket == "REVERSAL":
+                hard_stop = max(hard_stop, 16.0 if self.instrument == "NIFTY" else 18.0)
+            else:
+                hard_stop = max(hard_stop - 1.0, 10.0 if self.instrument == "NIFTY" else 14.0)
+            risk_note = (
+                "Expiry mode active: faster decay and noisy premium swings. "
+                "If expansion does not come quickly, exit bias should accelerate."
+            )
+
+        if expiry_fast_decay:
+            trail_pct = min(trail_pct, 8.0)
+
+        profit_lock_trigger_pct = max(8.0, round(target_pct * 0.6, 2))
+        if setup_bucket == "BREAKOUT":
+            profit_lock_trigger_pct = min(profit_lock_trigger_pct, 12.0 if self.instrument == "NIFTY" else 14.0)
+        elif setup_bucket == "CONTINUATION":
+            profit_lock_trigger_pct = min(max(profit_lock_trigger_pct, 10.0), 14.0)
+        elif setup_bucket == "REVERSAL":
+            profit_lock_trigger_pct = min(max(profit_lock_trigger_pct, 10.0), 15.0)
+        if expiry_mode:
+            profit_lock_trigger_pct = max(6.0, profit_lock_trigger_pct - 2.0)
+
+        return {
+            "setup_bucket": setup_bucket,
+            "hard_premium_stop_pct": hard_stop,
+            "target_pct": target_pct,
+            "trail_from_peak_pct": trail_pct,
+            "profit_lock_trigger_pct": round(profit_lock_trigger_pct, 2),
+            "time_stop_warn_minutes": time_warn,
+            "time_stop_exit_minutes": time_exit,
+            "risk_note": risk_note,
+            "primary_stop_source": "UNDERLYING_INVALIDATION",
+            "expiry_fast_decay": bool(expiry_fast_decay),
+        }
+
+    @staticmethod
+    def _option_expansion_metrics(entry_option_price, option_price, entry_underlying_price, underlying_price, entry_delta=None):
+        if entry_option_price in (None, 0) or option_price is None:
+            return {
+                "underlying_move": None,
+                "actual_option_move": None,
+                "expected_option_move": None,
+                "expansion_ratio": None,
+                "premium_supportive": False,
+            }
+        try:
+            actual_option_move = float(option_price) - float(entry_option_price)
+            underlying_move = (
+                abs(float(underlying_price) - float(entry_underlying_price))
+                if underlying_price is not None and entry_underlying_price is not None
+                else None
+            )
+            delta_abs = abs(float(entry_delta or 0))
+            if underlying_move is None:
+                expected_option_move = None
+            else:
+                expected_option_move = max(delta_abs * underlying_move, 0.0)
+            if expected_option_move in (None, 0):
+                expansion_ratio = None
+                premium_supportive = actual_option_move >= (float(entry_option_price) * 0.04)
+            else:
+                expansion_ratio = round(actual_option_move / expected_option_move, 2)
+                premium_supportive = expansion_ratio >= 0.75
+            return {
+                "underlying_move": round(underlying_move, 2) if underlying_move is not None else None,
+                "actual_option_move": round(actual_option_move, 2),
+                "expected_option_move": round(expected_option_move, 2) if expected_option_move is not None else None,
+                "expansion_ratio": expansion_ratio,
+                "premium_supportive": premium_supportive,
+            }
+        except Exception:
+            return {
+                "underlying_move": None,
+                "actual_option_move": None,
+                "expected_option_move": None,
+                "expansion_ratio": None,
+                "premium_supportive": False,
+            }
+
+    def _compute_flip_score(self, direction, structure_break, vwap_break, latest_1m=None, previous_1m=None):
+        direction = (direction or "").upper()
+        latest_1m = latest_1m or {}
+        previous_1m = previous_1m or {}
+        score = 0.0
+        reasons = []
+        if structure_break:
+            score += 30.0
+            reasons.append("structure_break")
+        if vwap_break:
+            score += 20.0
+            reasons.append("vwap_break")
+        latest_close = latest_1m.get("close")
+        previous_close = previous_1m.get("close")
+        if latest_close is not None and previous_close is not None:
+            if direction == "CE" and latest_close > previous_close:
+                score += 15.0
+                reasons.append("higher_close")
+            elif direction == "PE" and latest_close < previous_close:
+                score += 15.0
+                reasons.append("lower_close")
+
+        participation = getattr(self.strategy, "last_participation_metrics", None) or {}
+        directional = participation.get(direction) or {}
+        if directional.get("same_side_dominates"):
+            score += 12.0
+            reasons.append("same_side_delta")
+        if directional.get("oi_supportive"):
+            score += 8.0
+            reasons.append("oi_support")
+        if directional.get("spread_ok"):
+            score += 8.0
+            reasons.append("spread_ok")
+
+        return {
+            "score": round(min(score, 100.0), 2),
+            "confidence": "HIGH" if score >= 70 else "MEDIUM" if score >= 55 else "LOW",
+            "reasons": reasons,
+        }
+
+    def _classify_no_trade_zone(self, balanced_pro, signal=None, selected_option_contract=None):
+        balanced_pro = balanced_pro or {}
+        cautions = {str(item).lower() for item in (self.strategy.last_cautions or []) if item}
+        time_regime = (balanced_pro.get("time_regime") or self.strategy.last_regime or "").upper()
+        signal_type = (balanced_pro.get("setup") or self.strategy.last_signal_type or "").upper()
+        score = float(self.strategy.last_entry_score or self.strategy.last_score or 0)
+        spread_percent = self._spread_percent(selected_option_contract) if selected_option_contract else None
+
+        if spread_percent is not None and spread_percent >= 5.5:
+            return {
+                "label": "WIDE_SPREAD_SKIP",
+                "reason": f"Selected option spread {spread_percent:.2f}% hai, execution risky hai.",
+                "action_text": "Is setup ko skip karo. Spread bahut wide hai.",
+            }
+
+        if "expiry_day_mode" in cautions and time_regime in {"MIDDAY", "LATE_DAY", "ENDGAME"} and score < 78:
+            return {
+                "label": "EXPIRY_PREMIUM_CHAOS",
+                "reason": "Expiry session me premium noise aur fast decay high hai.",
+                "action_text": "Fresh entry avoid karo. Expiry premium abhi noisy hai.",
+            }
+
+        if time_regime in {"LATE_DAY", "ENDGAME"} and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}:
+            conflict = getattr(self.strategy, "last_pressure_conflict_level", "NONE")
+            if conflict not in {"NONE", ""}:
+                return {
+                    "label": "LATE_DAY_WHIPSAW",
+                    "reason": "Late-day reversal zone me pressure conflict present hai.",
+                    "action_text": "Skip ya wait karo. Late-day whipsaw risk high hai.",
+                }
+
+        if any(flag in cautions for flag in {"participation_weak", "opposite_pressure", "pressure_conflict", "higher_tf_not_aligned", "adx_not_confirmed"}):
+            return {
+                "label": "HIGH_NOISE_SKIP",
+                "reason": "Price aur option participation clean align nahi kar rahe.",
+                "action_text": "Fresh add mat karo. Setup abhi high-noise zone me hai.",
+            }
+        return None
+
+    @staticmethod
+    def _build_journal_note(decision_label, action_text, extra=None):
+        bits = [bit for bit in [decision_label, action_text, extra] if bit]
+        return " | ".join(bits) if bits else None
+
+    def _optimized_spread_short_strike(self, signal, long_strike, balanced_pro=None, risk_profile=None):
+        signal = (signal or "").upper()
+        if signal not in {"CE", "PE"} or long_strike is None:
+            return None, None
+
+        balanced_pro = balanced_pro or {}
+        risk_profile = risk_profile or {}
+        strike_step = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
+        cautions = {str(item).lower() for item in (self.strategy.last_cautions or []) if item}
+        expiry_mode = "expiry_day_mode" in cautions or "expiry_fast_decay" in cautions
+        late_session = (balanced_pro.get("time_regime") or "").upper() in {"LATE_DAY", "ENDGAME"}
+        target_pct = float(risk_profile.get("target_pct") or 0)
+
+        first_target_price = None
+        try:
+            first_target_price = float((self.strategy.last_entry_plan or {}).get("first_target_price"))
+        except Exception:
+            first_target_price = None
+
+        reference_price = None
+        try:
+            reference_price = float((self.strategy.last_entry_plan or {}).get("entry_above") or (self.strategy.last_entry_plan or {}).get("entry_below"))
+        except Exception:
+            reference_price = None
+
+        if first_target_price is not None and reference_price is not None:
+            target_move_points = abs(first_target_price - reference_price)
+        else:
+            target_move_points = strike_step * (1 if target_pct <= 20 else 2 if target_pct <= 30 else 3)
+
+        width_steps = max(1, min(3, round(target_move_points / max(strike_step, 1))))
+        if expiry_mode or late_session:
+            width_steps = max(1, min(width_steps, 2))
+        if target_pct <= 20:
+            width_steps = 1
+        elif target_pct >= 30 and not expiry_mode:
+            width_steps = max(width_steps, 2)
+
+        short_strike = int(long_strike) + (strike_step * width_steps) if signal == "CE" else int(long_strike) - (strike_step * width_steps)
+        return int(short_strike), width_steps
+
+    def _build_option_structure_suggestion(self, signal, selected_strike, selected_option_contract, balanced_pro=None, risk_profile=None):
+        signal = (signal or "").upper()
+        if signal not in {"CE", "PE"} or selected_strike is None:
+            return None
+
+        balanced_pro = balanced_pro or {}
+        risk_profile = risk_profile or {}
+        cautions = {str(item).lower() for item in (self.strategy.last_cautions or []) if item}
+        strike_step = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
+        spread_percent = self._spread_percent(selected_option_contract) if selected_option_contract else None
+        iv_rich = False
+        if selected_option_contract and self.option_data and self.option_data.get("atm") is not None:
+            atm_row = self._get_option_contract_snapshot(self.option_data.get("atm"), signal)
+            if atm_row and atm_row.get("iv") and selected_option_contract.get("iv"):
+                atm_iv = float(atm_row.get("iv") or 0)
+                selected_iv = float(selected_option_contract.get("iv") or 0)
+                iv_rich = atm_iv > 0 and selected_iv > (atm_iv * 1.12)
+
+        expiry_mode = "expiry_day_mode" in cautions or "expiry_fast_decay" in cautions
+        late_session = (balanced_pro.get("time_regime") or "").upper() in {"LATE_DAY", "ENDGAME"}
+        moderate_target = float(risk_profile.get("target_pct") or 0) <= 25.0
+        wide_defined_move = float(risk_profile.get("target_pct") or 0) >= 30.0
+        noisy_premium = (
+            expiry_mode
+            or late_session
+            or iv_rich
+            or (spread_percent is not None and spread_percent >= 3.5)
+            or "participation_spread_wide" in cautions
+        )
+        if not (noisy_premium or moderate_target or wide_defined_move):
+            return None
+
+        short_strike, width_steps = self._optimized_spread_short_strike(
+            signal=signal,
+            long_strike=selected_strike,
+            balanced_pro=balanced_pro,
+            risk_profile=risk_profile,
+        )
+        if short_strike is None:
+            return None
+        structure_type = "BULL_CALL_SPREAD" if signal == "CE" else "BEAR_PUT_SPREAD"
+        rationale = []
+        if expiry_mode:
+            rationale.append("expiry theta high hai")
+        if late_session:
+            rationale.append("late-day premium unstable ho sakta hai")
+        if spread_percent is not None and spread_percent >= 3.5:
+            rationale.append("spread wide hai")
+        if iv_rich:
+            rationale.append("premium IV-rich lag raha hai")
+        if moderate_target:
+            rationale.append("move expectation moderate hai")
+        if wide_defined_move:
+            rationale.append("planned move bada hai, defined upside bucket useful ho sakta hai")
+        rationale.append(f"spread width {width_steps} strike-step rakha gaya")
+        rationale_text = ", ".join(rationale) if rationale else "defined-risk structure zyada suitable lag raha hai"
+        action_text = (
+            f"Plain {signal} buy ke bajay {structure_type.replace('_', ' ')} socho: "
+            f"buy {selected_strike}, sell {short_strike}. {rationale_text}."
+        )
+        return {
+            "type": structure_type,
+            "long_strike": int(selected_strike),
+            "short_strike": int(short_strike),
+            "width_steps": int(width_steps),
+            "action_text": action_text,
+            "rationale": rationale_text,
         }
 
     @staticmethod
@@ -274,6 +760,56 @@ class SignalService:
             option_type=option_type,
             before_ts=before_ts,
         )
+
+    def _prime_oi_quote_confirmation(self, timestamp, price):
+        if not self.option_data:
+            return
+
+        self.oi_quote_confirmation.add_oi_snapshot(
+            timestamp=timestamp,
+            ce_oi=self.option_data.get("ce_oi"),
+            pe_oi=self.option_data.get("pe_oi"),
+            ce_volume=self.option_data.get("ce_volume"),
+            pe_volume=self.option_data.get("pe_volume"),
+            price=price,
+        )
+        self.oi_quote_confirmation.add_quote_snapshot(
+            timestamp=timestamp,
+            option_data={
+                "ce_spread": self.option_data.get("ce_spread"),
+                "pe_spread": self.option_data.get("pe_spread"),
+                "ce_top_bid_quantity": self.option_data.get("ce_top_bid_quantity"),
+                "ce_top_ask_quantity": self.option_data.get("ce_top_ask_quantity"),
+                "pe_top_bid_quantity": self.option_data.get("pe_top_bid_quantity"),
+                "pe_top_ask_quantity": self.option_data.get("pe_top_ask_quantity"),
+                "atm": self.option_data.get("atm"),
+                "underlying_price": self.option_data.get("underlying_price"),
+            },
+        )
+
+    def _confirm_signal_microstructure(self, signal, selected_strike, timestamp, price, strict=False):
+        if signal not in {"CE", "PE"} or selected_strike is None or not self.option_data:
+            return (not strict), "Microstructure data unavailable", None, None
+
+        self._prime_oi_quote_confirmation(timestamp, price)
+
+        should_filter, filter_reason, alternative_strike = self.spread_filter.should_filter_signal(
+            self.option_data,
+            signal,
+            selected_strike,
+        )
+        if should_filter:
+            return False, filter_reason, None, alternative_strike
+
+        threshold = 0.68 if strict else 0.58
+        confirmed, oi_reason, confidence, metrics = self.oi_quote_confirmation.confirm_signal_with_oi(
+            signal,
+            confidence_threshold=threshold,
+        )
+        if not confirmed:
+            return False, oi_reason, metrics, None
+
+        return True, oi_reason, metrics, None
 
     def _score_option_candidate(self, row, direction, preferred_strike, underlying_price):
         ltp = float(row.get("ltp") or 0)
@@ -761,6 +1297,27 @@ class SignalService:
             quality_ok, quality_reason = self._pending_watch_quality_ok(pending, latest, previous)
             if not quality_ok:
                 return {"status": "INVALIDATED", "reason": quality_reason}
+            selected_strike, _ = self.strike_selector.select_strike_with_reason(
+                price=latest["close"],
+                signal=direction,
+                volume_signal="NORMAL",
+                strategy_score=pending.get("score") or 0,
+                pressure_metrics=None,
+                cautions=pending.get("cautions"),
+                option_chain_data=self.option_data,
+                setup_type=pending.get("signal_type"),
+                time_regime=pending.get("time_regime"),
+            )
+            strict_confirmation = (pending.get("signal_type") or "").upper() in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}
+            confirmed, micro_reason, _, _ = self._confirm_signal_microstructure(
+                signal=direction,
+                selected_strike=selected_strike,
+                timestamp=latest["time"],
+                price=latest["close"],
+                strict=strict_confirmation,
+            )
+            if not confirmed:
+                return {"status": "INVALIDATED", "reason": f"1m trigger lacked microstructure confirmation: {micro_reason}"}
         if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
             return None
 
@@ -780,6 +1337,7 @@ class SignalService:
             return
 
         latest_1m = recent_1m_candles[-1]
+        previous_1m = recent_1m_candles[-2] if len(recent_1m_candles) >= 2 else latest_1m
         minute_key = latest_1m["time"]
         if self.pending_entry_watch.get("last_checked_minute") == minute_key:
             return
@@ -865,6 +1423,7 @@ class SignalService:
         entry_price = self.active_trade_monitor["entry_price"]
         strike = self.active_trade_monitor.get("strike")
         latest_1m = recent_1m_candles[-1]
+        previous_1m = recent_1m_candles[-2] if len(recent_1m_candles) >= 2 else latest_1m
         prior_window = recent_1m_candles[-6:-1] if len(recent_1m_candles) >= 6 else recent_1m_candles[:-1]
         if not prior_window:
             prior_window = recent_1m_candles
@@ -882,9 +1441,27 @@ class SignalService:
             if option_price is not None and entry_price is not None
             else None
         )
+        pnl_percent = self._option_pnl_percent(entry_price, option_price)
+        expansion_metrics = self._option_expansion_metrics(
+            entry_option_price=entry_price,
+            option_price=option_price,
+            entry_underlying_price=self.active_trade_monitor.get("entry_underlying_price"),
+            underlying_price=last_close,
+            entry_delta=self.active_trade_monitor.get("entry_delta"),
+        )
         recent_5m_candles = recent_5m_candles or []
         active_5m = recent_5m_candles[-1] if recent_5m_candles else None
         prior_5m = recent_5m_candles[-2] if len(recent_5m_candles) >= 2 else active_5m
+        live_pressure_summary = None
+        try:
+            current_pressure_metrics = self.pressure.analyze(self.option_data) if getattr(self, "pressure", None) and getattr(self, "option_data", None) else None
+            live_pressure_summary = self._build_pressure_summary(
+                pressure_metrics=current_pressure_metrics,
+                participation_metrics=None,
+                direction=signal,
+            )
+        except Exception:
+            live_pressure_summary = None
 
         if option_price is not None:
             max_fav = self.active_trade_monitor.get("max_favorable_option_ltp")
@@ -906,43 +1483,328 @@ class SignalService:
             momentum_fading = len(recent_closes) >= 3 and recent_closes[-1] > recent_closes[-2] and recent_closes[-2] >= recent_closes[-3]
             five_min_break = prior_5m is not None and last_close > prior_5m["high"]
             structure_text = f"1m intact | prev5m {'safe' if not five_min_break else 'under test'}"
+        confirmed_flip = self._infer_monitor_flip_signal(
+            current_signal=signal,
+            latest_1m=latest_1m,
+            previous_1m=previous_1m,
+            micro_high=micro_high,
+            micro_low=micro_low,
+            vwap_break=vwap_break,
+            structure_break=structure_break,
+        )
+        flip_score = (confirmed_flip or {}).get("flip_score")
 
         minutes_active = max(1, int((latest_1m["time"] - self.active_trade_monitor["entry_time"]).total_seconds() // 60))
         self.active_trade_monitor["minutes_active"] = minutes_active
+        stop_loss_pct = float(self.active_trade_monitor.get("stop_loss_pct") or getattr(self.config, "STOP_LOSS_PERCENT", Config.STOP_LOSS_PERCENT))
+        target_pct = float(self.active_trade_monitor.get("target_pct") or getattr(self.config, "TARGET_PERCENT", Config.TARGET_PERCENT))
+        trail_pct = float(self.active_trade_monitor.get("trail_pct") or getattr(self.config, "TRAIL_PERCENT", Config.TRAIL_PERCENT))
+        time_stop_warn_minutes = int(self.active_trade_monitor.get("time_stop_warn_minutes") or 3)
+        time_stop_exit_minutes = int(self.active_trade_monitor.get("time_stop_exit_minutes") or 5)
+        partial_booked = bool(self.active_trade_monitor.get("partial_booked"))
+        profit_lock_armed = bool(self.active_trade_monitor.get("profit_lock_armed"))
+        expiry_fast_decay = bool(self.active_trade_monitor.get("expiry_fast_decay"))
+        peak_option_price = self.active_trade_monitor.get("max_favorable_option_ltp")
+        drawdown_from_peak_pct = self._drawdown_from_peak_percent(peak_option_price, option_price)
+        invalidate_underlying_price = self.active_trade_monitor.get("invalidate_underlying_price")
+        setup_bucket = self.active_trade_monitor.get("setup_bucket")
+        risk_note = self.active_trade_monitor.get("risk_note")
+        live_atr = self._estimate_live_atr(recent_5m_candles, fallback=self.active_trade_monitor.get("entry_atr"))
+        dynamic_trail_pct = self._dynamic_trail_percent(
+            base_trail_pct=trail_pct,
+            setup_bucket=setup_bucket,
+            live_atr=live_atr,
+            underlying_price=last_close,
+            time_regime=time_regime,
+        )
+        expansion_ratio = expansion_metrics.get("expansion_ratio")
+        premium_supportive = expansion_metrics.get("premium_supportive")
+        option_expanding = bool(
+            (pnl_percent is not None and pnl_percent >= max(4.0, target_pct * 0.35))
+            or premium_supportive
+        )
+        entry_pressure_bias = (self.active_trade_monitor.get("entry_pressure_bias") or "").upper()
+        live_pressure_bias = ((live_pressure_summary or {}).get("bias") or "").upper()
+        live_pressure_strength = ((live_pressure_summary or {}).get("strength") or "").upper()
+        opposite_pressure_active = (
+            (signal == "CE" and live_pressure_bias == "BEARISH")
+            or (signal == "PE" and live_pressure_bias == "BULLISH")
+        )
+        pressure_flip_exit = bool(
+            opposite_pressure_active
+            and live_pressure_strength in {"STRONG", "MODERATE"}
+            and minutes_active >= 2
+            and (not option_expanding or structure_break or vwap_break)
+        )
+        pressure_flip_warning = bool(
+            opposite_pressure_active
+            and minutes_active >= 2
+            and not pressure_flip_exit
+        )
+        theta_risk_high = bool(expiry_fast_decay or time_regime in {"LATE_DAY", "ENDGAME"})
+        structure_improving = momentum_strong or (
+            signal == "CE" and latest_1m["close"] >= previous_1m["close"]
+        ) or (
+            signal == "PE" and latest_1m["close"] <= previous_1m["close"]
+        )
+        no_expansion = not option_expanding and not structure_improving
+        profit_lock_trigger_pct = float(
+            self.active_trade_monitor.get("profit_lock_trigger_pct")
+            or max(8.0, round(target_pct * 0.6, 2))
+        )
+        if theta_risk_high:
+            profit_lock_trigger_pct = max(6.0, round(profit_lock_trigger_pct - 1.0, 2))
+        profit_lock_should_arm = bool(pnl_percent is not None and pnl_percent >= profit_lock_trigger_pct)
+        if profit_lock_should_arm:
+            profit_lock_armed = True
+            self.active_trade_monitor["profit_lock_armed"] = True
+        psar_style_level = self.active_trade_monitor.get("psar_style_level")
+        if profit_lock_armed or momentum_strong:
+            psar_style_level = self._update_psar_style_level(
+                signal=signal,
+                existing_level=psar_style_level,
+                latest_1m=latest_1m,
+                previous_1m=previous_1m,
+                live_atr=live_atr,
+            )
+            self.active_trade_monitor["psar_style_level"] = psar_style_level
+        psar_break = bool(
+            psar_style_level is not None
+            and (
+                (signal == "CE" and latest_1m["close"] <= float(psar_style_level))
+                or (signal == "PE" and latest_1m["close"] >= float(psar_style_level))
+            )
+        )
+        momentum_and_pressure_supportive = bool(
+            momentum_strong
+            and not pressure_flip_warning
+            and not pressure_flip_exit
+            and not psar_break
+            and (
+                not live_pressure_bias
+                or live_pressure_bias == "NEUTRAL"
+                or (signal == "CE" and live_pressure_bias == "BULLISH")
+                or (signal == "PE" and live_pressure_bias == "BEARISH")
+            )
+        )
+        break_even_underlying_exit = bool(
+            profit_lock_armed
+            and invalidate_underlying_price is not None
+            and (
+                (signal == "CE" and latest_1m["close"] <= float(invalidate_underlying_price))
+                or (signal == "PE" and latest_1m["close"] >= float(invalidate_underlying_price))
+            )
+        )
+        trail_active_without_partial = bool(
+            profit_lock_armed
+            and not partial_booked
+            and drawdown_from_peak_pct is not None
+            and drawdown_from_peak_pct >= max(dynamic_trail_pct, 8.0)
+        )
+        slow_positive_theta_risk = bool(
+            theta_risk_high
+            and pnl_percent is not None
+            and pnl_percent > 0
+            and pnl_percent < max(target_pct, profit_lock_trigger_pct)
+            and minutes_active >= time_stop_warn_minutes
+            and (
+                no_expansion
+                or (
+                    not momentum_strong
+                    and not structure_improving
+                    and (drawdown_from_peak_pct is None or drawdown_from_peak_pct < max(dynamic_trail_pct, 8.0))
+                )
+            )
+        )
 
         guidance = "HOLD_WITH_TRAIL"
+        decision_label = "HOLD_CONTEXT"
+        action_text = "Abhi hold karo. Structure abhi toot nahi raha."
         reason = "Normal pullback is okay. Trend is acceptable while the recent 1-minute structure holds."
 
-        if structure_break and vwap_break:
+        if pnl_percent is not None and pnl_percent <= -stop_loss_pct:
+            guidance = "EXIT_STOPLOSS"
+            decision_label = "HARD_STOP_EXIT"
+            action_text = "Abhi exit karo. Hard premium stop hit ho gaya."
+            reason = f"Option premium hit {pnl_percent:.2f}% P&L. Respect the hard {stop_loss_pct:.0f}% loss limit."
+        elif invalidate_underlying_price is not None and (
+            (signal == "CE" and latest_1m["low"] <= float(invalidate_underlying_price))
+            or (signal == "PE" and latest_1m["high"] >= float(invalidate_underlying_price))
+        ):
+            if break_even_underlying_exit and (pnl_percent is not None and pnl_percent > 0):
+                guidance = "EXIT_PROFIT_PROTECT"
+                decision_label = "TRAIL_EXIT"
+                action_text = "Profit protect karo aur exit lo. Winner ne follow-through lose kar diya."
+                reason = (
+                    f"Trade ne pehle +{profit_lock_trigger_pct:.0f}% zone touch kiya tha, isliye profit lock arm ho gaya. "
+                    "Ab underlying invalidation ke paas close aa gaya hai, to profit protect karke nikalna better hai."
+                )
+            else:
+                guidance = "EXIT_BIAS"
+                decision_label = "THESIS_FAILED_EXIT"
+                action_text = "Abhi exit karo. Original thesis invalid ho gayi."
+                if confirmed_flip:
+                    decision_label = confirmed_flip["label"]
+                    action_text = confirmed_flip["action_text"]
+                reason = (
+                    f"Underlying invalidation level {invalidate_underlying_price} got breached. "
+                    "Trade thesis is weakening before premium cap."
+                )
+        elif partial_booked and drawdown_from_peak_pct is not None and drawdown_from_peak_pct >= dynamic_trail_pct:
+            guidance = "EXIT_TRAIL"
+            decision_label = "TRAIL_EXIT"
+            action_text = "Runner exit karo. Trail hit ho gaya."
+            reason = (
+                f"Runner pulled back {drawdown_from_peak_pct:.2f}% from peak option price. "
+                f"Dynamic trail ({dynamic_trail_pct:.1f}%) hit ho gaya."
+            )
+        elif trail_active_without_partial:
+            guidance = "EXIT_TRAIL"
+            decision_label = "TRAIL_EXIT"
+            action_text = "Profit trail hit ho gaya. Winner ko protect karke exit lo."
+            reason = (
+                f"Peak se {drawdown_from_peak_pct:.2f}% pullback aaya after profit-lock activation. "
+                "Trailing exit ka purpose winner ko hold karna tha, not give it all back."
+            )
+        elif profit_lock_armed and psar_break and (pnl_percent is not None and pnl_percent > 0):
+            guidance = "EXIT_PROFIT_PROTECT"
+            decision_label = "TRAIL_EXIT"
+            action_text = "Profit protect exit lo. Ratcheting support toot gaya."
+            reason = (
+                f"PSAR-style trail level {psar_style_level} break ho gaya after profit-lock activation. "
+                "Trend-following exit ka purpose winner ko hold karna aur reversal par lock-in karna hai."
+            )
+        elif not partial_booked and pnl_percent is not None and pnl_percent >= target_pct and momentum_and_pressure_supportive:
+            guidance = "HOLD_STRONG"
+            decision_label = "HOLD_STRONG"
+            action_text = "Profit ko chalne do. Trail active hai, jaldi exit mat karo."
+            reason = (
+                f"Target zone (+{target_pct:.0f}%) hit ho chuka hai aur momentum abhi supportive hai. "
+                "Trailing-stop logic ke hisaab se winner ko run karne dena better hai."
+            )
+        elif not partial_booked and pnl_percent is not None and pnl_percent >= target_pct:
+            guidance = "BOOK_PARTIAL"
+            decision_label = "BOOK_PARTIAL_NOW"
+            action_text = "Abhi partial book karo. Runner ko trail par chhodo."
+            reason = f"Option premium reached {pnl_percent:.2f}% P&L. Book partial near the +{target_pct:.0f}% objective and trail the rest."
+        elif slow_positive_theta_risk:
+            guidance = "EXIT_PROFIT_PROTECT"
+            decision_label = "TRAIL_EXIT"
+            action_text = "Small profit ko protect karo. Slow option move me theta risk badh raha hai."
+            reason = (
+                f"Trade profit me hai but {time_stop_warn_minutes} min ke andar move decisive nahi bana. "
+                "Option buyer ke liye aise slow winners jaldi fade ho sakte hain, isliye protect karna better hai."
+            )
+        elif minutes_active >= time_stop_exit_minutes and no_expansion and (pnl_percent is None or pnl_percent <= 0):
+            guidance = "EXIT_TIMESTOP"
+            decision_label = "TIME_STOP_EXIT"
+            action_text = "Abhi exit karo. Move expand nahi hua aur time nikal gaya."
+            reason = (
+                f"{time_stop_exit_minutes} min ke baad bhi move expand nahi hua. "
+                "Time stop exit better hai than waiting for theta bleed."
+            )
+        elif minutes_active >= time_stop_warn_minutes and no_expansion:
+            guidance = "TIME_DECAY_RISK"
+            decision_label = "HIGH_NOISE_SKIP"
+            action_text = "Fresh add mat karo. Setup abhi noisy hai aur premium expand nahi kar raha."
+            reason = (
+                f"{time_stop_warn_minutes} min ke andar meaningful expansion nahi aayi. "
+                "Aise slow option trades theta bleed me badal sakte hain."
+            )
+            if expansion_ratio is not None:
+                reason += f" Premium expansion ratio {expansion_ratio:.2f} raha."
+        elif pressure_flip_exit:
             guidance = "EXIT_BIAS"
+            decision_label = "THESIS_FAILED_EXIT"
+            action_text = "Abhi exit karo. Live option pressure trade ke opposite flip ho gaya."
+            if confirmed_flip:
+                decision_label = confirmed_flip["label"]
+                action_text = confirmed_flip["action_text"]
+            pressure_text = (live_pressure_summary or {}).get("summary") or live_pressure_bias
+            reason = (
+                f"Entry ke baad pressure bias {entry_pressure_bias or 'UNKNOWN'} se flip hokar "
+                f"{live_pressure_bias or 'OPPOSITE'} ho gaya. {pressure_text}. "
+                "Jab price structure aur options participation saath na dein, thesis fail maana better hai."
+            )
+        elif structure_break and vwap_break:
+            guidance = "EXIT_BIAS"
+            decision_label = "THESIS_FAILED_EXIT"
+            action_text = "Abhi exit karo. Structure aur VWAP dono break ho gaye."
+            if confirmed_flip:
+                decision_label = confirmed_flip["label"]
+                action_text = confirmed_flip["action_text"]
             reason = "Recent 1-minute structure broke with VWAP loss. This is more than a normal pullback."
         elif five_min_break and minutes_active >= 3:
             guidance = "EXIT_BIAS"
+            decision_label = "THESIS_FAILED_EXIT"
+            action_text = "Abhi cautious exit lo. 5m structure against ja raha hai."
             reason = "Previous 5-minute structure broke against your trade. Momentum may be losing control."
-        elif minutes_active >= 5 and (pnl_points is not None and pnl_points <= 0):
-            guidance = "TIME_DECAY_RISK"
-            reason = "Move has not expanded yet. For an option buyer, slow trades can become time-decay trades."
         elif momentum_fading and (pnl_points is not None and pnl_points > 0):
-            guidance = "BOOK_PARTIAL"
-            reason = "Profit is available and momentum is slowing. Partial booking can reduce pressure."
+            if profit_lock_armed:
+                guidance = "HOLD_WITH_TRAIL"
+                decision_label = "HOLD_CONTEXT"
+                action_text = "Profit me ho. Trail active rakho, random profit booking mat karo."
+                reason = (
+                    "Momentum thoda slow hua hai, lekin profit-lock arm ho chuka hai. "
+                    "Winner ko trail ke saath hold karna jaldi exit se better hai."
+                )
+            else:
+                guidance = "BOOK_PARTIAL"
+                decision_label = "BOOK_PARTIAL_NOW"
+                action_text = "Profit me ho. Partial book karna safer hai."
+                reason = "Profit is available and momentum is slowing. Partial booking can reduce pressure."
         elif momentum_strong and (pnl_points is not None and pnl_points > 0):
             guidance = "HOLD_STRONG"
+            decision_label = "HOLD_STRONG"
+            action_text = "Abhi hold karo. Momentum strong hai."
             reason = "Fresh momentum is expanding. Do not react to a normal 1-minute pullback."
         elif momentum_fading:
             guidance = "MOMENTUM_PAUSE"
+            decision_label = "WAIT_CONFIRMATION"
+            action_text = "Abhi wait karo. Momentum pause hai, flip abhi confirm nahi hai."
             reason = "Momentum paused, but this still looks like a normal pullback unless structure breaks."
+        elif pressure_flip_warning:
+            guidance = "THESIS_WEAKENING"
+            decision_label = "WAIT_CONFIRMATION"
+            action_text = "Trade weak ho raha hai. Exit ke liye prepared raho agar next candle support na kare."
+            pressure_text = (live_pressure_summary or {}).get("summary") or live_pressure_bias
+            reason = (
+                f"Live pressure ab trade ke opposite side ja raha hai: {pressure_text}. "
+                "Abhi hard exit nahi, lekin thesis weaken ho rahi hai."
+            )
+        elif profit_lock_armed and psar_break:
+            guidance = "THESIS_WEAKENING"
+            decision_label = "WAIT_CONFIRMATION"
+            action_text = "Profit trail ke paas ho. Agar next candle recover na kare to exit lo."
+            reason = (
+                f"PSAR-style trail level {psar_style_level} ke paas price aa gaya hai. "
+                "Winner ko hold karo, but give-back ko ignore mat karo."
+            )
         elif len(last_two_closes) == 2 and ((signal == "CE" and last_two_closes[-1] <= last_two_closes[-2]) or (signal == "PE" and last_two_closes[-1] >= last_two_closes[-2])):
             guidance = "NORMAL_PULLBACK"
+            decision_label = "HOLD_CONTEXT"
+            action_text = "Small pullback normal hai. Abhi panic exit mat karo."
             reason = "A small opposite candle is normal. No real structure damage yet."
 
         if time_regime == "ENDGAME" and (pnl_points is not None and pnl_points > 0) and guidance in {"HOLD_STRONG", "HOLD_WITH_TRAIL"}:
             guidance = "BOOK_PARTIAL"
+            decision_label = "BOOK_PARTIAL_NOW"
+            action_text = "Late-day profit hai. Partial book karna safer hai."
             reason = "Late-day move is in profit; partial booking is safer for an option buyer."
 
         return {
             "instrument": self.instrument,
             "signal": signal,
+            "signal_type": self.active_trade_monitor.get("signal_type"),
+            "setup_bucket": setup_bucket,
             "guidance": guidance,
+            "decision_label": decision_label,
+            "journal_note": self._build_journal_note(
+                decision_label,
+                action_text,
+                f"flip_score={(flip_score or {}).get('score')}" if flip_score else None,
+            ),
+            "action_text": action_text,
             "reason": reason,
             "structure": structure_text,
             "price": last_close,
@@ -954,11 +1816,39 @@ class SignalService:
             "option_spread": option_snapshot.get("spread") if option_snapshot else None,
             "strike": strike,
             "pnl_points": pnl_points,
+            "pnl_percent": pnl_percent,
             "max_favorable_ltp": self.active_trade_monitor.get("max_favorable_option_ltp"),
             "max_adverse_ltp": self.active_trade_monitor.get("max_adverse_option_ltp"),
+            "drawdown_from_peak_pct": drawdown_from_peak_pct,
+            "stop_loss_pct": stop_loss_pct,
+            "target_pct": target_pct,
+            "trail_pct": trail_pct,
+            "dynamic_trail_pct": dynamic_trail_pct,
+            "flip_score": (flip_score or {}).get("score"),
+            "flip_confidence": (flip_score or {}).get("confidence"),
+            "expansion_ratio": expansion_ratio,
+            "actual_option_move": expansion_metrics.get("actual_option_move"),
+            "expected_option_move": expansion_metrics.get("expected_option_move"),
+            "premium_supportive": premium_supportive,
+            "stop_loss_option_price": self.active_trade_monitor.get("stop_loss_option_price"),
+            "first_target_option_price": self.active_trade_monitor.get("first_target_option_price"),
+            "invalidate_underlying_price": invalidate_underlying_price,
+            "time_stop_warn_minutes": time_stop_warn_minutes,
+            "time_stop_exit_minutes": time_stop_exit_minutes,
+            "partial_booked": partial_booked,
+            "profit_lock_armed": profit_lock_armed,
+            "profit_lock_trigger_pct": profit_lock_trigger_pct,
+            "psar_style_level": psar_style_level,
+            "live_atr": live_atr,
+            "expiry_fast_decay": expiry_fast_decay,
+            "theta_risk_high": theta_risk_high,
             "quality": self.active_trade_monitor["quality"],
             "time_regime": time_regime,
             "heikin_ashi": (self.strategy.last_heikin_ashi or {}).get("bias"),
+            "risk_note": risk_note,
+            "entry_pressure_bias": entry_pressure_bias,
+            "live_pressure_bias": live_pressure_bias,
+            "live_pressure_summary": (live_pressure_summary or {}).get("summary"),
         }
 
     def _maybe_send_trade_monitor_update(self, latest_5m_candle):
@@ -984,8 +1874,10 @@ class SignalService:
         self._safe_save_trade_monitor_event(minute_key, monitor_data)
         self._safe_save_option_signal_outcome(minute_key, monitor_data)
         self.notifier.send_trade_monitor_update(monitor_data)
+        if monitor_data["guidance"] == "BOOK_PARTIAL":
+            self.active_trade_monitor["partial_booked"] = True
 
-        if monitor_data["guidance"] == "EXIT_BIAS" or self.active_trade_monitor["minutes_active"] >= 20:
+        if monitor_data["guidance"] in {"EXIT_BIAS", "EXIT_STOPLOSS", "EXIT_TRAIL", "EXIT_TIMESTOP"} or self.active_trade_monitor["minutes_active"] >= 20:
             self.active_trade_monitor = None
 
     def _classify_base_bias(self, price, vwap_value, oi_bias, oi_ladder_data):
@@ -1055,7 +1947,11 @@ class SignalService:
         signal_grade = (self.strategy.last_signal_grade or "SKIP").upper()
         confidence = (self.strategy.last_confidence or "LOW").upper()
         regime = (self.strategy.last_regime or "UNKNOWN").upper()
-        score = float(self.strategy.last_entry_score or self.strategy.last_score or 0)
+        score = float(
+            getattr(self.strategy, "last_entry_score", None)
+            or getattr(self.strategy, "last_score", 0)
+            or 0
+        )
 
         if signal_type == "CONTINUATION" and not Config.ALLOW_CONTINUATION_ENTRY:
             breakout_memory = getattr(self.strategy, "breakout_memory", None) or {}
@@ -1074,9 +1970,9 @@ class SignalService:
                 confidence=confidence,
                 regime=regime,
                 candle_time=candle_time,
-                score=self.strategy.last_score,
-                entry_score=self.strategy.last_entry_score,
-                pressure_conflict_level=self.strategy.last_pressure_conflict_level,
+                score=getattr(self.strategy, "last_score", 0),
+                entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
+                pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
             )
         if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
             return False
@@ -1089,7 +1985,7 @@ class SignalService:
                 regime=regime,
                 candle_time=candle_time,
                 score=score,
-                pressure_conflict_level=self.strategy.last_pressure_conflict_level,
+                pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
             )
         ):
             return True
@@ -1099,7 +1995,7 @@ class SignalService:
             confidence=confidence,
             regime=regime,
             score=score,
-            pressure_conflict_level=self.strategy.last_pressure_conflict_level,
+            pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
         ):
             return True
         if signal_type == "BREAKOUT_CONFIRM" and signal_grade == "B" and confidence in {"MEDIUM", "HIGH"} and score >= 80:
@@ -1107,6 +2003,16 @@ class SignalService:
         if signal_grade not in Config.OPTION_BUYER_ALERT_GRADES:
             return False
         if confidence not in {"MEDIUM", "HIGH"}:
+            return False
+        critical_cautions = {
+            "participation_spread_wide",
+            "participation_weak",
+            "adx_not_confirmed",
+            "higher_tf_not_aligned",
+            "oi_divergence_against",
+        }
+        current_cautions = set(getattr(self.strategy, "last_cautions", []) or [])
+        if current_cautions.intersection(critical_cautions) and score < 88:
             return False
         return True
 
@@ -1635,9 +2541,13 @@ class SignalService:
             "ce_iv": atm_ce.get("iv", 0) if atm_ce else 0,
             "pe_iv": atm_pe.get("iv", 0) if atm_pe else 0,
             "ce_top_bid_price": atm_ce.get("top_bid_price") if atm_ce else None,
+            "ce_top_bid_quantity": atm_ce.get("top_bid_quantity") if atm_ce else None,
             "ce_top_ask_price": atm_ce.get("top_ask_price") if atm_ce else None,
+            "ce_top_ask_quantity": atm_ce.get("top_ask_quantity") if atm_ce else None,
             "pe_top_bid_price": atm_pe.get("top_bid_price") if atm_pe else None,
+            "pe_top_bid_quantity": atm_pe.get("top_bid_quantity") if atm_pe else None,
             "pe_top_ask_price": atm_pe.get("top_ask_price") if atm_pe else None,
+            "pe_top_ask_quantity": atm_pe.get("top_ask_quantity") if atm_pe else None,
             "ce_spread": atm_ce.get("spread") if atm_ce else None,
             "pe_spread": atm_pe.get("spread") if atm_pe else None,
             "ce_delta": atm_ce.get("delta") if atm_ce else None,
@@ -1695,9 +2605,13 @@ class SignalService:
             "ce_iv": atm_ce.get("iv", 0) if atm_ce else 0,
             "pe_iv": atm_pe.get("iv", 0) if atm_pe else 0,
             "ce_top_bid_price": atm_ce.get("top_bid_price") if atm_ce else None,
+            "ce_top_bid_quantity": atm_ce.get("top_bid_quantity") if atm_ce else None,
             "ce_top_ask_price": atm_ce.get("top_ask_price") if atm_ce else None,
+            "ce_top_ask_quantity": atm_ce.get("top_ask_quantity") if atm_ce else None,
             "pe_top_bid_price": atm_pe.get("top_bid_price") if atm_pe else None,
+            "pe_top_bid_quantity": atm_pe.get("top_bid_quantity") if atm_pe else None,
             "pe_top_ask_price": atm_pe.get("top_ask_price") if atm_pe else None,
+            "pe_top_ask_quantity": atm_pe.get("top_ask_quantity") if atm_pe else None,
             "ce_spread": atm_ce.get("spread") if atm_ce else None,
             "pe_spread": atm_pe.get("spread") if atm_pe else None,
             "ce_delta": atm_ce.get("delta") if atm_ce else None,
@@ -2198,6 +3112,35 @@ class SignalService:
         watch_bucket = balanced_pro.get("watch_bucket") or self.strategy.last_watch_bucket or "WATCH_SETUP"
         if watch_bucket == "WATCH_CONTEXT":
             return None
+        risk_profile = self._resolve_trade_risk_profile(
+            setup_type=setup,
+            quality=balanced_pro.get("quality") if balanced_pro else None,
+            confidence=getattr(self.strategy, "last_confidence", None),
+            cautions=getattr(self.strategy, "last_cautions", None),
+        )
+        no_trade_zone = self._classify_no_trade_zone(balanced_pro, signal=direction)
+        structure_suggestion = self._build_option_structure_suggestion(
+            signal=direction,
+            selected_strike=self.strike_selector.select_strike(
+                price=price,
+                signal=direction,
+                volume_signal="NORMAL",
+                strategy_score=self.strategy.last_score,
+                pressure_metrics=None,
+                cautions=getattr(self.strategy, "last_cautions", None),
+                option_chain_data=self.option_data,
+                setup_type=setup,
+                time_regime=(balanced_pro or {}).get("time_regime"),
+            ) if self.option_data else None,
+            selected_option_contract=None,
+            balanced_pro=balanced_pro,
+            risk_profile=risk_profile,
+        )
+        flip_context = self._infer_flip_context(
+            direction=direction,
+            setup=setup,
+            candidate_reason=candidate_reason,
+        )
 
         context_bits = [
             f"Bias={balanced_pro.get('bias')}",
@@ -2207,13 +3150,31 @@ class SignalService:
         ]
         context = " | ".join(bit for bit in context_bits if bit and "None" not in bit)
         if candidate_signal in {"CE", "PE"}:
-            action_hint = "Candidate mila hai. Entry tabhi lena jab candle close hold kare aur chart bhi support kare."
+            if flip_context:
+                action_hint = (
+                    f"{flip_context['failed_side']} thesis weak ho rahi hai. "
+                    f"{flip_context['buy_side']} tab socho jab reclaim/rejection candle hold kare."
+                )
+            else:
+                action_hint = "Candidate mila hai. Entry tabhi lena jab candle close hold kare aur chart bhi support kare."
         elif setup == "RETEST":
             action_hint = "Retest hold kare tabhi entry socho. Break ho to skip karo."
         elif setup == "REVERSAL":
-            action_hint = "Reversal hai. Next candle confirm kare tabhi entry lena."
+            if flip_context:
+                action_hint = (
+                    f"{flip_context['failed_side']} fail lag raha hai. "
+                    f"Agar next candle confirm kare to {flip_context['buy_side']} prefer karo."
+                )
+            else:
+                action_hint = "Reversal hai. Next candle confirm kare tabhi entry lena."
         elif setup == "BREAKOUT_CONFIRM":
-            action_hint = "Breakout confirm zone hold kare to entry socho. Instant chase mat karo."
+            if flip_context:
+                action_hint = (
+                    f"{flip_context['failed_side']} side ka move reject hua lag raha hai. "
+                    f"{flip_context['buy_side']} tabhi lo jab confirm zone hold kare."
+                )
+            else:
+                action_hint = "Breakout confirm zone hold kare to entry socho. Instant chase mat karo."
         elif trigger_price is not None:
             side = "above" if direction == "CE" else "below"
             action_hint = f"Abhi sirf watch karo. Entry se pehle clean 5m close {side} {trigger_price} ka wait karo."
@@ -2247,26 +3208,65 @@ class SignalService:
             "confidence_summary": self.strategy.last_confidence_summary,
             "score": self.strategy.last_context_score or self.strategy.last_score,
             "entry_score": self.strategy.last_entry_score,
+            "setup_bucket": risk_profile["setup_bucket"],
             "price": round(price, 2) if price is not None else None,
             "trigger_price": round(trigger_price, 2) if trigger_price is not None else None,
             "invalidate_price": round(invalidate_price, 2) if invalidate_price is not None else None,
             "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
+            "option_stop_loss_pct": risk_profile["hard_premium_stop_pct"],
+            "option_target_pct": risk_profile["target_pct"],
+            "option_trail_pct": risk_profile["trail_from_peak_pct"],
+            "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
+            "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
+            "risk_note": risk_profile["risk_note"],
+            "no_trade_zone": no_trade_zone,
+            "structure_suggestion": structure_suggestion,
             "blockers": blockers,
             "cautions": list(self.strategy.last_cautions or []),
             "watch_bucket": watch_bucket,
+            "decision_label": (no_trade_zone or {}).get("label") or (self._flip_watch_label(direction) if flip_context else f"WATCH_{direction}_SETUP"),
+            "journal_note": self._build_journal_note(
+                (no_trade_zone or {}).get("label") or (self._flip_watch_label(direction) if flip_context else f"WATCH_{direction}_SETUP"),
+                (no_trade_zone or {}).get("action_text") or action_hint,
+                (no_trade_zone or {}).get("reason"),
+            ),
             "context": f"{context} | ContextScore={self.strategy.last_context_score} | EntryScore={self.strategy.last_entry_score}",
             "reason": candidate_reason,
             "action_hint": action_hint,
+            "action_text": (no_trade_zone or {}).get("action_text") or (structure_suggestion or {}).get("action_text") or action_hint,
             "entry_if": entry_if,
             "avoid_if": avoid_if,
             "participation_read": participation_read,
             "pressure_read": pressure_summary.get("summary") if pressure_summary else None,
+            "flip_context": flip_context,
             "key": (
                 self.instrument,
                 direction,
                 setup,
             ),
         }
+
+    @staticmethod
+    def _infer_flip_context(direction, setup, candidate_reason):
+        direction = (direction or "").upper()
+        setup = (setup or "").upper()
+        reason = (candidate_reason or "").lower()
+
+        if direction not in {"CE", "PE"}:
+            return None
+
+        buy_side = direction
+        failed_side = "PE" if direction == "CE" else "CE"
+        reclaim_words = ("reclaim", "rejection", "reversal", "trap")
+        setup_supports_flip = setup in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}
+
+        if setup_supports_flip or any(word in reason for word in reclaim_words):
+            return {
+                "buy_side": buy_side,
+                "failed_side": failed_side,
+                "decision_label": f"WATCH_{buy_side}_FLIP",
+            }
+        return None
 
     def _maybe_send_watch_alert(self, watch_payload):
         if not watch_payload or not Config.ENABLE_ALERTS:
@@ -2424,11 +3424,23 @@ class SignalService:
                         'context_score': self.strategy.last_context_score,
                         'hybrid_mode': pre_ml_balanced_pro.get('setup', '').startswith('HYBRID')
                     },
-                    entry_plan=self.strategy.last_entry_plan
+                    entry_plan=self.strategy.last_entry_plan,
+                    participation_metrics=participation_metrics,
+                    market_regime=self.strategy.last_regime,
                 )
                 
                 # Apply ML filter
                 should_take, ml_reason, ml_prob = self.ml_filter.should_take_signal(ml_features)
+                ml_explanation = self.ml_filter.explain_decision(ml_features, probability=ml_prob)
+                tags = ",".join(ml_explanation.get("profile_tags") or [])
+                positives = ",".join(ml_explanation.get("positives") or [])
+                negatives = ",".join(ml_explanation.get("negatives") or [])
+                if tags:
+                    ml_features["decision_profile_tags"] = tags
+                if positives:
+                    ml_features["decision_positives"] = positives
+                if negatives:
+                    ml_features["decision_negatives"] = negatives
                 
                 if not should_take:
                     # ML filtered out the signal
@@ -2466,6 +3478,10 @@ class SignalService:
                     volume_signal=volume_signal,
                     strategy_score=self.strategy.last_score,
                     pressure_metrics=pressure_metrics,
+                    cautions=getattr(self.strategy, "last_cautions", None),
+                    option_chain_data=self.option_data,
+                    setup_type=(balanced_pro or {}).get("setup"),
+                    time_regime=(balanced_pro or {}).get("time_regime"),
                 )
             option_candidates = self._build_option_candidates(
                 underlying_price=price,
@@ -2477,7 +3493,15 @@ class SignalService:
         selected_strike = None
         strike_reason = None
         selected_option_contract = None
+        no_trade_zone = None
+        signal_risk_profile = None
         if signal and self.option_data:
+            signal_risk_profile = self._resolve_trade_risk_profile(
+                setup_type=self.strategy.last_signal_type,
+                quality=balanced_pro.get("quality"),
+                confidence=self.strategy.last_confidence,
+                cautions=getattr(self.strategy, "last_cautions", None),
+            )
             selected_strike = preferred_strikes.get(signal)
             direction_candidates = [item for item in option_candidates if item["candidate_direction"] == signal]
             if direction_candidates:
@@ -2501,8 +3525,59 @@ class SignalService:
                     volume_signal=volume_signal,
                     strategy_score=self.strategy.last_score,
                     pressure_metrics=pressure_metrics,
+                    cautions=getattr(self.strategy, "last_cautions", None),
+                    option_chain_data=self.option_data,
+                    setup_type=self.strategy.last_signal_type,
+                    time_regime=(balanced_pro or {}).get("time_regime"),
                 )
                 selected_option_contract = self._get_option_contract_snapshot(selected_strike, signal, before_ts=candle_5m.get("close_time") or candle_5m["time"])
+
+            no_trade_zone = self._classify_no_trade_zone(
+                balanced_pro=balanced_pro,
+                signal=signal,
+                selected_option_contract=selected_option_contract,
+            )
+            if no_trade_zone:
+                signal = None
+                reason = f"No-trade zone filtered ({no_trade_zone['label']}: {no_trade_zone['reason']})"
+
+        microstructure_reason = None
+        structure_suggestion = None
+        if signal:
+            strict_confirmation = (self.strategy.last_signal_type or "").upper() in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}
+            confirmed, micro_reason, _, alternative_strike = self._confirm_signal_microstructure(
+                signal=signal,
+                selected_strike=selected_strike,
+                timestamp=candle_5m["time"],
+                price=price,
+                strict=strict_confirmation,
+            )
+            if not confirmed and alternative_strike and alternative_strike != selected_strike:
+                selected_strike = alternative_strike
+                selected_option_contract = self._get_option_contract_snapshot(
+                    selected_strike,
+                    signal,
+                    before_ts=candle_5m.get("close_time") or candle_5m["time"],
+                )
+                confirmed, micro_reason, _, _ = self._confirm_signal_microstructure(
+                    signal=signal,
+                    selected_strike=selected_strike,
+                    timestamp=candle_5m["time"],
+                    price=price,
+                    strict=strict_confirmation,
+                )
+            if not confirmed:
+                signal = None
+                reason = f"Microstructure filtered ({micro_reason})"
+            else:
+                microstructure_reason = micro_reason
+                structure_suggestion = self._build_option_structure_suggestion(
+                    signal=signal,
+                    selected_strike=selected_strike,
+                    selected_option_contract=selected_option_contract,
+                    balanced_pro=balanced_pro,
+                    risk_profile=signal_risk_profile,
+                )
 
         if option_candidates:
             candidate_rows = []
@@ -2556,6 +3631,8 @@ class SignalService:
             enriched_reason += f" | oi_summary={oi_ladder_data['oi_summary']}"
         if balanced_pro.get("pressure_summary", {}).get("summary"):
             enriched_reason += f" | pressure_summary={balanced_pro['pressure_summary']['summary']}"
+        if microstructure_reason:
+            enriched_reason += f" | microstructure={microstructure_reason}"
         if self.option_data_source:
             enriched_reason += f" | option_data_source={self.option_data_source}"
         if self.option_data_ts:
@@ -2573,6 +3650,8 @@ class SignalService:
             enriched_reason += f" | cautions={', '.join(self.strategy.last_cautions)}"
         if strike_reason:
             enriched_reason += f" | strike_reason={strike_reason}"
+        if no_trade_zone:
+            enriched_reason += f" | no_trade_zone={no_trade_zone['label']}"
 
         oi_mode = "OI_ONLY_FALLBACK" if fallback_context and fallback_context["fallback_used"] else "FULL_OPTION_BAND"
 
@@ -2620,6 +3699,12 @@ class SignalService:
         # Send notification if signal
         if signal:
             option_signal_price = (selected_option_contract or {}).get("ltp") if selected_option_contract else price
+            risk_profile = self._resolve_trade_risk_profile(
+                setup_type=self.strategy.last_signal_type,
+                quality=balanced_pro.get("quality"),
+                confidence=self.strategy.last_confidence,
+                cautions=getattr(self.strategy, "last_cautions", None),
+            )
             print(f"\n[Signal Service] SIGNAL GENERATED: {signal}")
             print(f"Score: {self.strategy.last_score} | Confidence: {self.strategy.last_confidence}")
             print(f"Strike: {selected_strike} | Reason: {reason}")
@@ -2632,6 +3717,14 @@ class SignalService:
                     "confidence": self.strategy.last_confidence,
                     "confidence_summary": self.strategy.last_confidence_summary,
                     "signal_type": self.strategy.last_signal_type,
+                    "setup_bucket": risk_profile["setup_bucket"],
+                    "decision_label": self._entry_decision_label(signal),
+                    "action_text": f"{signal} confirmed hai. Entry sirf apne planned risk ke saath lo.",
+                    "journal_note": self._build_journal_note(
+                        self._entry_decision_label(signal),
+                        f"{signal} confirmed hai. Entry sirf apne planned risk ke saath lo.",
+                        strike_reason,
+                    ),
                     "signal_grade": self.strategy.last_signal_grade,
                     "price": round(option_signal_price, 2) if option_signal_price is not None else None,
                     "spot_price": round(price, 2) if price is not None else None,
@@ -2639,6 +3732,18 @@ class SignalService:
                     "invalidate_price": self.strategy.last_entry_plan.get("invalidate_price"),
                     "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
                     "time_regime": balanced_pro["time_regime"],
+                    "option_stop_loss_pct": risk_profile["hard_premium_stop_pct"],
+                    "option_target_pct": risk_profile["target_pct"],
+                    "option_trail_pct": risk_profile["trail_from_peak_pct"],
+                    "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
+                    "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
+                    "risk_note": risk_profile["risk_note"],
+                    "structure_suggestion": structure_suggestion,
+                    "rr_ratio": round(
+                        float(risk_profile["target_pct"]) /
+                        max(float(risk_profile["hard_premium_stop_pct"]), 1.0),
+                        2,
+                    ),
                     "reason": enriched_reason,
                     "pressure_read": (balanced_pro.get("pressure_summary") or {}).get("summary"),
                     "oi_read": (oi_ladder_data or {}).get("oi_summary"),

@@ -4,6 +4,7 @@
 import argparse
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 import psycopg2
 
@@ -103,6 +104,182 @@ def print_signal_review(day, rows):
         if strike_reason:
             print(f"why_chosen: {strike_reason}")
         print(f"spot_context: spot={_fmt(underlying_price)}")
+
+
+def _time_bucket(signal_ts):
+    if signal_ts is None:
+        return "UNKNOWN"
+    hhmm = signal_ts.strftime("%H:%M")
+    if hhmm < "09:40":
+        return "OPENING"
+    if hhmm < "11:30":
+        return "MID_MORNING"
+    if hhmm < "13:30":
+        return "MIDDAY"
+    if hhmm < "14:45":
+        return "LATE_DAY"
+    return "ENDGAME"
+
+
+def _safe_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_daily_summary(rows):
+    summary = {
+        "total_signals": len(rows),
+        "chosen_top_rank_count": 0,
+        "better_alternative_count": 0,
+        "positive_pnl_count": 0,
+        "sum_pnl": 0.0,
+        "pnl_count": 0,
+        "time_buckets": defaultdict(lambda: {"signals": 0, "wins": 0, "sum_pnl": 0.0, "pnl_count": 0}),
+        "setups": defaultdict(lambda: {"signals": 0, "wins": 0, "sum_pnl": 0.0, "pnl_count": 0}),
+    }
+
+    for row in rows:
+        (
+            signal_ts,
+            instrument,
+            signal,
+            strike,
+            buy_price,
+            underlying_price,
+            score,
+            setup_type,
+            strike_reason,
+            chosen_candidate_score,
+            chosen_expected_edge,
+            chosen_rank,
+            chosen_outcome_pnl,
+            chosen_max_fav,
+            top_strike,
+            top_buy_price,
+            top_candidate_score,
+            top_expected_edge,
+            top_outcome_pnl,
+            top_max_fav,
+        ) = row
+
+        pnl = _safe_float(chosen_outcome_pnl)
+        top_pnl = _safe_float(top_outcome_pnl)
+        bucket = _time_bucket(signal_ts)
+        setup_key = setup_type or "UNKNOWN"
+
+        bucket_stats = summary["time_buckets"][bucket]
+        setup_stats = summary["setups"][setup_key]
+        for stats in (bucket_stats, setup_stats):
+            stats["signals"] += 1
+            if pnl is not None:
+                stats["sum_pnl"] += pnl
+                stats["pnl_count"] += 1
+                if pnl > 0:
+                    stats["wins"] += 1
+
+        if pnl is not None:
+            summary["sum_pnl"] += pnl
+            summary["pnl_count"] += 1
+            if pnl > 0:
+                summary["positive_pnl_count"] += 1
+
+        if top_strike is not None and top_strike == strike:
+            summary["chosen_top_rank_count"] += 1
+        elif top_strike is not None:
+            summary["better_alternative_count"] += 1
+            if top_pnl is not None and pnl is not None and top_pnl > pnl:
+                summary["better_alternative_count"] += 0
+
+    return summary
+
+
+def print_daily_summary(day, rows):
+    summary = build_daily_summary(rows)
+    print()
+    print("DAILY SUMMARY")
+    print("-" * 88)
+    print(
+        "signals={signals} | wins={wins} | avg_pnl={avg_pnl} | chosen_top_rank={top_rank}/{signals} | better_alt={better_alt}".format(
+            signals=summary["total_signals"],
+            wins=summary["positive_pnl_count"],
+            avg_pnl=_fmt(summary["sum_pnl"] / summary["pnl_count"]) if summary["pnl_count"] else "-",
+            top_rank=summary["chosen_top_rank_count"],
+            better_alt=summary["better_alternative_count"],
+        )
+    )
+
+    if summary["time_buckets"]:
+        print("time_buckets:")
+        for bucket, stats in sorted(summary["time_buckets"].items()):
+            avg_pnl = _fmt(stats["sum_pnl"] / stats["pnl_count"]) if stats["pnl_count"] else "-"
+            print(f"  {bucket}: signals={stats['signals']} wins={stats['wins']} avg_pnl={avg_pnl}")
+
+    if summary["setups"]:
+        print("setups:")
+        ranked = sorted(
+            summary["setups"].items(),
+            key=lambda item: (-(item[1]["sum_pnl"] / item[1]["pnl_count"]) if item[1]["pnl_count"] else float("inf"), -item[1]["signals"], item[0]),
+        )
+        for setup, stats in ranked[:6]:
+            avg_pnl = _fmt(stats["sum_pnl"] / stats["pnl_count"]) if stats["pnl_count"] else "-"
+            print(f"  {setup}: signals={stats['signals']} wins={stats['wins']} avg_pnl={avg_pnl}")
+    recommendations = build_recommendations(summary)
+    if recommendations:
+        print("recommendations:")
+        for item in recommendations:
+            print(f"  - {item}")
+
+
+def build_recommendations(summary):
+    recommendations = []
+    total = int(summary.get("total_signals") or 0)
+    better_alt = int(summary.get("better_alternative_count") or 0)
+    pnl_count = int(summary.get("pnl_count") or 0)
+    win_count = int(summary.get("positive_pnl_count") or 0)
+
+    if total >= 3 and better_alt / max(total, 1) >= 0.35:
+        recommendations.append(
+            "strike selector ko tighten karo; bot ka chosen strike kaafi baar top-ranked candidate nahi tha."
+        )
+
+    if pnl_count >= 3 and win_count / max(pnl_count, 1) < 0.4:
+        recommendations.append(
+            "overall signal quality weak hai; breakout/continuation score floors 2-3 points badhao."
+        )
+
+    for bucket, stats in sorted(summary.get("time_buckets", {}).items()):
+        signals = int(stats.get("signals") or 0)
+        pnl_samples = int(stats.get("pnl_count") or 0)
+        wins = int(stats.get("wins") or 0)
+        avg_pnl = (stats["sum_pnl"] / pnl_samples) if pnl_samples else None
+        if signals >= 2 and pnl_samples >= 2 and wins / max(pnl_samples, 1) <= 0.34:
+            recommendations.append(
+                f"{bucket} bucket weak lag raha hai; is window me threshold stricter rakho ya watch-only mode use karo."
+            )
+        elif signals >= 2 and avg_pnl is not None and avg_pnl >= 8:
+            recommendations.append(
+                f"{bucket} bucket strong perform kar raha hai; yahan confirmation setups ko thoda priority de sakte ho."
+            )
+
+    ranked_setups = sorted(
+        summary.get("setups", {}).items(),
+        key=lambda item: (
+            -((item[1]["sum_pnl"] / item[1]["pnl_count"]) if item[1]["pnl_count"] else -9999),
+            -item[1]["signals"],
+            item[0],
+        ),
+    )
+    for setup, stats in ranked_setups[:2]:
+        if int(stats.get("signals") or 0) >= 2 and int(stats.get("wins") or 0) == 0:
+            recommendations.append(
+                f"{setup} setup recent sample me weak raha; iske liye stricter confirmation ya temporary downgrade socho."
+            )
+
+    return recommendations[:6]
 
 
 def _fmt(value):
@@ -284,6 +461,7 @@ def main():
     with psycopg2.connect(Config.get_db_dsn()) as conn:
         with conn.cursor() as cur:
             rows = fetch_all(cur, query, (args.date, args.date))
+    print_daily_summary(args.date, rows)
     print_signal_review(args.date, rows)
 
 
