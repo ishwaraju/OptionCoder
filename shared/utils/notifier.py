@@ -349,6 +349,9 @@ class Notifier:
         structure_suggestion = trade_data.get("structure_suggestion")
         pressure_read = trade_data.get("pressure_read")
         oi_read = trade_data.get("oi_read")
+        greek_summary = trade_data.get("greek_summary")
+        projected_premium_sl = trade_data.get("projected_premium_sl")
+        projected_premium_t1 = trade_data.get("projected_premium_t1")
         setup_label = _setup_label(signal_type)
         lines = []
         header = f"{instrument} ACTION {signal}" if instrument else f"ACTION {signal}"
@@ -369,21 +372,32 @@ class Notifier:
             summary.append(confidence)
         if summary:
             lines.append(" | ".join(summary))
-        levels = []
+        contract_bits = []
+        if strike is not None and signal in {"CE", "PE"}:
+            contract_bits.append(f"{strike} {signal}")
+        elif strike is not None:
+            contract_bits.append(f"Strike {strike}")
         if price is not None:
-            levels.append(f"Buy {price}")
+            contract_bits.append(f"Premium {price}")
+        if projected_premium_sl is not None:
+            contract_bits.append(f"SL {round(projected_premium_sl, 2)}")
+        if projected_premium_t1 is not None:
+            contract_bits.append(f"T1 {round(projected_premium_t1, 2)}")
+
+        spot_bits = []
         if spot_price is not None:
-            levels.append(f"Spot {spot_price}")
+            spot_bits.append(f"Spot {spot_price}")
         if trigger_price is not None:
-            levels.append(f"Trig {trigger_price}")
+            spot_bits.append(f"Trig {trigger_price}")
         if invalidate_price is not None:
-            levels.append(f"SL {invalidate_price}")
+            spot_bits.append(f"SL {invalidate_price}")
         if first_target_price is not None:
-            levels.append(f"T1 {first_target_price}")
-        if strike is not None:
-            levels.append(f"Strike {strike}")
-        if levels:
-            lines.append(" | ".join(levels))
+            spot_bits.append(f"T1 {first_target_price}")
+
+        if contract_bits:
+            lines.append(f"Contract: {' | '.join(contract_bits)}")
+        if spot_bits:
+            lines.append(f"Spot: {' | '.join(spot_bits)}")
         risk_bits = []
         if option_stop_loss_pct is not None:
             risk_bits.append(f"OptSL {option_stop_loss_pct:.0f}%")
@@ -408,6 +422,8 @@ class Notifier:
             flow.append(confidence_summary)
         if flow:
             lines.append(" | ".join(flow[:2]))
+        if greek_summary:
+            lines.append(greek_summary)
         for explainer in _signal_explainer(reason, confidence_summary=confidence_summary):
             lines.append(explainer)
         if action_text:
@@ -468,6 +484,7 @@ class Notifier:
         no_trade_zone = watch_data.get("no_trade_zone")
         journal_note = watch_data.get("journal_note")
         structure_suggestion = watch_data.get("structure_suggestion")
+        greek_summary = watch_data.get("greek_summary")
         setup_label = _setup_label(setup)
 
         lines = []
@@ -497,17 +514,17 @@ class Notifier:
             summary.append(f"G:{grade}")
         if summary:
             lines.append(" | ".join(summary))
-        levels = []
+        spot_bits = []
         if spot_price is not None:
-            levels.append(f"Spot {spot_price}")
+            spot_bits.append(f"Spot {spot_price}")
         if trigger_price is not None:
-            levels.append(f"Trig {trigger_price}")
+            spot_bits.append(f"Trig {trigger_price}")
         if invalidate_price is not None:
-            levels.append(f"SL {invalidate_price}")
+            spot_bits.append(f"SL {invalidate_price}")
         if first_target_price is not None and grade in {"A", "B", "WATCH"}:
-            levels.append(f"T1 {first_target_price}")
-        if levels:
-            lines.append(" | ".join(levels))
+            spot_bits.append(f"T1 {first_target_price}")
+        if spot_bits:
+            lines.append(f"Spot: {' | '.join(spot_bits)}")
         risk_bits = []
         if option_stop_loss_pct is not None:
             risk_bits.append(f"OptSL {option_stop_loss_pct:.0f}%")
@@ -530,6 +547,8 @@ class Notifier:
             flow.append(participation_read.split("|", 1)[0].strip())
         if flow:
             lines.append(" | ".join(flow[:2]))
+        if greek_summary:
+            lines.append(greek_summary)
         for explainer in _signal_explainer(reason, confidence_summary=confidence_summary)[:2]:
             lines.append(explainer)
 
@@ -570,6 +589,7 @@ class Notifier:
         signal_grade = trigger_data.get("signal_grade")
         price = trigger_data.get("price")
         trigger_price = trigger_data.get("trigger_price")
+        greek_summary = trigger_data.get("greek_summary")
 
         instrument = trigger_data.get("instrument")
         header_parts = []
@@ -585,14 +605,22 @@ class Notifier:
             summary.append(confidence)
         if signal_grade and signal_grade != "SKIP":
             summary.append(f"G:{signal_grade}")
-        if strike is not None:
+        if strike is not None and signal in {"CE", "PE"}:
+            summary.append(f"Contract {strike} {signal}")
+        elif strike is not None:
             summary.append(f"Strike {strike}")
 
-        levels = []
+        contract_bits = []
+        if strike is not None and signal in {"CE", "PE"}:
+            contract_bits.append(f"{strike} {signal}")
+        elif strike is not None:
+            contract_bits.append(f"Strike {strike}")
         if price is not None:
-            levels.append(f"Price {price}")
+            contract_bits.append(f"Premium {price}")
+
+        spot_bits = []
         if trigger_price is not None:
-            levels.append(f"Trig {trigger_price}")
+            spot_bits.append(f"Trig {trigger_price}")
 
         lines = [header]
         ist_label = _ist_now_label()
@@ -600,8 +628,12 @@ class Notifier:
             summary.insert(0, ist_label)
         if summary:
             lines.append(" | ".join(summary))
-        if levels:
-            lines.append(" | ".join(levels))
+        if contract_bits:
+            lines.append(f"Contract: {' | '.join(contract_bits)}")
+        if spot_bits:
+            lines.append(f"Spot: {' | '.join(spot_bits)}")
+        if greek_summary:
+            lines.append(greek_summary)
         for explainer in _signal_explainer(trigger_data.get("reason"), confidence_summary=trigger_data.get("confidence_summary"))[:2]:
             lines.append(explainer)
 
@@ -658,6 +690,7 @@ class Notifier:
         profit_lock_trigger_pct = monitor_data.get("profit_lock_trigger_pct")
         psar_style_level = monitor_data.get("psar_style_level")
         live_pressure_summary = monitor_data.get("live_pressure_summary")
+        greek_summary = monitor_data.get("greek_summary")
         lines = []
         header_parts = []
         if instrument:
@@ -680,11 +713,11 @@ class Notifier:
         if pnl_percent is not None:
             summary.append(f"{pnl_percent:+.2f}%")
         if option_price is not None:
-            summary.append(f"Opt {option_price}")
+            summary.append(f"Premium {option_price}")
         if price is not None:
             summary.append(f"Spot {price}")
         if entry_price is not None:
-            summary.append(f"Entry {entry_price}")
+            summary.append(f"Premium Entry {entry_price}")
         if summary:
             lines.append(" | ".join(summary))
 
@@ -718,6 +751,8 @@ class Notifier:
             state_bits.append(f"Trail level {psar_style_level}")
         if state_bits:
             lines.append(" | ".join(state_bits[:2]))
+        if greek_summary:
+            lines.append(greek_summary)
         if expected_option_move is not None and actual_option_move is not None:
             lines.append(f"Option move {actual_option_move} vs expected {expected_option_move}")
         if flip_confidence:

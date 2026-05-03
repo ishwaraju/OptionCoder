@@ -43,6 +43,7 @@ from shared.utils.instrument_profile import get_instrument_profile
 from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.option_data_cache import OptionDataCache
+from shared.utils.option_greeks import enrich_contract_greeks, format_greek_summary, project_option_price
 
 # ML Signal Enhancement (FREE - scikit-learn)
 try:
@@ -236,6 +237,12 @@ class SignalService:
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
         """Start 1-minute manual trade monitor after a signal."""
         option_contract = self._get_option_contract_snapshot(selected_strike, signal, before_ts=candle_5m.get("close_time") or candle_5m["time"])
+        option_contract = self._greek_enriched_option_contract(
+            option_contract,
+            signal,
+            price,
+            before_ts=candle_5m.get("close_time") or candle_5m["time"],
+        )
         reference_contract = self._get_atm_reference_option_contract(
             signal=signal,
             before_ts=candle_5m.get("close_time") or candle_5m["time"],
@@ -273,6 +280,11 @@ class SignalService:
             "entry_spread": option_contract.get("spread") if option_contract else None,
             "entry_iv": option_contract.get("iv") if option_contract else None,
             "entry_delta": option_contract.get("delta") if option_contract else None,
+            "entry_gamma": option_contract.get("gamma") if option_contract else None,
+            "entry_theta": option_contract.get("theta") if option_contract else None,
+            "entry_vega": option_contract.get("vega") if option_contract else None,
+            "entry_greeks_source": option_contract.get("greeks_source") if option_contract else None,
+            "entry_greek_summary": format_greek_summary(option_contract),
             "max_favorable_option_ltp": option_entry_price,
             "max_adverse_option_ltp": option_entry_price,
             "stop_loss_pct": stop_loss_pct,
@@ -1117,6 +1129,54 @@ class SignalService:
             before_ts=before_ts,
         )
 
+    def _greek_enriched_option_contract(self, option_contract, option_type, underlying_price, before_ts=None):
+        if not option_contract or option_type not in {"CE", "PE"}:
+            return option_contract
+
+        expiry_value = (
+            option_contract.get("expiry")
+            or (self.option_data or {}).get("expiry")
+        )
+        current_dt = before_ts or self.time_utils.now_ist()
+        return enrich_contract_greeks(
+            option_contract=option_contract,
+            underlying_price=underlying_price,
+            option_type=option_type,
+            current_dt=current_dt,
+            expiry_value=expiry_value,
+        )
+
+    def _project_premium_levels_for_spot_map(self, option_contract, option_type, spot_sl, spot_t1, before_ts=None):
+        if not option_contract or option_type not in {"CE", "PE"}:
+            return None, None
+
+        strike = option_contract.get("strike")
+        iv = option_contract.get("iv")
+        expiry_value = option_contract.get("expiry") or (self.option_data or {}).get("expiry")
+        current_dt = before_ts or self.time_utils.now_ist()
+
+        projected_sl = None
+        projected_t1 = None
+        if spot_sl is not None:
+            projected_sl = project_option_price(
+                underlying_price=spot_sl,
+                strike=strike,
+                option_type=option_type,
+                implied_volatility=iv,
+                current_dt=current_dt,
+                expiry_value=expiry_value,
+            )
+        if spot_t1 is not None:
+            projected_t1 = project_option_price(
+                underlying_price=spot_t1,
+                strike=strike,
+                option_type=option_type,
+                implied_volatility=iv,
+                current_dt=current_dt,
+                expiry_value=expiry_value,
+            )
+        return projected_sl, projected_t1
+
     def _prime_oi_quote_confirmation(self, timestamp, price):
         if not self.option_data:
             return
@@ -1721,6 +1781,12 @@ class SignalService:
                 pressure_metrics=None,
             )
             option_contract = self._get_option_contract_snapshot(strike, signal, before_ts=evaluation["time"])
+            option_contract = self._greek_enriched_option_contract(
+                option_contract,
+                signal,
+                evaluation["price"],
+                before_ts=evaluation["time"],
+            )
 
         self.notifier.send_entry_trigger_notification(
             {
@@ -1730,8 +1796,9 @@ class SignalService:
                 "confidence": pending.get("confidence"),
                 "signal_type": pending.get("signal_type"),
                 "signal_grade": pending.get("signal_grade"),
-                "price": round(evaluation["price"], 2),
+                "price": round((option_contract or {}).get("ltp"), 2) if option_contract and option_contract.get("ltp") is not None else round(evaluation["price"], 2),
                 "trigger_price": trigger_price,
+                "greek_summary": format_greek_summary(option_contract),
             }
         )
 
@@ -1789,6 +1856,12 @@ class SignalService:
         last_two_closes = [candle["close"] for candle in recent_1m_candles[-2:]]
         last_close = latest_1m["close"]
         option_snapshot = self._get_option_contract_snapshot(strike, signal, before_ts=latest_1m["time"])
+        option_snapshot = self._greek_enriched_option_contract(
+            option_snapshot,
+            signal,
+            last_close,
+            before_ts=latest_1m["time"],
+        )
         option_price = option_snapshot.get("ltp") if option_snapshot and option_snapshot.get("ltp") is not None else last_close
         vwap_value = self.vwap.get_vwap()
         time_regime = self.strategy.last_time_regime
@@ -2205,6 +2278,7 @@ class SignalService:
             "entry_pressure_bias": entry_pressure_bias,
             "live_pressure_bias": live_pressure_bias,
             "live_pressure_summary": (live_pressure_summary or {}).get("summary"),
+            "greek_summary": format_greek_summary(option_snapshot),
         }
 
     def _maybe_send_trade_monitor_update(self, latest_5m_candle):
@@ -4161,7 +4235,23 @@ class SignalService:
 
         # Send notification if signal
         if signal:
+            selected_option_contract = self._greek_enriched_option_contract(
+                selected_option_contract,
+                signal,
+                price,
+                before_ts=candle_5m.get("close_time") or candle_5m["time"],
+            )
             option_signal_price = (selected_option_contract or {}).get("ltp") if selected_option_contract else price
+            spot_trigger_price = self.strategy.last_entry_plan.get("entry_above") if signal == "CE" else self.strategy.last_entry_plan.get("entry_below")
+            spot_invalidate_price = self.strategy.last_entry_plan.get("invalidate_price")
+            spot_target_price = self.strategy.last_entry_plan.get("first_target_price")
+            projected_premium_sl, projected_premium_t1 = self._project_premium_levels_for_spot_map(
+                selected_option_contract,
+                signal,
+                spot_invalidate_price,
+                spot_target_price,
+                before_ts=candle_5m.get("close_time") or candle_5m["time"],
+            )
             self._current_risk_option_contract = selected_option_contract
             self._current_risk_reference_contract = self._get_atm_reference_option_contract(
                 signal=signal,
@@ -4198,9 +4288,11 @@ class SignalService:
                     "signal_grade": self.strategy.last_signal_grade,
                     "price": round(option_signal_price, 2) if option_signal_price is not None else None,
                     "spot_price": round(price, 2) if price is not None else None,
-                    "trigger_price": self.strategy.last_entry_plan.get("entry_above") if signal == "CE" else self.strategy.last_entry_plan.get("entry_below"),
-                    "invalidate_price": self.strategy.last_entry_plan.get("invalidate_price"),
-                    "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
+                    "trigger_price": spot_trigger_price,
+                    "invalidate_price": spot_invalidate_price,
+                    "first_target_price": spot_target_price,
+                    "projected_premium_sl": projected_premium_sl,
+                    "projected_premium_t1": projected_premium_t1,
                     "time_regime": balanced_pro["time_regime"],
                     "option_stop_loss_pct": risk_profile["hard_premium_stop_pct"],
                     "option_target_pct": risk_profile["target_pct"],
@@ -4217,6 +4309,7 @@ class SignalService:
                     "reason": enriched_reason,
                     "pressure_read": (balanced_pro.get("pressure_summary") or {}).get("summary"),
                     "oi_read": (oi_ladder_data or {}).get("oi_summary"),
+                    "greek_summary": format_greek_summary(selected_option_contract),
                 }
             )
             self._safe_save_signal_issued(
