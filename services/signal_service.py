@@ -1323,6 +1323,24 @@ class SignalService:
     def _clear_pending_entry_watch(self):
         self.pending_entry_watch = None
 
+    def _preserve_existing_pending_watch(self, candle_5m):
+        pending = self.pending_entry_watch
+        if not pending or not candle_5m:
+            return False
+
+        created_at = pending.get("created_at")
+        current_time = candle_5m.get("time")
+        if created_at is None or current_time is None:
+            return False
+
+        age_minutes = int((current_time - created_at).total_seconds() // 60)
+        if age_minutes < 0:
+            return False
+        if age_minutes > self._pending_watch_max_minutes(pending):
+            self._clear_pending_entry_watch()
+            return False
+        return True
+
     @staticmethod
     def _one_minute_trigger_volume_ok(recent_1m_candles):
         if not recent_1m_candles:
@@ -1356,6 +1374,56 @@ class SignalService:
         if risk <= 0:
             return False
         return reward >= (risk * 0.9)
+
+    def _rebalance_pending_watch_plan(self, pending, candle_5m):
+        if not pending:
+            return pending
+
+        setup = (pending.get("signal_type") or "NONE").upper()
+        direction = pending.get("direction")
+        trigger_price = pending.get("trigger_price")
+        invalidate_price = pending.get("invalidate_price")
+        first_target = pending.get("first_target_price")
+        if (
+            setup not in {"BREAKOUT_CONFIRM", "RETEST"}
+            or direction not in {"CE", "PE"}
+            or trigger_price is None
+            or candle_5m is None
+        ):
+            return pending
+
+        if self._pending_watch_risk_reward_ok(pending):
+            return pending
+
+        atr_value = candle_5m.get("atr") or self.atr.get_atr()
+        if atr_value is None:
+            return pending
+
+        atr_value = float(atr_value)
+        risk_cap = max(
+            atr_value * 0.6,
+            10.0 if self.instrument == "NIFTY" else 18.0 if self.instrument == "BANKNIFTY" else 14.0,
+        )
+        trigger_price = float(trigger_price)
+        current_invalidate = float(invalidate_price) if invalidate_price is not None else None
+        current_target = float(first_target) if first_target is not None else None
+
+        if direction == "CE":
+            capped_invalidate = round(trigger_price - risk_cap, 2)
+            if current_invalidate is not None and current_invalidate > capped_invalidate:
+                capped_invalidate = current_invalidate
+            pending["invalidate_price"] = capped_invalidate
+            min_target = round(trigger_price + (abs(trigger_price - capped_invalidate) * 0.95), 2)
+            pending["first_target_price"] = max(current_target or min_target, min_target)
+        else:
+            capped_invalidate = round(trigger_price + risk_cap, 2)
+            if current_invalidate is not None and current_invalidate < capped_invalidate:
+                capped_invalidate = current_invalidate
+            pending["invalidate_price"] = capped_invalidate
+            min_target = round(trigger_price - (abs(capped_invalidate - trigger_price) * 0.95), 2)
+            pending["first_target_price"] = min(current_target or min_target, min_target)
+
+        return pending
 
     @staticmethod
     def _pending_watch_not_too_late(pending, latest_price):
@@ -1508,8 +1576,11 @@ class SignalService:
         )
         retest_wait = "late_confirmation_wait_retest" in cautions
         expiry_mode = "expiry_day_mode" in cautions
+        pre_expiry_watch_friendly = "pre_expiry_watch_friendly" in cautions
 
         if opposite_pressure and weak_participation and pressure_conflict_level in {"MILD", "MODERATE", "HIGH"}:
+            if pre_expiry_watch_friendly and pressure_conflict_level == "MILD":
+                return False, None
             return True, "breakout watch has opposite pressure with weak participation"
 
         if retest_wait and opposite_pressure:
@@ -1521,16 +1592,21 @@ class SignalService:
             return True, "late-day SENSEX breakout watch too conflicted"
 
         if self.instrument in {"NIFTY", "BANKNIFTY"} and expiry_mode and opposite_pressure and weak_participation:
+            if pre_expiry_watch_friendly and self.instrument == "NIFTY" and pressure_conflict_level == "MILD":
+                return False, None
             return True, "expiry breakout watch has poor option confirmation"
 
         if "direction_present_but_filters_incomplete" in blockers and opposite_pressure and weak_participation:
+            if pre_expiry_watch_friendly and pressure_conflict_level == "MILD":
+                return False, None
             return True, "direction incomplete with opposite pressure and weak participation"
 
         return False, None
 
     def _set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m):
         if not watch_payload:
-            self._clear_pending_entry_watch()
+            if not self._preserve_existing_pending_watch(candle_5m):
+                self._clear_pending_entry_watch()
             return
 
         direction = watch_payload.get("direction")
@@ -1623,6 +1699,7 @@ class SignalService:
                 or (balanced_pro or {}).get("pressure_conflict_level")
             ),
         }
+        self.pending_entry_watch = self._rebalance_pending_watch_plan(self.pending_entry_watch, candle_5m)
 
     def _evaluate_pending_entry_watch(self, recent_1m_candles):
         if not self.pending_entry_watch or len(recent_1m_candles) < 2:
@@ -3947,12 +4024,22 @@ class SignalService:
                     ml_features["decision_negatives"] = negatives
                 
                 if not should_take:
-                    # ML filtered out the signal
-                    signal = None
-                    reason = f"ML Filtered ({ml_reason})"
-                    print(f"[Signal Service] {self.instrument}: {reason}")
+                    if getattr(self.ml_filter, "model_loaded", False):
+                        signal = None
+                        reason = f"ML Filtered ({ml_reason})"
+                        print(f"[Signal Service] {self.instrument}: {reason}")
+                    else:
+                        print(
+                            f"[Signal Service] {self.instrument}: "
+                            f"Rule advisory only ({ml_reason})"
+                        )
                 else:
-                    print(f"[Signal Service] {self.instrument}: ML Approved ({ml_reason})")
+                    approval_label = (
+                        "ML Approved"
+                        if getattr(self.ml_filter, "model_loaded", False)
+                        else "Rule advisory passed"
+                    )
+                    print(f"[Signal Service] {self.instrument}: {approval_label} ({ml_reason})")
                     
             except Exception as e:
                 print(f"[Signal Service] ML processing error: {e}")

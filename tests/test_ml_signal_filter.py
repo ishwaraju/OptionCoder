@@ -111,3 +111,41 @@ def test_rule_based_fallback_relaxes_opening_trending_thresholds():
     assert approved is True
     assert "opening_relaxed" in reason or "trend_support" in reason
     assert probability >= 0.55
+
+
+def test_midday_confirmation_gets_narrow_volume_relief():
+    ml_filter = MLSignalFilter(model_path="models/does_not_exist.pkl", threshold=0.55)
+
+    profile = ml_filter._build_adaptive_profile(
+        {
+            "instrument": "NIFTY",
+            "time_regime": "MIDDAY",
+            "market_regime": "TRENDING",
+            "signal_type": "BREAKOUT_CONFIRM",
+            "participation_quality": "NORMAL",
+            "confidence": "MEDIUM",
+            "spread_pct": 2.0,
+        }
+    )
+
+    assert profile["volume_floor"] == 1.1
+    assert "midday_confirmation_volume_relief" in profile["label"]
+
+
+def test_midday_confirmation_keeps_strict_volume_floor_when_participation_is_weak():
+    ml_filter = MLSignalFilter(model_path="models/does_not_exist.pkl", threshold=0.55)
+
+    profile = ml_filter._build_adaptive_profile(
+        {
+            "instrument": "NIFTY",
+            "time_regime": "MIDDAY",
+            "market_regime": "TRENDING",
+            "signal_type": "BREAKOUT_CONFIRM",
+            "participation_quality": "WEAK",
+            "confidence": "MEDIUM",
+            "spread_pct": 2.0,
+        }
+    )
+
+    assert profile["volume_floor"] == 1.20
+    assert "midday_confirmation_volume_relief" not in profile["label"]

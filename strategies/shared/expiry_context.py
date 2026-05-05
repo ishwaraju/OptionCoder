@@ -37,6 +37,10 @@ class ExpirySessionContext:
         if self.expiry_date and self.expiry_date == self.current_date:
             return "EXPIRY_DAY"
 
+        # Skip weekly expiry logic for instruments without weekly expiry
+        if not self.profile.get("has_weekly_expiry", True):
+            return "NORMAL"
+
         weekly_expiry_weekday = int(self.profile.get("weekly_expiry_weekday", 1))
 
         if self.current_date.weekday() == weekly_expiry_weekday:

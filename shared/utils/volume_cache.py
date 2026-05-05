@@ -28,7 +28,7 @@ class VolumeCache:
                 "timestamp": datetime.now().isoformat()
             }
             with open(self._get_file_path(instrument), "w") as f:
-                json.dump(data, f)
+                json.dump(data, f, indent=2)
     
     def get(self, instrument):
         """Get volume for instrument"""

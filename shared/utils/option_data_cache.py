@@ -33,7 +33,7 @@ class OptionDataCache:
         final_path = self._get_file_path(instrument)
         with self.lock:
             with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=True, default=str)
+                json.dump(payload, f, ensure_ascii=True, default=str, indent=2)
             os.replace(temp_path, final_path)
 
     def get(self, instrument):

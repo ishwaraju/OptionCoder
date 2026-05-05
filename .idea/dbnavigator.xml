@@ -69,8 +69,8 @@
         <condition><![CDATA[<br>-- enter your custom conditions here<br>signal_ts >= CURRENT_DATE<br>and signal_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_band_snapshots_1m" active-filter-id="81283d12-8aff-443a-bff3-c301c33a27c2">
-      <filter id="81283d12-8aff-443a-bff3-c301c33a27c2" name="Filter" temporary="false" custom-name="false" type="custom">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_band_snapshots_1m" active-filter-id="651e43b1-1659-48d5-a53e-c681990a0781">
+      <filter id="651e43b1-1659-48d5-a53e-c681990a0781" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
@@ -86,12 +86,12 @@
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.signals_issued" active-filter-id="7888d48c-ed21-464c-bfcd-65579db85fda">
       <filter id="7888d48c-ed21-464c-bfcd-65579db85fda" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+        <condition><![CDATA[<br><br><br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.oi_snapshots_1m" active-filter-id="4e41b85a-df3f-44c5-88bd-24dd516c7fdc">
-      <filter id="4e41b85a-df3f-44c5-88bd-24dd516c7fdc" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.oi_snapshots_1m" active-filter-id="">
+      <filter id="167dead0-1fa7-42aa-8dc0-de5a877ffbf2" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br><br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.candles_1m" active-filter-id="ac4a7803-b52f-4d5e-8979-226aa9148160">
@@ -117,12 +117,12 @@
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.candles_5m" active-filter-id="e9ea98dd-612d-4da1-9042-38779418f003">
       <filter id="e9ea98dd-612d-4da1-9042-38779418f003" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.strategy_decisions_5m" active-filter-id="53268176-290c-4186-98f8-14920c68c2c2">
       <filter id="53268176-290c-4186-98f8-14920c68c2c2" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
   </component>

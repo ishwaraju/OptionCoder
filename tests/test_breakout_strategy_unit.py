@@ -399,6 +399,54 @@ def test_sensex_expiry_allows_high_conviction_midday_trend_trade():
         Config.SYMBOL = original_symbol
 
 
+def test_nifty_pre_expiry_allows_medium_confidence_setup_with_weak_volume_watch():
+    rules = ExpiryDayRules(type("TU", (), {})(), instrument="NIFTY")
+    rules.time_utils.now_ist = lambda: datetime(2026, 5, 4, 10, 0)
+    rules.time_utils.current_time = lambda: datetime(2026, 5, 4, 10, 0).time()
+
+    result = rules.evaluate(
+        expiry_value=None,
+        score=72,
+        confidence="MEDIUM",
+        price=24220,
+        vwap=24200,
+        volume_signal="WEAK",
+        pressure_metrics={"pressure_bias": "BULLISH"},
+        current_signal="CE",
+        blockers=[],
+        cautions=[],
+    )
+
+    assert result["is_expiry_day"] is False
+    assert result["session_mode"] == "PRE_EXPIRY_POSITIONING"
+    assert result["allow_trade"] is True
+    assert "pre_expiry_weak_volume" not in result["blockers"]
+    assert "pre_expiry_weak_volume_watch" in result["cautions"]
+
+
+def test_nifty_pre_expiry_still_blocks_low_confidence_weak_volume_setup():
+    rules = ExpiryDayRules(type("TU", (), {})(), instrument="NIFTY")
+    rules.time_utils.now_ist = lambda: datetime(2026, 5, 4, 10, 0)
+    rules.time_utils.current_time = lambda: datetime(2026, 5, 4, 10, 0).time()
+
+    result = rules.evaluate(
+        expiry_value=None,
+        score=72,
+        confidence="LOW",
+        price=24220,
+        vwap=24200,
+        volume_signal="WEAK",
+        pressure_metrics={"pressure_bias": "BULLISH"},
+        current_signal="CE",
+        blockers=[],
+        cautions=[],
+    )
+
+    assert result["allow_trade"] is False
+    assert "pre_expiry_requires_medium_plus_confidence" in result["blockers"]
+    assert "pre_expiry_weak_volume" in result["blockers"]
+
+
 def test_sensex_blocks_new_signal_after_235_pm():
     strategy = BreakoutStrategy(instrument="SENSEX")
 

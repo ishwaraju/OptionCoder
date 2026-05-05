@@ -156,13 +156,32 @@ class ExpiryDayRules:
             cautions.append("pre_expiry_positioning_mode")
             adaptive_continuation_mode = self.instrument == "SENSEX"
             soften_pressure_conflict = self.instrument == "SENSEX"
+            watch_friendly_pre_expiry = (
+                self.instrument == "NIFTY"
+                and current_signal == "PE"
+                and confidence in {"MEDIUM", "HIGH"}
+                and score >= max(score_floor + 15, 85)
+                and volume_signal in {"NORMAL", "STRONG"}
+            )
+            relaxed_pre_expiry_volume_ok = (
+                current_signal in {"CE", "PE"}
+                and confidence in {"MEDIUM", "HIGH"}
+                and score >= score_floor
+                and not opposite_pressure
+            )
+
+            if watch_friendly_pre_expiry:
+                cautions.append("pre_expiry_watch_friendly")
 
             if confidence == "LOW" and score < score_floor + 4:
                 blockers.append("pre_expiry_requires_medium_plus_confidence")
                 allow_trade = False
-            if volume_signal == "WEAK" and score < score_floor + 2:
-                blockers.append("pre_expiry_weak_volume")
-                allow_trade = False
+            if volume_signal == "WEAK":
+                if relaxed_pre_expiry_volume_ok:
+                    cautions.append("pre_expiry_weak_volume_watch")
+                elif score < score_floor + 2:
+                    blockers.append("pre_expiry_weak_volume")
+                    allow_trade = False
 
             return {
                 "is_expiry_day": False,

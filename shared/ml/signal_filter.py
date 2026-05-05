@@ -128,6 +128,15 @@ class MLSignalFilter:
             profile["score_floor"] += 2
             profile["label"].append("continuation_needs_strength")
 
+        if (
+            time_regime == "MIDDAY"
+            and signal_type in {"RETEST", "BREAKOUT_CONFIRM"}
+            and market_regime in {"TRENDING", "EXPANDING", "OPENING_EXPANSION"}
+            and participation_quality != "WEAK"
+        ):
+            profile["volume_floor"] -= 0.05
+            profile["label"].append("midday_confirmation_volume_relief")
+
         if participation_quality == "STRONG":
             profile["threshold"] -= 0.01
             profile["label"].append("strong_participation")
