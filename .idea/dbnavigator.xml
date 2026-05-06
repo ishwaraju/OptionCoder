@@ -55,10 +55,7 @@
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files>
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/signals_issued" />
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/strategy_decisions_5m" />
-    </open-files>
+    <open-files />
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
     <prerequisites />
