@@ -711,6 +711,43 @@ class BreakoutStrategy:
             return "MODERATE"
         return "MILD"
 
+    def _strong_option_sweep_trade_ready(
+        self,
+        option_sweep_context,
+        direction,
+        price,
+        vwap,
+        candle_close,
+        trigger_level,
+        atr,
+        buffer,
+        candle_liquidity_ok,
+        score,
+        entry_score,
+        pressure_conflict_level,
+    ):
+        if (
+            not option_sweep_context
+            or direction not in {"CE", "PE"}
+            or option_sweep_context.get("direction") != direction
+            or option_sweep_context.get("quality") != "STRONG"
+            or not option_sweep_context.get("micro_confirmed")
+            or option_sweep_context.get("persistence_pairs", 0) < 3
+        ):
+            return False
+        if not candle_liquidity_ok:
+            return False
+        if float(score or 0) < 78 or float(entry_score or 0) < 70:
+            return False
+        if pressure_conflict_level not in {"NONE", "MILD"}:
+            return False
+        if direction == "CE" and not (price is not None and vwap is not None and price > vwap):
+            return False
+        if direction == "PE" and not (price is not None and vwap is not None and price < vwap):
+            return False
+
+        return True
+
     @staticmethod
     def _watch_bucket(signal_type, blockers, cautions):
         return watch_bucket(signal_type, blockers, cautions)
@@ -1133,16 +1170,50 @@ class BreakoutStrategy:
         )
 
     def _sensex_late_day_guard(self, current_now, score, entry_score, confidence, volume_signal, pressure_conflict_level):
+        return self._sensex_late_day_guard_with_context(
+            current_now=current_now,
+            score=score,
+            entry_score=entry_score,
+            confidence=confidence,
+            volume_signal=volume_signal,
+            pressure_conflict_level=pressure_conflict_level,
+            option_sweep_context=None,
+            direction=None,
+        )
+
+    def _sensex_late_day_guard_with_context(
+        self,
+        current_now,
+        score,
+        entry_score,
+        confidence,
+        volume_signal,
+        pressure_conflict_level,
+        option_sweep_context=None,
+        direction=None,
+    ):
         if self.instrument != "SENSEX" or current_now is None:
             return None
 
         confidence = (confidence or "LOW").upper()
         pressure_conflict_level = (pressure_conflict_level or "NONE").upper()
+        sweep_override = (
+            option_sweep_context
+            and option_sweep_context.get("direction") == direction
+            and option_sweep_context.get("quality") == "STRONG"
+            and option_sweep_context.get("micro_confirmed")
+            and option_sweep_context.get("persistence_pairs", 0) >= 3
+            and float(score or 0) >= 84
+            and float(entry_score or 0) >= 84
+            and pressure_conflict_level in {"NONE", "MILD"}
+        )
 
         if current_now >= self.time_utils._parse_clock("14:35"):
             return "sensex_no_fresh_option_buys_after_1435"
 
         if current_now >= self.time_utils._parse_clock("14:25"):
+            if sweep_override:
+                return None
             if volume_signal != "STRONG":
                 return "sensex_late_day_requires_strong_volume"
             if confidence != "HIGH":
@@ -1885,6 +1956,7 @@ class BreakoutStrategy:
         support = ctx["support"]
         resistance = ctx["resistance"]
         breakout_structure_ok = ctx["breakout_structure_ok"]
+        strong_sweep_trade_ready = ctx.get("strong_sweep_trade_ready", False)
 
         if (
             prev_high is not None
@@ -1892,11 +1964,14 @@ class BreakoutStrategy:
             and price > vwap
             and candle_close is not None
             and candle_close > prev_high
-            and not self._entry_too_extended("CE", candle_close, prev_high, atr, buffer)
+            and (
+                strong_sweep_trade_ready
+                or not self._entry_too_extended("CE", candle_close, prev_high, atr, buffer)
+            )
             and (not orb_ready or orb_high is None or candle_close > orb_high or prev_high > orb_high)
             and candle_high is not None
             and candle_high >= prev_high + max(buffer * 0.3, 4)
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BULLISH", "NEUTRAL"]
             and oi_trend in ["BULLISH", "NEUTRAL", None]
             and bullish_build_up_ok
@@ -1943,11 +2018,14 @@ class BreakoutStrategy:
             and price < vwap
             and candle_close is not None
             and candle_close < prev_low
-            and not self._entry_too_extended("PE", candle_close, prev_low, atr, buffer)
+            and (
+                strong_sweep_trade_ready
+                or not self._entry_too_extended("PE", candle_close, prev_low, atr, buffer)
+            )
             and (not orb_ready or orb_low is None or candle_close < orb_low or prev_low < orb_low)
             and candle_low is not None
             and candle_low <= prev_low - max(buffer * 0.3, 4)
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BEARISH", "NEUTRAL"]
             and oi_trend in ["BEARISH", "NEUTRAL", None]
             and bearish_build_up_ok
@@ -1995,10 +2073,13 @@ class BreakoutStrategy:
             and self._crossed_from_below_to_above(prev_low, prev_close, candle_close, vwap)
             and candle_close is not None
             and candle_close > reclaim_level_ce
-            and not self._entry_too_extended("CE", candle_close, reclaim_level_ce, atr, buffer)
+            and (
+                strong_sweep_trade_ready
+                or not self._entry_too_extended("CE", candle_close, reclaim_level_ce, atr, buffer)
+            )
             and candle_high is not None
             and candle_high >= reclaim_level_ce + max(buffer * 0.3, 4)
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BULLISH", "NEUTRAL"]
             and oi_trend in ["BULLISH", "NEUTRAL", None]
             and bullish_build_up_ok
@@ -2044,10 +2125,13 @@ class BreakoutStrategy:
             and self._crossed_from_above_to_below(prev_high, prev_close, candle_close, vwap)
             and candle_close is not None
             and candle_close < reclaim_level_pe
-            and not self._entry_too_extended("PE", candle_close, reclaim_level_pe, atr, buffer)
+            and (
+                strong_sweep_trade_ready
+                or not self._entry_too_extended("PE", candle_close, reclaim_level_pe, atr, buffer)
+            )
             and candle_low is not None
             and candle_low <= reclaim_level_pe - max(buffer * 0.3, 4)
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BEARISH", "NEUTRAL"]
             and oi_trend in ["BEARISH", "NEUTRAL", None]
             and bearish_build_up_ok
@@ -2633,6 +2717,9 @@ class BreakoutStrategy:
         expiry_eval = ctx["expiry_eval"]
         regime = ctx["regime"]
         active_confirmation = ctx["active_confirmation"]
+        strong_sweep_trade_ready = ctx.get("strong_sweep_trade_ready", False)
+        prev_high = ctx.get("prev_high")
+        prev_low = ctx.get("prev_low")
 
         if not (scored_direction and score >= Config.MIN_SCORE_THRESHOLD):
             return None
@@ -2644,7 +2731,7 @@ class BreakoutStrategy:
             and scored_direction == "CE"
             and price > orb_high
             and price > vwap
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BULLISH", "NEUTRAL"]
             and oi_trend in ["BULLISH", "NEUTRAL", None]
             and bullish_build_up_ok
@@ -2661,7 +2748,7 @@ class BreakoutStrategy:
             and scored_direction == "PE"
             and price < orb_low
             and price < vwap
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BEARISH", "NEUTRAL"]
             and oi_trend in ["BEARISH", "NEUTRAL", None]
             and bearish_build_up_ok
@@ -2678,7 +2765,7 @@ class BreakoutStrategy:
             and scored_direction == "CE"
             and price > orb_high
             and price > vwap
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BULLISH", "NEUTRAL"]
             and oi_trend in ["BULLISH", "NEUTRAL", None]
             and bullish_build_up_ok
@@ -2696,7 +2783,7 @@ class BreakoutStrategy:
             and scored_direction == "PE"
             and price < orb_low
             and price < vwap
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and oi_bias in ["BEARISH", "NEUTRAL"]
             and oi_trend in ["BEARISH", "NEUTRAL", None]
             and bearish_build_up_ok
@@ -2714,7 +2801,7 @@ class BreakoutStrategy:
             and scored_direction == "CE"
             and price > orb_high + (buffer * tuning["extension_buffer_mult"])
             and price > vwap
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and bullish_build_up_ok
             and candle_liquidity_ok
             and not opening_session
@@ -2728,7 +2815,7 @@ class BreakoutStrategy:
             and scored_direction == "PE"
             and price < orb_low - (buffer * tuning["extension_buffer_mult"])
             and price < vwap
-            and volume_signal in ["NORMAL", "STRONG"]
+            and (volume_signal in ["NORMAL", "STRONG"] or strong_sweep_trade_ready)
             and bearish_build_up_ok
             and candle_liquidity_ok
             and not opening_session
@@ -2786,7 +2873,59 @@ class BreakoutStrategy:
                 "late_confirmation_wait_retest",
             )
 
+        sweep_trigger_level = (
+            prev_high if scored_direction == "CE" and prev_high is not None
+            else prev_low if scored_direction == "PE" and prev_low is not None
+            else confirmation_level
+        )
+        strong_sweep_breakout_now = (
+            strong_sweep_trade_ready
+            and sweep_trigger_level is not None
+            and not opening_session
+            and score >= max(time_thresholds["confirm_min_score"], 78)
+            and breakout_structure_ok
+            and (
+                (scored_direction == "CE" and price > max(vwap, sweep_trigger_level))
+                or (scored_direction == "PE" and price < min(vwap, sweep_trigger_level))
+            )
+            and (
+                (scored_direction == "CE" and candle_high is not None and candle_high >= sweep_trigger_level + max(buffer * 0.2, 3))
+                or (scored_direction == "PE" and candle_low is not None and candle_low <= sweep_trigger_level - max(buffer * 0.2, 3))
+            )
+        )
+        if strong_sweep_breakout_now:
+            return self._emit_trade_signal(
+                scored_direction,
+                "BREAKOUT_CONFIRM",
+                score,
+                volume_signal,
+                pressure_metrics,
+                self._append_cautions(cautions, "option_sweep_breakout_override"),
+                blockers=blockers,
+                regime=self._effective_signal_regime(expiry_eval, regime),
+                candle_time=candle_time,
+                message=f"Option sweep breakout confirmation {'above' if scored_direction == 'CE' else 'below'} {sweep_trigger_level}",
+                trigger_price=sweep_trigger_level,
+                invalidate_price=orb_low if scored_direction == "CE" else orb_high,
+                atr=atr,
+                support=support if scored_direction == "CE" else None,
+                resistance=resistance if scored_direction == "PE" else None,
+                remember_level=sweep_trigger_level,
+                emitted_level=sweep_trigger_level,
+                buffer=buffer,
+                reset_retest=True,
+                reset_confirmation=True,
+                mark_emitted=True,
+            )
+
         blockers.append("direction_present_but_filters_incomplete")
+        if strong_sweep_trade_ready and confirmation_level is not None:
+            self._set_confirmation_setup(scored_direction, confirmation_level, candle_time, score)
+            cautions = self._append_cautions(
+                cautions,
+                "confirmation_watch_active",
+                "option_sweep_confirmation_ready",
+            )
         if opening_session and not opening_breakout_override:
             if strong_directional_watch and confirmation_level is not None:
                 self._set_confirmation_setup(scored_direction, confirmation_level, candle_time, score)
@@ -3119,6 +3258,7 @@ class BreakoutStrategy:
             trend_15m=None,
             participation_metrics=None,
             oi_ladder_data=None,
+            option_sweep_context=None,
     ):
         """
         Generate CE/PE signal using:
@@ -3150,6 +3290,7 @@ class BreakoutStrategy:
         self.last_confidence_summary = None
         self.last_entry_plan = {}
         self.last_participation_metrics = participation_metrics
+        self.last_option_sweep_context = option_sweep_context
         self.last_signal_type = "NONE"
         self.last_signal_grade = "SKIP"
         blockers = []
@@ -3209,6 +3350,24 @@ class BreakoutStrategy:
             components=components,
             participation_metrics=participation_metrics,
         )
+        if (
+            option_sweep_context
+            and option_sweep_context.get("direction") == scored_direction
+        ):
+            score = min(100, score + int(option_sweep_context.get("score_boost", 0) or 0))
+            components.append(
+                f"option_sweep_{(option_sweep_context.get('quality') or 'moderate').lower()}"
+            )
+            if option_sweep_context.get("micro_confirmed"):
+                components.append("option_sweep_micro_confirmed")
+            if option_sweep_context.get("persistence_pairs", 0) >= 3:
+                components.append("option_sweep_persistent")
+            if option_sweep_context.get("quality") == "STRONG":
+                cautions = [
+                    caution
+                    for caution in cautions
+                    if caution not in {"participation_weak", "participation_delta_missing"}
+                ]
         self.last_score = score
         self.last_context_score = score
         self.last_score_components = components
@@ -3319,6 +3478,7 @@ class BreakoutStrategy:
         self._update_retest_setup(candle_time)
         self._update_confirmation_setup(candle_time)
 
+        strong_sweep_trade_ready = False
         regime = self._derive_regime(price, vwap, atr, volume_signal, candle_range)
         if nifty_trend_day_context and regime in {"CHOPPY", "RANGING", "EARLY_SESSION"}:
             regime = "TRENDING"
@@ -3329,6 +3489,10 @@ class BreakoutStrategy:
         continuation_regime_ok = regime in ["TRENDING", "EXPANDING"] or (
             regime == "RANGING" and score >= 78 and volume_signal == "STRONG"
         )
+        if strong_sweep_trade_ready and regime in {"CHOPPY", "RANGING", "EARLY_SESSION"}:
+            breakout_regime_ok = True
+            continuation_regime_ok = True
+            components.append("option_sweep_regime_override")
         retest_regime_ok = regime in ["TRENDING", "EXPANDING", "RANGING"] and not (
             regime == "RANGING" and score < 68
         )
@@ -3374,13 +3538,52 @@ class BreakoutStrategy:
             *self._adverse_sr_cautions(scored_direction, price, support, resistance, buffer),
         )
 
+        sweep_pressure_override = (
+            option_sweep_context
+            and option_sweep_context.get("direction") == scored_direction
+            and option_sweep_context.get("quality") == "STRONG"
+            and option_sweep_context.get("micro_confirmed")
+            and option_sweep_context.get("persistence_pairs", 0) >= 3
+        )
         if pressure_metrics:
             if scored_direction == "CE" and pressure_metrics["pressure_bias"] == "BEARISH":
-                cautions.append("opposite_pressure")
+                if not sweep_pressure_override:
+                    cautions.append("opposite_pressure")
+                else:
+                    cautions = self._append_cautions(cautions, "option_sweep_pressure_override")
             if scored_direction == "PE" and pressure_metrics["pressure_bias"] == "BULLISH":
-                cautions.append("opposite_pressure")
+                if not sweep_pressure_override:
+                    cautions.append("opposite_pressure")
+                else:
+                    cautions = self._append_cautions(cautions, "option_sweep_pressure_override")
         pressure_conflict_level = self._pressure_conflict_level(pressure_metrics, scored_direction, cautions)
+        if sweep_pressure_override and pressure_conflict_level == "MODERATE":
+            pressure_conflict_level = "MILD"
         self.last_pressure_conflict_level = pressure_conflict_level
+        strong_sweep_trade_ready = self._strong_option_sweep_trade_ready(
+            option_sweep_context=option_sweep_context,
+            direction=scored_direction,
+            price=price,
+            vwap=vwap,
+            candle_close=candle_close,
+            trigger_level=(
+                prev_high if scored_direction == "CE" and prev_high is not None
+                else prev_low if scored_direction == "PE" and prev_low is not None
+                else orb_high if scored_direction == "CE"
+                else orb_low
+            ),
+            atr=atr,
+            buffer=buffer,
+            candle_liquidity_ok=candle_liquidity_ok,
+            score=score,
+            entry_score=self.last_entry_score,
+            pressure_conflict_level=pressure_conflict_level,
+        )
+        if strong_sweep_trade_ready and regime in {"CHOPPY", "RANGING", "EARLY_SESSION"}:
+            breakout_regime_ok = True
+            continuation_regime_ok = True
+            if "option_sweep_regime_override" not in components:
+                components.append("option_sweep_regime_override")
         if nifty_trend_day_context:
             if scored_direction == "CE" and oi_bias in {"BULLISH", "NEUTRAL"} and oi_trend in {"BULLISH", "NEUTRAL", None}:
                 bullish_build_up_ok = True
@@ -3498,13 +3701,15 @@ class BreakoutStrategy:
             )
             return None, f"Expiry filter blocked trade | score={score}"
 
-        sensex_late_day_block = self._sensex_late_day_guard(
+        sensex_late_day_block = self._sensex_late_day_guard_with_context(
             current_now=current_now,
             score=score,
             entry_score=self.last_entry_score,
             confidence=provisional_confidence,
             volume_signal=volume_signal,
             pressure_conflict_level=pressure_conflict_level,
+            option_sweep_context=option_sweep_context,
+            direction=scored_direction,
         )
         if sensex_late_day_block:
             blockers.append(sensex_late_day_block)

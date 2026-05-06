@@ -57,16 +57,27 @@ class DBReader:
             for row in rows
         ]
 
-    def fetch_recent_candles_1m(self, instrument, limit=15):
+    def fetch_recent_candles_1m(self, instrument, limit=15, before_ts=None):
         """Fetch recent 1-minute candles."""
-        query = """
-        SELECT ts, open, high, low, close, volume
-        FROM candles_1m
-        WHERE instrument = %s
-        ORDER BY ts DESC
-        LIMIT %s;
-        """
-        rows = self._execute(query, (instrument, limit))
+        if before_ts is None:
+            query = """
+            SELECT ts, open, high, low, close, volume
+            FROM candles_1m
+            WHERE instrument = %s
+            ORDER BY ts DESC
+            LIMIT %s;
+            """
+            rows = self._execute(query, (instrument, limit))
+        else:
+            query = """
+            SELECT ts, open, high, low, close, volume
+            FROM candles_1m
+            WHERE instrument = %s
+              AND ts <= %s
+            ORDER BY ts DESC
+            LIMIT %s;
+            """
+            rows = self._execute(query, (instrument, before_ts, limit))
         rows = list(reversed(rows))
         return [
             {
@@ -79,6 +90,38 @@ class DBReader:
             }
             for row in rows
         ]
+
+    @staticmethod
+    def _normalize_option_band_snapshot_rows(rows):
+        snapshots = []
+        for row in rows:
+            snapshots.append(
+                {
+                    "ts": row[0],
+                    "atm_strike": int(row[1]) if row[1] is not None else None,
+                    "strike": int(row[2]) if row[2] is not None else None,
+                    "distance_from_atm": int(row[3]) if row[3] is not None else None,
+                    "option_type": row[4],
+                    "security_id": row[5],
+                    "oi": int(row[6]) if row[6] is not None else 0,
+                    "volume": int(row[7]) if row[7] is not None else 0,
+                    "ltp": float(row[8]) if row[8] is not None else 0.0,
+                    "iv": float(row[9]) if row[9] is not None else 0.0,
+                    "top_bid_price": float(row[10]) if row[10] is not None else None,
+                    "top_bid_quantity": int(row[11]) if row[11] is not None else None,
+                    "top_ask_price": float(row[12]) if row[12] is not None else None,
+                    "top_ask_quantity": int(row[13]) if row[13] is not None else None,
+                    "spread": float(row[14]) if row[14] is not None else None,
+                    "average_price": float(row[15]) if row[15] is not None else None,
+                    "previous_oi": int(row[16]) if row[16] is not None else None,
+                    "previous_volume": int(row[17]) if row[17] is not None else None,
+                    "delta": float(row[18]) if row[18] is not None else None,
+                    "theta": float(row[19]) if row[19] is not None else None,
+                    "gamma": float(row[20]) if row[20] is not None else None,
+                    "vega": float(row[21]) if row[21] is not None else None,
+                }
+            )
+        return snapshots
 
     def fetch_candles_in_range(self, instrument, start_time, end_time, timeframe="5m"):
         """Fetch candles in a specific time range"""
@@ -322,36 +365,72 @@ class DBReader:
         if not rows:
             return []
 
-        snapshots = []
-        for row in rows:
-            snapshots.append(
-                {
-                    "ts": row[0],
-                    "atm_strike": int(row[1]) if row[1] is not None else None,
-                    "strike": int(row[2]) if row[2] is not None else None,
-                    "distance_from_atm": int(row[3]) if row[3] is not None else None,
-                    "option_type": row[4],
-                    "security_id": row[5],
-                    "oi": int(row[6]) if row[6] is not None else 0,
-                    "volume": int(row[7]) if row[7] is not None else 0,
-                    "ltp": float(row[8]) if row[8] is not None else 0.0,
-                    "iv": float(row[9]) if row[9] is not None else 0.0,
-                    "top_bid_price": float(row[10]) if row[10] is not None else None,
-                    "top_bid_quantity": int(row[11]) if row[11] is not None else None,
-                    "top_ask_price": float(row[12]) if row[12] is not None else None,
-                    "top_ask_quantity": int(row[13]) if row[13] is not None else None,
-                    "spread": float(row[14]) if row[14] is not None else None,
-                    "average_price": float(row[15]) if row[15] is not None else None,
-                    "previous_oi": int(row[16]) if row[16] is not None else None,
-                    "previous_volume": int(row[17]) if row[17] is not None else None,
-                    "delta": float(row[18]) if row[18] is not None else None,
-                    "theta": float(row[19]) if row[19] is not None else None,
-                    "gamma": float(row[20]) if row[20] is not None else None,
-                    "vega": float(row[21]) if row[21] is not None else None,
-                }
-            )
+        return self._normalize_option_band_snapshot_rows(rows)
 
-        return snapshots
+    def fetch_recent_option_band_snapshots(self, instrument, before_ts=None, limit=3):
+        """Fetch recent full option-band snapshots grouped by timestamp."""
+        if before_ts is None:
+            query = """
+            WITH recent_ts AS (
+                SELECT DISTINCT ts
+                FROM option_band_snapshots_1m
+                WHERE instrument = %s
+                ORDER BY ts DESC
+                LIMIT %s
+            )
+            SELECT
+                ts, atm_strike, strike, distance_from_atm, option_type, security_id,
+                oi, volume, ltp, iv,
+                top_bid_price, top_bid_quantity, top_ask_price, top_ask_quantity,
+                spread, average_price, previous_oi, previous_volume,
+                delta, theta, gamma, vega
+            FROM option_band_snapshots_1m
+            WHERE instrument = %s
+              AND ts IN (SELECT ts FROM recent_ts)
+            ORDER BY ts ASC, strike ASC, option_type ASC;
+            """
+            rows = self._execute(query, (instrument, limit, instrument))
+        else:
+            query = """
+            WITH recent_ts AS (
+                SELECT DISTINCT ts
+                FROM option_band_snapshots_1m
+                WHERE instrument = %s
+                  AND ts <= %s
+                ORDER BY ts DESC
+                LIMIT %s
+            )
+            SELECT
+                ts, atm_strike, strike, distance_from_atm, option_type, security_id,
+                oi, volume, ltp, iv,
+                top_bid_price, top_bid_quantity, top_ask_price, top_ask_quantity,
+                spread, average_price, previous_oi, previous_volume,
+                delta, theta, gamma, vega
+            FROM option_band_snapshots_1m
+            WHERE instrument = %s
+              AND ts IN (SELECT ts FROM recent_ts)
+            ORDER BY ts ASC, strike ASC, option_type ASC;
+            """
+            rows = self._execute(query, (instrument, before_ts, limit, instrument))
+
+        if not rows:
+            return []
+
+        grouped = []
+        current_ts = None
+        current_rows = []
+        for row in rows:
+            ts = row[0]
+            if current_ts is None or ts != current_ts:
+                if current_rows:
+                    grouped.append(current_rows)
+                current_ts = ts
+                current_rows = []
+            current_rows.append(row)
+        if current_rows:
+            grouped.append(current_rows)
+
+        return [self._normalize_option_band_snapshot_rows(group_rows) for group_rows in grouped]
 
     def fetch_option_contract_snapshot(self, instrument, strike, option_type, before_ts=None):
         """Fetch the latest snapshot row for one option contract."""

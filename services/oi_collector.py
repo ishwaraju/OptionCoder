@@ -190,6 +190,10 @@ class OICollector:
         self._log(f"Full OI Collection: Every {self.oi_collection_interval//60} minutes")
         self._log(f"Option Band Collection: Every {self.option_band_interval//60} minutes")
         self._log(f"Dhan Client: {'CONNECTED' if self.dhan_client.connected else 'DISCONNECTED'}")
+
+    def _snapshot_minute(self, dt=None):
+        """Return the exact minute bucket used for DB snapshots."""
+        return self.time_utils.floor_to_minute(dt or self.time_utils.now_ist())
     
     def _fetch_futures_volume(self):
         """Fetch futures volume from Dhan API using quote_data"""
@@ -223,7 +227,7 @@ class OICollector:
             if not self._is_collection_window_open():
                 return False
 
-            current_time = self.time_utils.now_ist()
+            current_time = self._snapshot_minute()
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:
@@ -289,7 +293,7 @@ class OICollector:
             if not self._is_collection_window_open():
                 return False
 
-            current_time = self.time_utils.now_ist()
+            current_time = self._snapshot_minute()
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:
@@ -380,7 +384,7 @@ class OICollector:
             if not self._is_collection_window_open():
                 return False
 
-            current_time = self.time_utils.now_ist()
+            current_time = self._snapshot_minute()
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:

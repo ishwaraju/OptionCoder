@@ -60,17 +60,19 @@ class InstrumentActionableRules:
 
     @classmethod
     def _allow_nifty(cls, signal_type, signal_grade, confidence, regime, score, pressure_conflict_level):
-        if signal_grade != "B":
-            return False
-        if signal_type not in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
-            return False
         if confidence not in {"MEDIUM", "HIGH"}:
             return False
         if regime not in {"TRENDING", "EXPANDING", "OPENING_EXPANSION"}:
             return False
         if pressure_conflict_level not in {"NONE", "MILD"}:
             return False
-        return float(score or 0) >= 84
+        if signal_grade in {"A", "A+"}:
+            return signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"} and float(score or 0) >= 78
+        if signal_grade != "B":
+            return False
+        if signal_type not in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
+            return False
+        return float(score or 0) >= 82
 
     @classmethod
     def _allow_banknifty(
@@ -83,19 +85,23 @@ class InstrumentActionableRules:
         score,
         pressure_conflict_level,
     ):
+        if confidence not in {"MEDIUM", "HIGH"}:
+            return False
+        if regime not in {"TRENDING", "EXPANDING", "CHOPPY"}:
+            return False
+        if candle_time is None:
+            return False
+        if pressure_conflict_level not in {"NONE", "MILD"}:
+            return False
+        if signal_grade in {"A", "A+"}:
+            if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
+                return candle_time.time() >= time(9, 40) and float(score or 0) >= 88
+            return signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"} and float(score or 0) >= 80
         if signal_grade != "B":
             return False
         if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
             return False
-        if confidence not in {"MEDIUM", "HIGH"}:
-            return False
-        if regime not in {"TRENDING", "EXPANDING"}:
-            return False
-        if candle_time is None:
-            return False
         if candle_time.time() < cls.BANKNIFTY_B_GRADE_START_TIME:
-            return False
-        if pressure_conflict_level not in {"NONE", "MILD"}:
             return False
         return float(score or 0) >= 80
 
@@ -117,7 +123,7 @@ class InstrumentActionableRules:
         late_session = minute_of_day is not None and (13 * 60) <= minute_of_day <= (14 * 60 + 30)
         ultra_late_session = minute_of_day is not None and minute_of_day >= (14 * 60 + 25)
 
-        if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "RETEST", "CONTINUATION"}:
+        if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "RETEST", "CONTINUATION", "REVERSAL", "TRAP_REVERSAL"}:
             return False
         if confidence not in {"MEDIUM", "HIGH"}:
             return False
@@ -137,6 +143,14 @@ class InstrumentActionableRules:
             )
 
         if signal_grade in {"A", "A+"}:
+            if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
+                return (
+                    confidence == "HIGH"
+                    and pressure_conflict_level == "NONE"
+                    and float(score or 0) >= 90
+                    and float(entry_score or 0) >= 92
+                    and not late_session
+                )
             return True
 
         if (

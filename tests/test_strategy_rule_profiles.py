@@ -18,6 +18,20 @@ def test_unified_actionable_rules_match_nifty_b_grade_policy():
     assert allowed is True
 
 
+def test_unified_actionable_rules_allow_nifty_a_grade_breakout():
+    allowed = InstrumentActionableRules.should_allow_signal(
+        instrument="NIFTY",
+        signal_type="BREAKOUT",
+        signal_grade="A",
+        confidence="HIGH",
+        regime="TRENDING",
+        score=80,
+        pressure_conflict_level="NONE",
+    )
+
+    assert allowed is True
+
+
 def test_unified_actionable_rules_match_banknifty_time_gate():
     blocked = InstrumentActionableRules.should_allow_signal(
         instrument="BANKNIFTY",
@@ -47,6 +61,22 @@ def test_unified_actionable_rules_match_sensex_ultra_late_guard():
     )
 
     assert blocked is False
+
+
+def test_unified_actionable_rules_allow_sensex_clean_reversal():
+    allowed = InstrumentActionableRules.should_allow_signal(
+        instrument="SENSEX",
+        signal_type="REVERSAL",
+        signal_grade="A",
+        confidence="HIGH",
+        regime="EXPANDING",
+        candle_time=datetime(2026, 4, 16, 11, 20),
+        score=92,
+        entry_score=94,
+        pressure_conflict_level="NONE",
+    )
+
+    assert allowed is True
 
 
 def test_threshold_builder_preserves_sensex_midday_focus_behavior():

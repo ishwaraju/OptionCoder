@@ -113,6 +113,7 @@ class SignalService:
         self.watch_alert_state = {}
         self.session_decisions = []
         self.pending_entry_watch = None
+        self.option_sweep_context = None
         self._current_risk_option_contract = None
         self._current_risk_reference_contract = None
         self._current_market_iv_regime = "NORMAL"
@@ -802,6 +803,7 @@ class SignalService:
         pressure_bias = (pressure_metrics or {}).get("pressure_bias")
         call_wall_ratio = float((pressure_metrics or {}).get("call_wall_strength_ratio") or 0)
         put_wall_ratio = float((pressure_metrics or {}).get("put_wall_strength_ratio") or 0)
+        sweep_override = self._should_soften_option_sweep_filters(signal)
 
         if signal == "CE" and resistance is not None and price >= (resistance - near_buffer):
             if resistance_state not in {"WEAKENING"} and pressure_bias != "BULLISH":
@@ -811,6 +813,8 @@ class SignalService:
                     "wall_level": resistance,
                 }
             if resistance_strength >= max(support_strength, 1.0) * 1.15 and call_wall_ratio >= max(put_wall_ratio, 1.0):
+                if sweep_override:
+                    return None
                 return {
                     "label": "CALL_WALL_HEAVY",
                     "reason": f"Call wall {int(resistance)} abhi heavy hai; CE breakout premium choke ho sakta hai.",
@@ -825,12 +829,34 @@ class SignalService:
                     "wall_level": support,
                 }
             if support_strength >= max(resistance_strength, 1.0) * 1.15 and put_wall_ratio >= max(call_wall_ratio, 1.0):
+                if sweep_override:
+                    return None
                 return {
                     "label": "PUT_WALL_HEAVY",
                     "reason": f"Put wall {int(support)} abhi heavy hai; PE breakdown premium sustain nahi ho sakta.",
                     "wall_level": support,
                 }
         return None
+
+    def _should_soften_option_sweep_filters(self, signal):
+        signal = (signal or "").upper()
+        sweep_ctx = getattr(self, "option_sweep_context", None) or {}
+        signal_type = (getattr(self.strategy, "last_signal_type", None) or "NONE").upper()
+        score = float(
+            getattr(self.strategy, "last_entry_score", 0)
+            or getattr(self.strategy, "last_score", 0)
+            or 0
+        )
+        return (
+            signal in {"CE", "PE"}
+            and sweep_ctx.get("direction") == signal
+            and sweep_ctx.get("quality") == "STRONG"
+            and sweep_ctx.get("micro_confirmed")
+            and sweep_ctx.get("persistence_pairs", 0) >= 3
+            and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "CONTINUATION", "AGGRESSIVE_CONTINUATION", "RETEST", "OPENING_DRIVE"}
+            and score >= 88
+            and getattr(self.strategy, "last_pressure_conflict_level", "NONE") in {"NONE", "MILD"}
+        )
 
     def _evaluate_premium_quality_guard(self, signal, selected_option_contract, candle_time):
         signal = (signal or "").upper()
@@ -871,6 +897,14 @@ class SignalService:
                 "premium_momentum_pct": premium_momentum_pct,
             }
         if premium_momentum_pct is not None and premium_momentum_pct < 1.0 and volume_now <= previous_volume and self.strategy.last_regime in {"RANGING", "CHOPPY"}:
+            if self._should_soften_option_sweep_filters(signal) and (spread_pct is None or spread_pct < 4.5):
+                return {
+                    "label": "PREMIUM_OK",
+                    "reason": "Broad option sweep me premium sleepy check soften kiya gaya.",
+                    "premium_momentum_pct": premium_momentum_pct,
+                    "iv_markup_pct": iv_markup_pct,
+                    "spread_pct": spread_pct,
+                }
             return {
                 "label": "PREMIUM_SLEEPY",
                 "reason": "Premium response weak hai aur volume bhi expand nahi hua.",
@@ -936,8 +970,9 @@ class SignalService:
         time_regime = (balanced_pro.get("time_regime") or self.strategy.last_regime or "").upper()
         signal_type = (balanced_pro.get("setup") or self.strategy.last_signal_type or "").upper()
         score = float(self.strategy.last_entry_score or self.strategy.last_score or 0)
+        confidence = (getattr(self.strategy, "last_confidence", "") or "").upper()
         spread_percent = self._spread_percent(selected_option_contract) if selected_option_contract else None
-        data_health = self.last_data_health or {}
+        data_health = getattr(self, "last_data_health", None) or {}
         feed_label = (data_health.get("label") or "").upper()
         market_regime = (self.strategy.last_regime or "").upper()
 
@@ -978,7 +1013,28 @@ class SignalService:
                 "action_text": "Watch-only raho. Midday me cleaner expansion ka wait karo.",
             }
 
-        if any(flag in cautions for flag in {"participation_weak", "opposite_pressure", "pressure_conflict", "higher_tf_not_aligned", "adx_not_confirmed"}):
+        critical_noise_flags = {
+            flag for flag in {
+                "participation_weak",
+                "opposite_pressure",
+                "pressure_conflict",
+                "higher_tf_not_aligned",
+                "adx_not_confirmed",
+            }
+            if flag in cautions
+        }
+        hard_conflict_flags = {"participation_weak", "opposite_pressure", "pressure_conflict", "higher_tf_not_aligned"}
+        has_hard_conflict = bool(critical_noise_flags.intersection(hard_conflict_flags))
+        elite_breakout = (
+            signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "OPENING_DRIVE"}
+            and confidence == "HIGH"
+            and score >= 88
+        )
+        if (
+            len(critical_noise_flags) >= 2
+            or (has_hard_conflict and "adx_not_confirmed" in critical_noise_flags)
+            or (has_hard_conflict and score < 84)
+        ) and not elite_breakout:
             return {
                 "label": "HIGH_NOISE_SKIP",
                 "reason": "Price aur option participation clean align nahi kar rahe.",
@@ -1223,6 +1279,23 @@ class SignalService:
             confidence_threshold=threshold,
         )
         if not confirmed:
+            sweep_ctx = getattr(self, "option_sweep_context", None) or {}
+            setup_type = (getattr(self.strategy, "last_signal_type", None) or "NONE").upper()
+            sweep_micro_override = (
+                sweep_ctx.get("direction") == signal
+                and sweep_ctx.get("quality") == "STRONG"
+                and sweep_ctx.get("micro_confirmed")
+                and sweep_ctx.get("persistence_pairs", 0) >= 3
+                and setup_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "REVERSAL", "TRAP_REVERSAL"}
+                and float(getattr(self.strategy, "last_entry_score", 0) or 0) >= (95 if setup_type == "BREAKOUT" else 88)
+                and getattr(self.strategy, "last_pressure_conflict_level", "NONE") in {"NONE", "MILD"}
+                and oi_reason in {"Insufficient OI data", "Microstructure data unavailable"}
+            )
+            if sweep_micro_override:
+                override_metrics = dict(metrics or {})
+                override_metrics["override"] = "option_sweep_microstructure"
+                override_metrics["base_reason"] = oi_reason
+                return True, "Option sweep microstructure override", override_metrics, None
             return False, oi_reason, metrics, None
 
         return True, oi_reason, metrics, None
@@ -2452,6 +2525,7 @@ class SignalService:
         if not signal:
             return False
 
+        sweep_ctx = getattr(self, "option_sweep_context", None) or {}
         signal_type = (self.strategy.last_signal_type or "NONE").upper()
         signal_grade = (self.strategy.last_signal_grade or "SKIP").upper()
         confidence = (self.strategy.last_confidence or "LOW").upper()
@@ -2460,6 +2534,14 @@ class SignalService:
             getattr(self.strategy, "last_entry_score", None)
             or getattr(self.strategy, "last_score", 0)
             or 0
+        )
+        sweep_override = (
+            sweep_ctx.get("direction") == signal
+            and sweep_ctx.get("quality") == "STRONG"
+            and sweep_ctx.get("micro_confirmed")
+            and sweep_ctx.get("persistence_pairs", 0) >= 3
+            and score >= 82
+            and getattr(self.strategy, "last_pressure_conflict_level", "NONE") in {"NONE", "MILD"}
         )
 
         if signal_type == "CONTINUATION" and not Config.ALLOW_CONTINUATION_ENTRY:
@@ -2470,8 +2552,12 @@ class SignalService:
                 and breakout_memory.get("session_day") == candle_time.date()
                 and int((candle_time - breakout_memory.get("time")).total_seconds() // 60) <= 45
             )
-            if not (recent_breakout and signal_grade in {"A", "A+"} and confidence == "HIGH" and score >= 78):
+            if not sweep_override and not (
+                recent_breakout and signal_grade in {"A", "A+"} and confidence == "HIGH" and score >= 78
+            ):
                 return False
+        if sweep_override and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "CONTINUATION", "RETEST", "BREAKOUT"}:
+            return True
         if self.instrument == "SENSEX":
             return InstrumentActionableRules.should_allow_signal(
                 instrument=self.instrument,
@@ -2484,6 +2570,14 @@ class SignalService:
                 entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
                 pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
             )
+        if (
+            signal_type in {"REVERSAL", "TRAP_REVERSAL"}
+            and signal_grade in {"A", "A+"}
+            and confidence == "HIGH"
+            and getattr(self.strategy, "last_pressure_conflict_level", "NONE") == "NONE"
+            and score >= 90
+        ):
+            return True
         if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
             return False
         if self.instrument in {"NIFTY", "BANKNIFTY"} and InstrumentActionableRules.should_allow_signal(
@@ -2512,7 +2606,10 @@ class SignalService:
             "oi_divergence_against",
         }
         current_cautions = set(getattr(self.strategy, "last_cautions", []) or [])
-        if current_cautions.intersection(critical_cautions) and score < 88:
+        caution_hits = current_cautions.intersection(critical_cautions)
+        if len(caution_hits) >= 2 and score < 90:
+            return False
+        if caution_hits and score < 84 and signal_type not in {"BREAKOUT_CONFIRM", "RETEST"}:
             return False
         return True
 
@@ -2551,6 +2648,10 @@ class SignalService:
         return float(numerator) / float(denominator)
 
     @staticmethod
+    def _option_row_key(row):
+        return (row.get("strike"), row.get("option_type"))
+
+    @staticmethod
     def _participation_row_weight(distance_from_atm):
         distance = abs(distance_from_atm if distance_from_atm is not None else 99)
         weights = {
@@ -2559,6 +2660,206 @@ class SignalService:
             2: 0.75,
         }
         return weights.get(distance, 0.35)
+
+    def _build_option_sweep_context(self, candle_time, price, atr, recent_candles_5m=None):
+        if not candle_time or not getattr(self, "db_reader", None):
+            return None
+
+        effective_close = candle_time + timedelta(minutes=5)
+        snapshot_groups = self.db_reader.fetch_recent_option_band_snapshots(
+            self.instrument,
+            before_ts=effective_close,
+            limit=3,
+        )
+        if len(snapshot_groups) < 2:
+            return None
+
+        latest_rows = snapshot_groups[-1]
+        prev_rows = snapshot_groups[-2]
+        older_rows = snapshot_groups[-3] if len(snapshot_groups) >= 3 else None
+        latest_ts = latest_rows[0]["ts"] if latest_rows else None
+        prev_ts = prev_rows[0]["ts"] if prev_rows else None
+        if latest_ts is None or prev_ts is None:
+            return None
+
+        latest_map = {self._option_row_key(row): row for row in latest_rows}
+        prev_map = {self._option_row_key(row): row for row in prev_rows}
+        older_map = {self._option_row_key(row): row for row in (older_rows or [])}
+        current_atm = next((row.get("atm_strike") for row in latest_rows if row.get("atm_strike") is not None), None)
+        if current_atm is None:
+            return None
+
+        strike_step = int(self.profile.get("strike_step") or 100)
+        scoped_offsets = range(-2, 5)
+        scoped_strikes = {int(current_atm + (offset * strike_step)) for offset in scoped_offsets}
+
+        def summarize(direction):
+            same_side = "CE" if direction == "CE" else "PE"
+            opposite_side = "PE" if direction == "CE" else "CE"
+            pair_support = 0
+            price_breadth = 0
+            price_failures = 0
+            volume_breadth = 0
+            weighted_edge = 0.0
+            oi_support = 0
+            impulse_examples = []
+
+            for strike in sorted(scoped_strikes):
+                same_now = latest_map.get((strike, same_side))
+                same_prev = prev_map.get((strike, same_side))
+                opp_now = latest_map.get((strike, opposite_side))
+                opp_prev = prev_map.get((strike, opposite_side))
+                if not all([same_now, same_prev, opp_now, opp_prev]):
+                    continue
+
+                same_price_delta = float((same_now.get("ltp") or 0) - (same_prev.get("ltp") or 0))
+                opp_price_delta = float((opp_now.get("ltp") or 0) - (opp_prev.get("ltp") or 0))
+                same_vol_delta = int((same_now.get("volume") or 0) - (same_prev.get("volume") or 0))
+                opp_vol_delta = int((opp_now.get("volume") or 0) - (opp_prev.get("volume") or 0))
+                same_oi_delta = int((same_now.get("oi") or 0) - (same_prev.get("oi") or 0))
+                opp_oi_delta = int((opp_now.get("oi") or 0) - (opp_prev.get("oi") or 0))
+
+                if direction == "CE":
+                    directional_price_ok = same_price_delta > 0 and opp_price_delta < 0
+                    oi_ok = same_oi_delta <= 0 or opp_oi_delta >= 0
+                else:
+                    directional_price_ok = same_price_delta > 0 and opp_price_delta < 0
+                    oi_ok = same_oi_delta <= 0 or opp_oi_delta >= 0
+
+                if directional_price_ok:
+                    price_breadth += 1
+                else:
+                    price_failures += 1
+
+                if same_vol_delta > 0:
+                    volume_breadth += 1
+
+                if directional_price_ok and same_vol_delta > 0:
+                    pair_support += 1
+                    weighted_edge += self._participation_row_weight(
+                        same_now.get("distance_from_atm")
+                    )
+                    if oi_ok:
+                        oi_support += 1
+                    if len(impulse_examples) < 3:
+                        impulse_examples.append(
+                            f"{strike}{same_side}:{round(same_price_delta, 2)}/{same_vol_delta}"
+                        )
+
+            return {
+                "pair_support": pair_support,
+                "price_breadth": price_breadth,
+                "price_failures": price_failures,
+                "volume_breadth": volume_breadth,
+                "weighted_edge": round(weighted_edge, 2),
+                "oi_support": oi_support,
+                "examples": impulse_examples,
+            }
+
+        def summarize_persistence(direction):
+            if not older_rows:
+                return 0
+            same_side = "CE" if direction == "CE" else "PE"
+            opposite_side = "PE" if direction == "CE" else "CE"
+            persistent_pairs = 0
+            for strike in sorted(scoped_strikes):
+                newer = prev_map.get((strike, same_side))
+                older = older_map.get((strike, same_side))
+                opp_newer = prev_map.get((strike, opposite_side))
+                opp_older = older_map.get((strike, opposite_side))
+                if not all([newer, older, opp_newer, opp_older]):
+                    continue
+                same_delta = float((newer.get("ltp") or 0) - (older.get("ltp") or 0))
+                opp_delta = float((opp_newer.get("ltp") or 0) - (opp_older.get("ltp") or 0))
+                if same_delta > 0 and opp_delta < 0:
+                    persistent_pairs += 1
+            return persistent_pairs
+
+        def micro_trend(direction):
+            recent_1m = self.db_reader.fetch_recent_candles_1m(
+                self.instrument,
+                limit=4,
+                before_ts=effective_close,
+            )
+            if len(recent_1m) < 3:
+                return False
+            closes = [float(candle.get("close") or 0.0) for candle in recent_1m[-3:]]
+            if direction == "CE":
+                return closes[-1] > closes[-2] > closes[-3]
+            return closes[-1] < closes[-2] < closes[-3]
+
+        ce_summary = summarize("CE")
+        pe_summary = summarize("PE")
+        ce_persistence = summarize_persistence("CE")
+        pe_persistence = summarize_persistence("PE")
+        ce_micro_ok = micro_trend("CE")
+        pe_micro_ok = micro_trend("PE")
+
+        direction = None
+        dominant = None
+        if (
+            ce_summary["pair_support"] >= 4
+            and ce_summary["price_breadth"] >= 5
+            and ce_summary["weighted_edge"] >= 4.2
+        ):
+            direction = "CE"
+            dominant = ce_summary
+        elif (
+            pe_summary["pair_support"] >= 4
+            and pe_summary["price_breadth"] >= 5
+            and pe_summary["weighted_edge"] >= 4.2
+        ):
+            direction = "PE"
+            dominant = pe_summary
+
+        if not direction or not dominant:
+            return None
+
+        persistence_pairs = ce_persistence if direction == "CE" else pe_persistence
+        micro_ok = ce_micro_ok if direction == "CE" else pe_micro_ok
+        five_min_ok = False
+        if recent_candles_5m and len(recent_candles_5m) >= 2:
+            last_two = recent_candles_5m[-2:]
+            if direction == "CE":
+                five_min_ok = last_two[-1]["close"] >= last_two[0]["close"]
+            else:
+                five_min_ok = last_two[-1]["close"] <= last_two[0]["close"]
+
+        quality = "MODERATE"
+        if (
+            dominant["pair_support"] >= 5
+            and dominant["price_breadth"] >= 6
+            and persistence_pairs >= 3
+            and micro_ok
+        ):
+            quality = "STRONG"
+
+        score_boost = 4 if quality == "MODERATE" else 10
+        if persistence_pairs >= 4:
+            score_boost += 2
+
+        return {
+            "direction": direction,
+            "quality": quality,
+            "score_boost": score_boost,
+            "pair_support": dominant["pair_support"],
+            "price_breadth": dominant["price_breadth"],
+            "price_failures": dominant["price_failures"],
+            "volume_breadth": dominant["volume_breadth"],
+            "weighted_edge": dominant["weighted_edge"],
+            "oi_support": dominant["oi_support"],
+            "persistence_pairs": persistence_pairs,
+            "micro_confirmed": micro_ok,
+            "five_min_confirmed": five_min_ok,
+            "trigger_ready": quality == "STRONG" and micro_ok and persistence_pairs >= 3,
+            "summary": (
+                f"{direction} sweep {quality.lower()} | breadth {dominant['pair_support']}/7"
+                f" | persist {persistence_pairs} | micro {'yes' if micro_ok else 'no'}"
+            ),
+            "examples": dominant["examples"],
+            "latest_ts": latest_ts,
+            "previous_ts": prev_ts,
+        }
 
     def _participation_phase(self, candle_time):
         current_now = candle_time.time() if candle_time is not None else self.time_utils.current_time()
@@ -3321,8 +3622,19 @@ class SignalService:
         """Save strategy decision to database"""
         try:
             actionable_block_reason = None
-            if signal is None and reason and reason.startswith("Option-buyer filter blocked live alert"):
-                actionable_block_reason = "option_buyer_filter"
+            if signal is None and reason:
+                if reason.startswith("Option-buyer filter blocked live alert"):
+                    actionable_block_reason = "option_buyer_filter"
+                elif reason.startswith("No-trade zone filtered"):
+                    actionable_block_reason = "no_trade_zone"
+                elif reason.startswith("Microstructure filtered"):
+                    actionable_block_reason = "microstructure"
+                elif reason.startswith("Premium quality filtered"):
+                    actionable_block_reason = "premium_quality"
+                elif reason.startswith("OI wall filtered"):
+                    actionable_block_reason = "oi_wall"
+                elif reason.startswith("ML Filtered"):
+                    actionable_block_reason = "ml_filter"
 
             row = (
                 ts,
@@ -3925,6 +4237,13 @@ class SignalService:
         recent_candles_5m = self.db_reader.fetch_recent_candles_5m(self.instrument, limit=24)
         if not recent_candles_5m or recent_candles_5m[-1]["time"] != candle_5m["time"]:
             recent_candles_5m = (recent_candles_5m or []) + [candle_5m]
+        option_sweep_context = self._build_option_sweep_context(
+            candle_time=candle_5m["time"],
+            price=price,
+            atr=atr_value,
+            recent_candles_5m=recent_candles_5m,
+        )
+        self.option_sweep_context = option_sweep_context
         trend_15m = self._derive_15m_trend_from_5m(recent_candles_5m)
         feed_health = self._assess_raw_feed_health(candle_5m["time"])
         can_trade_live = True if Config.TEST_MODE else self.time_utils.can_trade()
@@ -3962,6 +4281,7 @@ class SignalService:
             trend_15m=trend_15m,
             participation_metrics=participation_metrics,
             oi_ladder_data=oi_ladder_data,
+            option_sweep_context=option_sweep_context,
             can_trade=can_trade_live and feed_health["label"] != "REJECT",
         )
         if signal and feed_health["label"] == "REJECT":
@@ -4249,6 +4569,8 @@ class SignalService:
             enriched_reason += f" | oi_summary={oi_ladder_data['oi_summary']}"
         if balanced_pro.get("pressure_summary", {}).get("summary"):
             enriched_reason += f" | pressure_summary={balanced_pro['pressure_summary']['summary']}"
+        if option_sweep_context and option_sweep_context.get("summary"):
+            enriched_reason += f" | option_sweep={option_sweep_context['summary']}"
         if microstructure_reason:
             enriched_reason += f" | microstructure={microstructure_reason}"
         if self.option_data_source:

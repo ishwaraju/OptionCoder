@@ -25,6 +25,13 @@ class TimeUtils:
     def now_ist(self):
         return datetime.now(self.ist)
 
+    @staticmethod
+    def floor_to_minute(dt):
+        """Normalize a datetime to the exact minute boundary."""
+        if dt is None:
+            return None
+        return dt.replace(second=0, microsecond=0)
+
     def today_str(self):
         return self.now_ist().strftime('%Y-%m-%d')
 

@@ -302,6 +302,121 @@ def test_breakout_confirmation_triggers_after_weak_breakout_watch():
     assert "confirmation" in reason_2.lower()
 
 
+def test_nifty_strong_option_sweep_can_override_choppy_breakout_regime():
+    base_kwargs = dict(
+        price=24212,
+        orb_high=24200,
+        orb_low=24140,
+        vwap=24192,
+        atr=28,
+        volume_signal="NORMAL",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="LONG_BUILDUP",
+        support=24170,
+        resistance=24310,
+        can_trade=True,
+        buffer=10,
+        pressure_metrics={
+            "pressure_bias": "NEUTRAL",
+            "atm_ce_concentration": 0.12,
+            "atm_pe_concentration": 0.12,
+        },
+        candle_high=24218,
+        candle_low=24200,
+        candle_close=24212,
+        candle_open=24204,
+        candle_tick_count=5,
+        candle_time=datetime(2026, 5, 6, 14, 20),
+        recent_candles_5m=[
+            {"time": datetime(2026, 5, 6, 14, 10), "open": 24170, "high": 24198, "low": 24152, "close": 24190, "volume": 1000},
+            {"time": datetime(2026, 5, 6, 14, 15), "open": 24190, "high": 24202, "low": 24184, "close": 24198, "volume": 1200},
+            {"time": datetime(2026, 5, 6, 14, 20), "open": 24204, "high": 24218, "low": 24200, "close": 24212, "volume": 1500},
+        ],
+    )
+
+    without_sweep = BreakoutStrategy(instrument="NIFTY")
+    without_sweep._derive_regime = lambda *args, **kwargs: "CHOPPY"
+    without_sweep._evaluate_reversal_setups = lambda ctx: None
+    no_signal, _ = without_sweep.generate_signal(**base_kwargs)
+
+    strategy = BreakoutStrategy(instrument="NIFTY")
+    strategy._derive_regime = lambda *args, **kwargs: "CHOPPY"
+    strategy._evaluate_reversal_setups = lambda ctx: None
+    signal, _ = strategy.generate_signal(
+        **base_kwargs,
+        option_sweep_context={
+            "direction": "CE",
+            "quality": "STRONG",
+            "micro_confirmed": True,
+            "persistence_pairs": 5,
+            "score_boost": 10,
+        },
+    )
+
+    assert no_signal is None
+    assert signal == "CE"
+    assert "option_sweep_regime_override" in strategy.last_score_components
+
+
+def test_banknifty_strong_option_sweep_can_break_with_weak_underlying_volume():
+    base_kwargs = dict(
+        price=55572,
+        orb_high=55344,
+        orb_low=54980,
+        vwap=55310,
+        atr=110,
+        volume_signal="WEAK",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="SHORT_COVERING",
+        support=55210,
+        resistance=55720,
+        can_trade=True,
+        buffer=20,
+        pressure_metrics={
+            "pressure_bias": "NEUTRAL",
+            "atm_ce_concentration": 0.11,
+            "atm_pe_concentration": 0.11,
+        },
+        candle_high=55590,
+        candle_low=55480,
+        candle_close=55572,
+        candle_open=55495,
+        candle_tick_count=7,
+        candle_time=datetime(2026, 5, 6, 14, 20),
+        recent_candles_5m=[
+            {"time": datetime(2026, 5, 6, 14, 10), "open": 55040, "high": 55140, "low": 54990, "close": 55110, "volume": 900},
+            {"time": datetime(2026, 5, 6, 14, 15), "open": 55110, "high": 55165.9, "low": 55090, "close": 55130, "volume": 950},
+            {"time": datetime(2026, 5, 6, 14, 20), "open": 55495, "high": 55590, "low": 55480, "close": 55572, "volume": 980},
+        ],
+    )
+
+    without_sweep = BreakoutStrategy(instrument="BANKNIFTY")
+    without_sweep._derive_regime = lambda *args, **kwargs: "CHOPPY"
+    without_sweep._evaluate_reversal_setups = lambda ctx: None
+    without_sweep._score_signal = lambda **kwargs: (82, "CE", ["synthetic_score"])
+    no_signal, _ = without_sweep.generate_signal(**base_kwargs)
+
+    strategy = BreakoutStrategy(instrument="BANKNIFTY")
+    strategy._derive_regime = lambda *args, **kwargs: "CHOPPY"
+    strategy._evaluate_reversal_setups = lambda ctx: None
+    strategy._score_signal = lambda **kwargs: (82, "CE", ["synthetic_score"])
+    signal, _ = strategy.generate_signal(
+        **base_kwargs,
+        option_sweep_context={
+            "direction": "CE",
+            "quality": "STRONG",
+            "micro_confirmed": True,
+            "persistence_pairs": 5,
+            "score_boost": 10,
+        },
+    )
+
+    assert no_signal is None
+    assert signal == "CE"
+
+
 def test_high_conviction_opening_breakdown_allowed_even_if_far_from_vwap():
     strategy = BreakoutStrategy()
 
