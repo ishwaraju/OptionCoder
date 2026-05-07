@@ -653,6 +653,7 @@ class Notifier:
 
         instrument = monitor_data.get("instrument")
         signal = monitor_data.get("signal")
+        strike = monitor_data.get("strike")
         signal_type = monitor_data.get("signal_type")
         setup_bucket = monitor_data.get("setup_bucket")
         price = monitor_data.get("price")
@@ -705,6 +706,8 @@ class Notifier:
             summary.append(ist_label)
         if signal_type:
             summary.append(_setup_label(signal_type))
+        if strike is not None and signal in {"CE", "PE"}:
+            summary.append(f"{strike} {signal}")
         if setup_bucket:
             summary.append(setup_bucket)
         if pnl_points is not None:
