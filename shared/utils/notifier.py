@@ -107,6 +107,56 @@ def _decision_label_text(label):
     return mapping.get(label, label.replace("_", " ").title())
 
 
+def _safe_float(value):
+    try:
+        return float(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def _entry_buy_line(signal, strike, price, bid_price=None, ask_price=None, spread=None):
+    signal = (signal or "").upper()
+    option_side = signal if signal in {"CE", "PE"} else "OPT"
+    price_f = _safe_float(price)
+    bid_f = _safe_float(bid_price)
+    ask_f = _safe_float(ask_price)
+    spread_f = _safe_float(spread)
+    strike_label = f"{strike} {option_side}" if strike is not None else option_side
+
+    if price_f is None:
+        return f"BUY {strike_label} sirf clean fill mile to."
+
+    chase_cap = None
+    if ask_f is not None:
+        chase_cap = ask_f
+    elif spread_f is not None:
+        chase_cap = round(price_f + max(spread_f, 0.0), 2)
+    else:
+        chase_cap = round(price_f * 1.01, 2)
+
+    if bid_f is not None and ask_f is not None:
+        return (
+            f"BUY {strike_label} near {price_f:.2f} "
+            f"(bid {bid_f:.2f} / ask {ask_f:.2f}). "
+            f"Chase mat karo above {chase_cap:.2f}."
+        )
+
+    return f"BUY {strike_label} near {price_f:.2f}. Chase mat karo above {chase_cap:.2f}."
+
+
+def _compact_market_line(spot_price, trigger_price, invalidate_price, first_target_price):
+    bits = []
+    if spot_price is not None:
+        bits.append(f"Spot {spot_price}")
+    if trigger_price is not None:
+        bits.append(f"Trig {trigger_price}")
+    if invalidate_price is not None:
+        bits.append(f"SL {invalidate_price}")
+    if first_target_price is not None:
+        bits.append(f"T1 {first_target_price}")
+    return " | ".join(bits[:4]) if bits else None
+
+
 def _monitor_guidance_badge(guidance, decision_label=None):
     guidance = (guidance or "").upper()
     decision_label = (decision_label or "").upper()
@@ -352,6 +402,9 @@ class Notifier:
         greek_summary = trade_data.get("greek_summary")
         projected_premium_sl = trade_data.get("projected_premium_sl")
         projected_premium_t1 = trade_data.get("projected_premium_t1")
+        entry_bid = trade_data.get("entry_bid")
+        entry_ask = trade_data.get("entry_ask")
+        entry_spread = trade_data.get("entry_spread")
         setup_label = _setup_label(signal_type)
         lines = []
         header = f"{instrument} ACTION {signal}" if instrument else f"ACTION {signal}"
@@ -372,75 +425,21 @@ class Notifier:
             summary.append(confidence)
         if summary:
             lines.append(" | ".join(summary))
+        buy_line = _entry_buy_line(signal, strike, price, entry_bid, entry_ask, entry_spread)
+        if buy_line:
+            lines.append(buy_line)
+        market_line = _compact_market_line(spot_price, trigger_price, invalidate_price, first_target_price)
+        if market_line:
+            lines.append(market_line)
         contract_bits = []
-        if strike is not None and signal in {"CE", "PE"}:
-            contract_bits.append(f"{strike} {signal}")
-        elif strike is not None:
-            contract_bits.append(f"Strike {strike}")
-        if price is not None:
-            contract_bits.append(f"Premium {price}")
         if projected_premium_sl is not None:
-            contract_bits.append(f"SL {round(projected_premium_sl, 2)}")
+            contract_bits.append(f"OptSL {round(projected_premium_sl, 2)}")
         if projected_premium_t1 is not None:
-            contract_bits.append(f"T1 {round(projected_premium_t1, 2)}")
-
-        spot_bits = []
-        if spot_price is not None:
-            spot_bits.append(f"Spot {spot_price}")
-        if trigger_price is not None:
-            spot_bits.append(f"Trig {trigger_price}")
-        if invalidate_price is not None:
-            spot_bits.append(f"SL {invalidate_price}")
-        if first_target_price is not None:
-            spot_bits.append(f"T1 {first_target_price}")
-
+            contract_bits.append(f"OptT1 {round(projected_premium_t1, 2)}")
         if contract_bits:
-            lines.append(f"Contract: {' | '.join(contract_bits)}")
-        if spot_bits:
-            lines.append(f"Spot: {' | '.join(spot_bits)}")
-        risk_bits = []
-        if option_stop_loss_pct is not None:
-            risk_bits.append(f"OptSL {option_stop_loss_pct:.0f}%")
-        if option_target_pct is not None:
-            risk_bits.append(f"OptT1 {option_target_pct:.0f}%")
-        if option_trail_pct is not None:
-            risk_bits.append(f"Trail {option_trail_pct:.0f}%")
-        if rr_ratio is not None:
-            risk_bits.append(f"RR {rr_ratio}")
-        if time_stop_warn_minutes is not None and time_stop_exit_minutes is not None:
-            risk_bits.append(f"TS {time_stop_warn_minutes}/{time_stop_exit_minutes}m")
-        if risk_bits:
-            lines.append(" | ".join(risk_bits))
-        flow = []
-        short_pressure = _short_pressure_read(pressure_read)
-        short_oi = _short_oi_read(oi_read)
-        if short_pressure:
-            flow.append(short_pressure)
-        if short_oi:
-            flow.append(short_oi)
-        elif confidence_summary:
-            flow.append(confidence_summary)
-        if flow:
-            lines.append(" | ".join(flow[:2]))
-        if greek_summary:
-            lines.append(greek_summary)
-        for explainer in _signal_explainer(reason, confidence_summary=confidence_summary):
-            lines.append(explainer)
+            lines.append(" | ".join(contract_bits))
         if action_text:
             lines.append(action_text)
-        if structure_suggestion:
-            structure_line = (
-                f"Structure: {structure_suggestion.get('type')} | "
-                f"Buy {structure_suggestion.get('long_strike')} | "
-                f"Sell {structure_suggestion.get('short_strike')}"
-            )
-            lines.append(structure_line)
-            if structure_suggestion.get("rationale"):
-                lines.append(structure_suggestion.get("rationale"))
-        if journal_note:
-            lines.append(journal_note)
-        if risk_note:
-            lines.append(risk_note)
         message = "\n".join(lines)
         self.send_alert(message)
 
@@ -588,14 +587,25 @@ class Notifier:
         signal_type = trigger_data.get("signal_type")
         signal_grade = trigger_data.get("signal_grade")
         price = trigger_data.get("price")
+        underlying_price = trigger_data.get("underlying_price")
         trigger_price = trigger_data.get("trigger_price")
+        invalidate_price = trigger_data.get("invalidate_price")
+        first_target_price = trigger_data.get("first_target_price")
+        stop_loss_option_price = trigger_data.get("stop_loss_option_price")
+        first_target_option_price = trigger_data.get("first_target_option_price")
+        context = trigger_data.get("context")
+        risk_note = trigger_data.get("risk_note")
+        decision_label = trigger_data.get("decision_label")
         greek_summary = trigger_data.get("greek_summary")
+        entry_bid = trigger_data.get("entry_bid")
+        entry_ask = trigger_data.get("entry_ask")
+        entry_spread = trigger_data.get("entry_spread")
 
         instrument = trigger_data.get("instrument")
         header_parts = []
         if instrument:
             header_parts.append(instrument)
-        header_parts.append(f"{signal} ENTRY")
+        header_parts.append(_decision_label_text(decision_label) or f"{signal} ENTRY")
         header = " ".join(header_parts)
 
         summary = []
@@ -605,22 +615,11 @@ class Notifier:
             summary.append(confidence)
         if signal_grade and signal_grade != "SKIP":
             summary.append(f"G:{signal_grade}")
-        if strike is not None and signal in {"CE", "PE"}:
-            summary.append(f"Contract {strike} {signal}")
-        elif strike is not None:
-            summary.append(f"Strike {strike}")
-
-        contract_bits = []
-        if strike is not None and signal in {"CE", "PE"}:
-            contract_bits.append(f"{strike} {signal}")
-        elif strike is not None:
-            contract_bits.append(f"Strike {strike}")
-        if price is not None:
-            contract_bits.append(f"Premium {price}")
-
-        spot_bits = []
-        if trigger_price is not None:
-            spot_bits.append(f"Trig {trigger_price}")
+        premium_plan_bits = []
+        if stop_loss_option_price is not None:
+            premium_plan_bits.append(f"OptSL {stop_loss_option_price}")
+        if first_target_option_price is not None:
+            premium_plan_bits.append(f"OptT1 {first_target_option_price}")
 
         lines = [header]
         ist_label = _ist_now_label()
@@ -628,14 +627,14 @@ class Notifier:
             summary.insert(0, ist_label)
         if summary:
             lines.append(" | ".join(summary))
-        if contract_bits:
-            lines.append(f"Contract: {' | '.join(contract_bits)}")
-        if spot_bits:
-            lines.append(f"Spot: {' | '.join(spot_bits)}")
-        if greek_summary:
-            lines.append(greek_summary)
-        for explainer in _signal_explainer(trigger_data.get("reason"), confidence_summary=trigger_data.get("confidence_summary"))[:2]:
-            lines.append(explainer)
+        buy_line = _entry_buy_line(signal, strike, price, entry_bid, entry_ask, entry_spread)
+        if buy_line:
+            lines.append(buy_line)
+        market_line = _compact_market_line(underlying_price, trigger_price, invalidate_price, first_target_price)
+        if market_line:
+            lines.append(market_line)
+        if premium_plan_bits:
+            lines.append(" | ".join(premium_plan_bits))
 
         message = "\n".join(lines)
 
@@ -721,27 +720,6 @@ class Notifier:
         if summary:
             lines.append(" | ".join(summary))
 
-        risk_bits = []
-        if stop_loss_option_price is not None and stop_loss_pct is not None:
-            risk_bits.append(f"Hard SL {stop_loss_option_price} ({stop_loss_pct:.0f}%)")
-        if first_target_option_price is not None and target_pct is not None:
-            risk_bits.append(f"T1 {first_target_option_price} ({target_pct:.0f}%)")
-        if dynamic_trail_pct is not None:
-            risk_bits.append(f"Trail {dynamic_trail_pct:.1f}%")
-        elif trail_pct is not None:
-            risk_bits.append(f"Trail {trail_pct:.0f}%")
-        if drawdown_from_peak_pct is not None:
-            risk_bits.append(f"PeakDD {drawdown_from_peak_pct:.2f}%")
-        if invalidate_underlying_price is not None:
-            risk_bits.append(f"Inv {invalidate_underlying_price}")
-        if time_stop_warn_minutes is not None and time_stop_exit_minutes is not None:
-            risk_bits.append(f"TS {time_stop_warn_minutes}/{time_stop_exit_minutes}m")
-        if expansion_ratio is not None:
-            risk_bits.append(f"Exp {expansion_ratio}")
-        if flip_score is not None:
-            risk_bits.append(f"Flip {flip_score:.0f}")
-        if risk_bits:
-            lines.append(" | ".join(risk_bits[:2]))
         state_bits = []
         if profit_lock_armed:
             state_bits.append(
@@ -749,24 +727,12 @@ class Notifier:
             )
         if psar_style_level is not None:
             state_bits.append(f"Trail level {psar_style_level}")
+        if invalidate_underlying_price is not None:
+            state_bits.append(f"Inv {invalidate_underlying_price}")
         if state_bits:
             lines.append(" | ".join(state_bits[:2]))
-        if greek_summary:
-            lines.append(greek_summary)
-        if expected_option_move is not None and actual_option_move is not None:
-            lines.append(f"Option move {actual_option_move} vs expected {expected_option_move}")
-        if flip_confidence:
-            lines.append(f"Flip confidence: {flip_confidence}")
-        if live_pressure_summary:
-            lines.append(live_pressure_summary)
-        if risk_note:
-            lines.append(risk_note)
         action_line = _monitor_action_line(guidance, action_text, reason=reason)
         if action_line:
             lines.append(action_line)
-        if reason and reason != action_line:
-            lines.append(reason)
-        if journal_note:
-            lines.append(journal_note)
 
         self.send_alert("\n".join(lines))

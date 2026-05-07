@@ -33,6 +33,7 @@ from shared.market.oi_ladder import OILadder
 from shared.market.pressure_analyzer import PressureAnalyzer
 from shared.market.spread_filter import SpreadFilter
 from shared.market.oi_quote_confirmation import OIQuoteConfirmation
+from shared.market.option_spike_detector import OptionSpikeDetector
 from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
 from strategies.shared.breakout_strategy import BreakoutStrategy
 from strategies.shared.strike_selector import StrikeSelector
@@ -84,6 +85,7 @@ class SignalService:
         self.pressure = PressureAnalyzer()
         self.spread_filter = SpreadFilter()
         self.oi_quote_confirmation = OIQuoteConfirmation()
+        self.option_spike_detector = OptionSpikeDetector(self.profile.get("strike_step"))
         
         # Strategy
         self.strategy = BreakoutStrategy(instrument=self.instrument)
@@ -113,6 +115,7 @@ class SignalService:
         self.watch_alert_state = {}
         self.session_decisions = []
         self.pending_entry_watch = None
+        self.pending_spike_watch = None
         self.option_sweep_context = None
         self._current_risk_option_contract = None
         self._current_risk_reference_contract = None
@@ -271,6 +274,9 @@ class SignalService:
             "signal_key": signal_key,
             "signal_ts": candle_5m["time"],
             "signal_type": (balanced_pro or {}).get("setup"),
+            "signal_grade": getattr(self.strategy, "last_signal_grade", None),
+            "entry_confidence": getattr(self.strategy, "last_confidence", None),
+            "entry_score": getattr(self.strategy, "last_entry_score", None),
             "entry_time": candle_5m["time"],
             "entry_price": option_entry_price if option_entry_price is not None else price,
             "entry_underlying_price": price,
@@ -311,6 +317,10 @@ class SignalService:
             "psar_style_level": (self.strategy.last_entry_plan or {}).get("invalidate_price"),
             "entry_atr": (self.strategy.last_entry_plan or {}).get("atr"),
             "last_notified_minute": None,
+            "last_sent_monitor_minute": None,
+            "last_sent_guidance": None,
+            "last_sent_decision_label": None,
+            "last_sent_pnl_percent": None,
             "minutes_active": 0,
         }
 
@@ -1396,6 +1406,9 @@ class SignalService:
     def _clear_pending_entry_watch(self):
         self.pending_entry_watch = None
 
+    def _clear_pending_spike_watch(self):
+        self.pending_spike_watch = None
+
     def _preserve_existing_pending_watch(self, candle_5m):
         pending = self.pending_entry_watch
         if not pending or not candle_5m:
@@ -1535,6 +1548,24 @@ class SignalService:
         return 20
 
     @staticmethod
+    def _pending_watch_elite_ready(pending):
+        if not pending:
+            return False
+        signal_grade = (pending.get("signal_grade") or "").upper()
+        confidence = (pending.get("confidence") or "").upper()
+        setup = (pending.get("signal_type") or "").upper()
+        score = float(pending.get("score") or 0)
+        entry_score = float(pending.get("entry_score") or 0)
+        return bool(
+            pending.get("strong_watch_setup")
+            and signal_grade in {"A", "A+"}
+            and confidence == "HIGH"
+            and setup in {"BREAKOUT_CONFIRM", "RETEST", "REVERSAL", "TRAP_REVERSAL"}
+            and score >= 82
+            and entry_score >= 76
+        )
+
+    @staticmethod
     def _candle_close_strength(candle, direction):
         high = candle.get("high")
         low = candle.get("low")
@@ -1577,6 +1608,8 @@ class SignalService:
         minutes_since_watch = pending.get("minutes_since_watch", 0)
         trigger_price = pending.get("trigger_price")
         invalidate_price = pending.get("invalidate_price")
+        spike_origin = pending.get("spike_origin", False)
+        spike_quality = ((pending.get("spike_context") or {}).get("quality") or "").upper()
 
         min_close_strength = 0.52
         min_body_ratio = 0.18
@@ -1596,11 +1629,27 @@ class SignalService:
             min_body_ratio -= 0.03
         if fast_track_ready:
             min_close_strength -= 0.03
+        if spike_origin and spike_quality == "STRONG":
+            min_close_strength -= 0.05
+            min_body_ratio -= 0.04
+
+        spike_breadth_override = (
+            spike_origin
+            and (pending.get("spike_context") or {}).get("price_breadth", 0) >= 6
+            and (pending.get("spike_context") or {}).get("volume_breadth", 0) >= 6
+            and minutes_since_watch <= 2
+        )
 
         if close_strength < min_close_strength:
-            return False, "1m trigger close weak"
+            if spike_breadth_override and close_strength >= max(min_close_strength - 0.08, 0.45):
+                close_strength = min_close_strength
+            else:
+                return False, "1m trigger close weak"
         if body_ratio < min_body_ratio:
-            return False, "1m trigger body weak"
+            if spike_breadth_override and body_ratio >= max(min_body_ratio - 0.08, 0.10):
+                body_ratio = min_body_ratio
+            else:
+                return False, "1m trigger body weak"
 
         if self.instrument == "NIFTY" and invalidate_price is not None and trigger_price is not None:
             total_risk = abs(float(trigger_price) - float(invalidate_price))
@@ -1626,6 +1675,24 @@ class SignalService:
                 return False, "1m trigger against fresh opposite candle"
 
         return True, None
+
+    @staticmethod
+    def _pending_watch_spike_micro_override_ready(pending, latest):
+        spike_context = pending.get("spike_context") or {}
+        if not pending.get("spike_origin"):
+            return False
+        if (spike_context.get("quality") or "").upper() != "STRONG":
+            return False
+        if (pending.get("direction") or "").upper() not in {"CE", "PE"}:
+            return False
+        latest_close = float(latest.get("close") or 0.0)
+        latest_open = float(latest.get("open") or 0.0)
+        trigger_price = pending.get("trigger_price")
+        if trigger_price is None:
+            return False
+        if pending.get("direction") == "CE":
+            return latest_close >= float(trigger_price) and latest_close >= latest_open
+        return latest_close <= float(trigger_price) and latest_close <= latest_open
 
     @staticmethod
     def _pending_watch_has_caution(pending, caution):
@@ -1751,6 +1818,11 @@ class SignalService:
             "trigger_price": float(trigger_price),
             "invalidate_price": watch_payload.get("invalidate_price"),
             "first_target_price": watch_payload.get("first_target_price"),
+            "option_stop_loss_pct": watch_payload.get("option_stop_loss_pct"),
+            "option_target_pct": watch_payload.get("option_target_pct"),
+            "option_trail_pct": watch_payload.get("option_trail_pct"),
+            "risk_note": watch_payload.get("risk_note"),
+            "context": watch_payload.get("context"),
             "score": score,
             "entry_score": entry_score,
             "confidence": confidence,
@@ -1764,6 +1836,16 @@ class SignalService:
             "reason": watch_payload.get("reason"),
             "fast_track_ready": fast_track_ready,
             "strong_watch_setup": strong_watch_setup,
+            "elite_watch_ready": self._pending_watch_elite_ready(
+                {
+                    "signal_grade": signal_grade,
+                    "confidence": confidence,
+                    "signal_type": setup,
+                    "score": score,
+                    "entry_score": entry_score,
+                    "strong_watch_setup": strong_watch_setup,
+                }
+            ),
             "hybrid_mode": hybrid_mode,
             "cautions": list(watch_payload.get("cautions") or []),
             "blockers": list(watch_payload.get("blockers") or []),
@@ -1808,12 +1890,15 @@ class SignalService:
         invalidate_price = pending.get("invalidate_price")
         direction = pending["direction"]
         fast_track_ready = pending.get("fast_track_ready", False)
+        elite_watch_ready = pending.get("elite_watch_ready", False)
         hybrid_mode = pending.get("hybrid_mode", False)
         one_min_buffer = 2 if self.instrument == "NIFTY" else 5
         if fast_track_ready:
             one_min_buffer = 1 if self.instrument == "NIFTY" else 3
         elif hybrid_mode:
             one_min_buffer = 1 if self.instrument == "NIFTY" else 2
+        if elite_watch_ready and minutes_since_watch <= 3:
+            one_min_buffer = max(0 if self.instrument == "NIFTY" else 1, one_min_buffer - 1)
         if self.instrument == "BANKNIFTY" and minutes_since_watch >= 6:
             one_min_buffer = max(one_min_buffer, 4)
         if self.instrument == "SENSEX" and minutes_since_watch >= 6:
@@ -1833,6 +1918,16 @@ class SignalService:
             if hybrid_mode:
                 trigger_hit = trigger_hit or (latest["high"] >= trigger_price and latest["close"] >= trigger_price)
                 follow_through_ok = follow_through_ok or latest["close"] >= trigger_price
+            if elite_watch_ready and minutes_since_watch <= 3:
+                trigger_hit = trigger_hit or (
+                    latest["high"] >= trigger_price
+                    and latest["close"] >= trigger_price
+                    and latest["close"] >= latest["open"]
+                )
+                follow_through_ok = follow_through_ok or (
+                    latest["close"] >= trigger_price
+                    and latest["close"] >= previous["close"]
+                )
         else:
             if invalidate_price is not None and latest["high"] >= invalidate_price:
                 return {"status": "INVALIDATED", "reason": "Watch invalidated before 1m trigger"}
@@ -1844,10 +1939,25 @@ class SignalService:
             if hybrid_mode:
                 trigger_hit = trigger_hit or (latest["low"] <= trigger_price and latest["close"] <= trigger_price)
                 follow_through_ok = follow_through_ok or latest["close"] <= trigger_price
+            if elite_watch_ready and minutes_since_watch <= 3:
+                trigger_hit = trigger_hit or (
+                    latest["low"] <= trigger_price
+                    and latest["close"] <= trigger_price
+                    and latest["close"] <= latest["open"]
+                )
+                follow_through_ok = follow_through_ok or (
+                    latest["close"] <= trigger_price
+                    and latest["close"] <= previous["close"]
+                )
 
         volume_ok = self._one_minute_trigger_volume_ok(recent_1m_candles)
         if hybrid_mode and pending.get("strong_watch_setup") and latest.get("volume", 0) > 0:
             volume_ok = True if latest["volume"] >= max(previous.get("volume", 0) * 0.8, 1) else volume_ok
+        if elite_watch_ready and latest.get("volume", 0) > 0:
+            prior = recent_1m_candles[-4:-1]
+            prior_volumes = [candle.get("volume") or 0 for candle in prior]
+            avg_prior_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0
+            volume_ok = volume_ok or latest["volume"] >= max(avg_prior_volume * 0.7, previous.get("volume", 0) * 0.75, 1)
         if fast_track_ready and trigger_hit and volume_ok:
             if direction == "CE":
                 body_ok = body_ok or latest["high"] >= trigger_price + (one_min_buffer * 2)
@@ -1883,7 +1993,14 @@ class SignalService:
                 strict=strict_confirmation,
             )
             if not confirmed:
-                return {"status": "INVALIDATED", "reason": f"1m trigger lacked microstructure confirmation: {micro_reason}"}
+                if (
+                    micro_reason in {"Microstructure data unavailable", "Insufficient OI data"}
+                    and self._pending_watch_spike_micro_override_ready(pending, latest)
+                ):
+                    confirmed = True
+                    micro_reason = "Spike watch microstructure override"
+                else:
+                    return {"status": "INVALIDATED", "reason": f"1m trigger lacked microstructure confirmation: {micro_reason}"}
         if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
             return None
 
@@ -1892,6 +2009,8 @@ class SignalService:
             "price": latest["close"],
             "time": latest["time"],
             "reason": "1m trigger confirmed after 5m watch",
+            "selected_strike": selected_strike if trigger_hit else None,
+            "micro_reason": micro_reason if trigger_hit else None,
         }
 
     def _maybe_fire_pending_entry_watch(self, latest_5m_candle):
@@ -1920,16 +2039,17 @@ class SignalService:
         pending = self.pending_entry_watch
         signal = pending["direction"]
         trigger_price = pending["trigger_price"]
-        strike = None
+        strike = evaluation.get("selected_strike")
         option_contract = None
         if self.option_data:
-            strike, _ = self.strike_selector.select_strike_with_reason(
-                price=evaluation["price"],
-                signal=signal,
-                volume_signal="NORMAL",
-                strategy_score=pending["score"],
-                pressure_metrics=None,
-            )
+            if strike is None:
+                strike, _ = self.strike_selector.select_strike_with_reason(
+                    price=evaluation["price"],
+                    signal=signal,
+                    volume_signal="NORMAL",
+                    strategy_score=pending["score"],
+                    pressure_metrics=None,
+                )
             option_contract = self._get_option_contract_snapshot(strike, signal, before_ts=evaluation["time"])
             option_contract = self._greek_enriched_option_contract(
                 option_contract,
@@ -1938,17 +2058,41 @@ class SignalService:
                 before_ts=evaluation["time"],
             )
 
+        option_price = (option_contract or {}).get("ltp")
+        stop_loss_option_price = None
+        first_target_option_price = None
+        if option_price is not None:
+            sl_pct = pending.get("option_stop_loss_pct")
+            t1_pct = pending.get("option_target_pct")
+            if sl_pct is not None:
+                stop_loss_option_price = round(float(option_price) * (1 - float(sl_pct) / 100.0), 2)
+            if t1_pct is not None:
+                first_target_option_price = round(float(option_price) * (1 + float(t1_pct) / 100.0), 2)
+
         self.notifier.send_entry_trigger_notification(
             {
                 "instrument": self.instrument,
                 "signal": signal,
                 "strike": strike,
                 "confidence": pending.get("confidence"),
+                "confidence_summary": evaluation.get("micro_reason") or pending.get("reason"),
                 "signal_type": pending.get("signal_type"),
                 "signal_grade": pending.get("signal_grade"),
-                "price": round((option_contract or {}).get("ltp"), 2) if option_contract and option_contract.get("ltp") is not None else round(evaluation["price"], 2),
+                "price": round(option_price, 2) if option_price is not None else round(evaluation["price"], 2),
+                "underlying_price": round(evaluation["price"], 2),
                 "trigger_price": trigger_price,
+                "invalidate_price": pending.get("invalidate_price"),
+                "first_target_price": pending.get("first_target_price"),
+                "stop_loss_option_price": stop_loss_option_price,
+                "first_target_option_price": first_target_option_price,
+                "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
+                "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
+                "entry_spread": option_contract.get("spread") if option_contract else None,
+                "context": pending.get("context"),
+                "risk_note": pending.get("risk_note"),
                 "greek_summary": format_greek_summary(option_contract),
+                "decision_label": f"CONFIRMED_{signal}_ENTRY",
+                "reason": f"{evaluation.get('reason')} | {evaluation.get('micro_reason') or 'micro confirmed'}",
             }
         )
 
@@ -2105,6 +2249,16 @@ class SignalService:
         entry_pressure_bias = (self.active_trade_monitor.get("entry_pressure_bias") or "").upper()
         live_pressure_bias = ((live_pressure_summary or {}).get("bias") or "").upper()
         live_pressure_strength = ((live_pressure_summary or {}).get("strength") or "").upper()
+        entry_confidence = (self.active_trade_monitor.get("entry_confidence") or "").upper()
+        entry_score = float(self.active_trade_monitor.get("entry_score") or 0)
+        signal_grade = (self.active_trade_monitor.get("signal_grade") or "").upper()
+        signal_type = (self.active_trade_monitor.get("signal_type") or "").upper()
+        strong_breakout_runner = bool(
+            signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "AGGRESSIVE_CONTINUATION"}
+            and entry_confidence == "HIGH"
+            and signal_grade in {"A", "A+"}
+            and entry_score >= 80
+        )
         opposite_pressure_active = (
             (signal == "CE" and live_pressure_bias == "BEARISH")
             or (signal == "PE" and live_pressure_bias == "BULLISH")
@@ -2115,6 +2269,17 @@ class SignalService:
             and minutes_active >= 2
             and (not option_expanding or structure_break or vwap_break)
         )
+        if strong_breakout_runner:
+            pressure_flip_exit = bool(
+                opposite_pressure_active
+                and live_pressure_strength == "STRONG"
+                and minutes_active >= 3
+                and (
+                    structure_break
+                    or five_min_break
+                    or (not option_expanding and momentum_fading and vwap_break)
+                )
+            )
         pressure_flip_warning = bool(
             opposite_pressure_active
             and minutes_active >= 2
@@ -2195,6 +2360,15 @@ class SignalService:
                 )
             )
         )
+        if strong_breakout_runner and pnl_percent is not None and pnl_percent > 0:
+            slow_positive_theta_risk = bool(
+                slow_positive_theta_risk
+                and minutes_active >= (time_stop_warn_minutes + 2)
+                and (
+                    drawdown_from_peak_pct is None
+                    or drawdown_from_peak_pct >= max(dynamic_trail_pct * 0.6, 5.0)
+                )
+            )
 
         guidance = "HOLD_WITH_TRAIL"
         decision_label = "HOLD_CONTEXT"
@@ -2453,7 +2627,12 @@ class SignalService:
         self.active_trade_monitor["last_notified_minute"] = minute_key
         self._safe_save_trade_monitor_event(minute_key, monitor_data)
         self._safe_save_option_signal_outcome(minute_key, monitor_data)
-        self.notifier.send_trade_monitor_update(monitor_data)
+        if self._should_send_trade_monitor_alert(monitor_data, minute_key):
+            self.notifier.send_trade_monitor_update(monitor_data)
+            self.active_trade_monitor["last_sent_monitor_minute"] = minute_key
+            self.active_trade_monitor["last_sent_guidance"] = monitor_data.get("guidance")
+            self.active_trade_monitor["last_sent_decision_label"] = monitor_data.get("decision_label")
+            self.active_trade_monitor["last_sent_pnl_percent"] = monitor_data.get("pnl_percent")
         if monitor_data["guidance"] == "BOOK_PARTIAL":
             self.active_trade_monitor["partial_booked"] = True
 
@@ -2461,6 +2640,51 @@ class SignalService:
         if monitor_data["guidance"] in exit_guidances or self.active_trade_monitor["minutes_active"] >= 20:
             self._sync_ml_outcome_from_monitor()
             self.active_trade_monitor = None
+
+    @staticmethod
+    def _monitor_alert_is_high_priority(guidance):
+        return guidance in {
+            "BOOK_PARTIAL",
+            "EXIT_BIAS",
+            "EXIT_STOPLOSS",
+            "EXIT_TRAIL",
+            "EXIT_TIMESTOP",
+            "EXIT_PROFIT_PROTECT",
+        }
+
+    def _should_send_trade_monitor_alert(self, monitor_data, minute_key):
+        if not self.active_trade_monitor:
+            return False
+
+        guidance = monitor_data.get("guidance")
+        decision_label = monitor_data.get("decision_label")
+        last_guidance = self.active_trade_monitor.get("last_sent_guidance")
+        last_label = self.active_trade_monitor.get("last_sent_decision_label")
+        last_sent_minute = self.active_trade_monitor.get("last_sent_monitor_minute")
+        last_pnl_percent = self.active_trade_monitor.get("last_sent_pnl_percent")
+        pnl_percent = monitor_data.get("pnl_percent")
+
+        if last_sent_minute is None:
+            return True
+        if self._monitor_alert_is_high_priority(guidance):
+            return True
+        if guidance != last_guidance or decision_label != last_label:
+            return True
+
+        minutes_since_last_sent = max(
+            0,
+            int((minute_key - last_sent_minute).total_seconds() // 60),
+        )
+        if guidance in {"THESIS_WEAKENING", "NORMAL_PULLBACK", "HOLD_WITH_TRAIL"}:
+            return minutes_since_last_sent >= 3
+        if guidance == "HOLD_STRONG":
+            pnl_jump = (
+                abs(float(pnl_percent) - float(last_pnl_percent))
+                if pnl_percent is not None and last_pnl_percent is not None
+                else 0.0
+            )
+            return minutes_since_last_sent >= 3 or pnl_jump >= 4.0
+        return minutes_since_last_sent >= 2
 
     def _classify_base_bias(self, price, vwap_value, oi_bias, oi_ladder_data):
         """Balanced Pro layer 1: derive directional bias."""
@@ -2690,8 +2914,9 @@ class SignalService:
             return None
 
         strike_step = int(self.profile.get("strike_step") or 100)
-        scoped_offsets = range(-2, 5)
+        scoped_offsets = range(-5, 6)
         scoped_strikes = {int(current_atm + (offset * strike_step)) for offset in scoped_offsets}
+        strike_count = len(scoped_strikes)
 
         def summarize(direction):
             same_side = "CE" if direction == "CE" else "PE"
@@ -2798,16 +3023,16 @@ class SignalService:
         direction = None
         dominant = None
         if (
-            ce_summary["pair_support"] >= 4
-            and ce_summary["price_breadth"] >= 5
-            and ce_summary["weighted_edge"] >= 4.2
+            ce_summary["pair_support"] >= 6
+            and ce_summary["price_breadth"] >= 7
+            and ce_summary["weighted_edge"] >= 5.2
         ):
             direction = "CE"
             dominant = ce_summary
         elif (
-            pe_summary["pair_support"] >= 4
-            and pe_summary["price_breadth"] >= 5
-            and pe_summary["weighted_edge"] >= 4.2
+            pe_summary["pair_support"] >= 6
+            and pe_summary["price_breadth"] >= 7
+            and pe_summary["weighted_edge"] >= 5.2
         ):
             direction = "PE"
             dominant = pe_summary
@@ -2827,9 +3052,9 @@ class SignalService:
 
         quality = "MODERATE"
         if (
-            dominant["pair_support"] >= 5
-            and dominant["price_breadth"] >= 6
-            and persistence_pairs >= 3
+            dominant["pair_support"] >= 7
+            and dominant["price_breadth"] >= 8
+            and persistence_pairs >= 5
             and micro_ok
         ):
             quality = "STRONG"
@@ -2853,7 +3078,7 @@ class SignalService:
             "five_min_confirmed": five_min_ok,
             "trigger_ready": quality == "STRONG" and micro_ok and persistence_pairs >= 3,
             "summary": (
-                f"{direction} sweep {quality.lower()} | breadth {dominant['pair_support']}/7"
+                f"{direction} sweep {quality.lower()} | breadth {dominant['pair_support']}/{strike_count}"
                 f" | persist {persistence_pairs} | micro {'yes' if micro_ok else 'no'}"
             ),
             "examples": dominant["examples"],
@@ -4156,6 +4381,9 @@ class SignalService:
         if not watch_payload or not Config.ENABLE_ALERTS:
             return
 
+        if not self._watch_alert_is_eligible(watch_payload):
+            return
+
         now_ts = time_module.time()
         state = self.watch_alert_state.get(watch_payload["key"])
         if state and now_ts - state["time"] < 20 * 60:
@@ -4164,6 +4392,23 @@ class SignalService:
             blockers_reduced = len(watch_payload.get("blockers") or []) < state.get("blocker_count", 99)
             if not any([score_improved, entry_score_improved, blockers_reduced]):
                 return
+
+        instrument_key = watch_payload.get("instrument") or self.instrument
+        direction = (watch_payload.get("direction") or "").upper()
+        if instrument_key and direction:
+            for key, old_state in self.watch_alert_state.items():
+                if (
+                    isinstance(key, tuple)
+                    and len(key) >= 2
+                    and key[0] == instrument_key
+                    and key[1] in {"CE", "PE"}
+                    and key[1] != direction
+                    and now_ts - old_state.get("time", 0) < 10 * 60
+                ):
+                    score_improved = (watch_payload.get("score") or 0) >= old_state.get("score", 0) + 8
+                    entry_score_improved = (watch_payload.get("entry_score") or 0) >= old_state.get("entry_score", 0) + 6
+                    if not (score_improved or entry_score_improved):
+                        return
 
         self.notifier.send_watch_notification(watch_payload)
         self.last_watch_alert_key = watch_payload["key"]
@@ -4174,6 +4419,192 @@ class SignalService:
             "entry_score": watch_payload.get("entry_score") or 0,
             "blocker_count": len(watch_payload.get("blockers") or []),
         }
+
+    def _watch_alert_is_eligible(self, watch_payload):
+        score = float(watch_payload.get("score") or 0)
+        entry_score = float(watch_payload.get("entry_score") or 0)
+        confidence = (watch_payload.get("confidence") or "LOW").upper()
+        signal_grade = (watch_payload.get("signal_grade") or "SKIP").upper()
+        watch_bucket = (watch_payload.get("watch_bucket") or "WATCH_CONTEXT").upper()
+        setup = (watch_payload.get("setup") or "NONE").upper()
+        blockers = set(watch_payload.get("blockers") or [])
+        cautions = set(watch_payload.get("cautions") or [])
+        spike_context = watch_payload.get("spike_context") or {}
+        spike_quality = (spike_context.get("quality") or "").upper()
+        pressure_conflict_level = (watch_payload.get("pressure_conflict_level") or "NONE").upper()
+
+        if confidence not in {"MEDIUM", "HIGH"}:
+            return False
+        if score < 74 or entry_score < 68:
+            return False
+        if "time_filter" in blockers:
+            return False
+        if pressure_conflict_level not in {"NONE", "MILD", ""}:
+            return False
+
+        if spike_context:
+            if spike_quality != "STRONG":
+                return False
+            if spike_context.get("price_breadth", 0) < 7 or spike_context.get("volume_breadth", 0) < 7:
+                return False
+            if signal_grade not in {"A", "A+"}:
+                return False
+            return watch_bucket == "WATCH_CONFIRMATION_PENDING"
+
+        if watch_bucket == "WATCH_CONFIRMATION_PENDING":
+            return (
+                signal_grade in {"A", "A+"}
+                and score >= 78
+                and entry_score >= 72
+            )
+        if watch_bucket == "WATCH_SETUP":
+            return (
+                setup in {"BREAKOUT_CONFIRM", "RETEST", "REVERSAL", "TRAP_REVERSAL"}
+                and signal_grade in {"A", "A+"}
+                and score >= 82
+                and entry_score >= 76
+                and "participation_weak" not in cautions
+            )
+        return False
+
+    def _build_option_spike_watch_payload(self, recent_1m_candles):
+        if not recent_1m_candles:
+            return None
+
+        latest_1m = recent_1m_candles[-1]
+        recent_5m = self.db_reader.fetch_recent_candles_5m(self.instrument, limit=9)
+        oi_ladder_data = self._build_oi_ladder_context(float(latest_1m.get("close") or 0.0))
+        snapshot_groups = self.db_reader.fetch_recent_option_band_snapshots(
+            self.instrument,
+            before_ts=latest_1m["time"],
+            limit=3,
+        )
+        spike = self.option_spike_detector.detect(
+            recent_1m_candles,
+            snapshot_groups,
+            recent_candles_5m=recent_5m,
+            oi_ladder_data=oi_ladder_data,
+        )
+        if not spike:
+            return None
+
+        direction = spike["direction"]
+        trigger_price = spike.get("trigger_price")
+        invalidate_price = spike.get("invalidate_price")
+        structure = spike.get("structure") or {}
+        score = 86 if spike.get("quality") == "STRONG" else 78
+        entry_score = 80 if spike.get("quality") == "STRONG" else 72
+        action_text = (
+            f"1m spike broad {direction} side par dikh raha hai. "
+            "15m structure ko respect karo, 5m watch ready hai, aur next 1m follow-through aaye to fast entry consider karo."
+        )
+        return {
+            "instrument": self.instrument,
+            "direction": direction,
+            "setup": "BREAKOUT_CONFIRM",
+            "signal_grade": "A" if spike.get("quality") == "STRONG" else "B",
+            "confidence": "HIGH" if spike.get("quality") == "STRONG" else "MEDIUM",
+            "confidence_summary": "Broad 1m option spike detected",
+            "score": score,
+            "entry_score": entry_score,
+            "setup_bucket": "SPIKE_EARLY",
+            "price": round(float(latest_1m.get("close") or 0.0), 2),
+            "trigger_price": round(float(trigger_price), 2) if trigger_price is not None else None,
+            "invalidate_price": round(float(invalidate_price), 2) if invalidate_price is not None else None,
+            "first_target_price": (
+                round(float(trigger_price) + max(float(latest_1m.get("high") or 0.0) - float(latest_1m.get("low") or 0.0), 1.0) * 2, 2)
+                if direction == "CE" and trigger_price is not None
+                else round(float(trigger_price) - max(float(latest_1m.get("high") or 0.0) - float(latest_1m.get("low") or 0.0), 1.0) * 2, 2)
+                if direction == "PE" and trigger_price is not None
+                else None
+            ),
+            "option_stop_loss_pct": 23,
+            "option_target_pct": 38,
+            "option_trail_pct": 16,
+            "time_stop_warn_minutes": 8,
+            "time_stop_exit_minutes": 14,
+            "risk_note": "1m spike watch hai; follow-through ke bina chase mat karo.",
+            "no_trade_zone": None,
+            "structure_suggestion": None,
+            "blockers": [],
+            "cautions": ["one_minute_spike_watch"],
+            "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+            "decision_label": f"WATCH_{direction}_SPIKE",
+            "journal_note": self._build_journal_note(
+                f"WATCH_{direction}_SPIKE",
+                action_text,
+                spike.get("summary"),
+            ),
+            "context": f"SpikeWatch | {structure.get('summary') or 'structure'} | {spike.get('summary')}",
+            "reason": f"1m option spike watch | {spike.get('summary')}",
+            "action_hint": action_text,
+            "action_text": action_text,
+            "entry_if": (
+                f"Next 1m candle {'above' if direction == 'CE' else 'below'} {round(float(trigger_price), 2)} with follow-through"
+                if trigger_price is not None else None
+            ),
+            "avoid_if": (
+                f"Skip if next 1m candle reverses {'below' if direction == 'CE' else 'above'} {round(float(invalidate_price), 2)}"
+                if invalidate_price is not None else None
+            ),
+            "participation_read": ", ".join(spike.get("examples") or []),
+            "pressure_read": f"{structure.get('summary') or ''} | {spike.get('summary')}".strip(" |"),
+            "flip_context": None,
+            "key": (self.instrument, direction, "OPTION_SPIKE_1M"),
+            "spike_context": spike,
+        }
+
+    def _maybe_prepare_option_spike_watch(self):
+        recent_1m_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=6)
+        if len(recent_1m_candles) < 3:
+            return
+
+        latest_1m = recent_1m_candles[-1]
+        minute_key = latest_1m["time"]
+        pending = self.pending_spike_watch
+        if pending and pending.get("minute") == minute_key:
+            return
+
+        watch_payload = self._build_option_spike_watch_payload(recent_1m_candles)
+        if not watch_payload:
+            return
+
+        self.pending_spike_watch = {
+            "minute": minute_key,
+            "payload": watch_payload,
+        }
+        self.pending_entry_watch = {
+            "instrument": self.instrument,
+            "direction": watch_payload["direction"],
+            "trigger_price": float(watch_payload["trigger_price"]) if watch_payload.get("trigger_price") is not None else None,
+            "invalidate_price": watch_payload.get("invalidate_price"),
+            "first_target_price": watch_payload.get("first_target_price"),
+            "option_stop_loss_pct": watch_payload.get("option_stop_loss_pct"),
+            "option_target_pct": watch_payload.get("option_target_pct"),
+            "option_trail_pct": watch_payload.get("option_trail_pct"),
+            "risk_note": watch_payload.get("risk_note"),
+            "context": watch_payload.get("context"),
+            "score": watch_payload["score"],
+            "entry_score": watch_payload["entry_score"],
+            "confidence": watch_payload["confidence"],
+            "signal_type": watch_payload["setup"],
+            "signal_grade": watch_payload["signal_grade"],
+            "watch_bucket": watch_payload["watch_bucket"],
+            "quality": "A",
+            "time_regime": "INTRAMINUTE_SPIKE",
+            "created_at": latest_1m["time"],
+            "last_checked_minute": None,
+            "reason": watch_payload["reason"],
+            "fast_track_ready": True,
+            "strong_watch_setup": True,
+            "hybrid_mode": True,
+            "cautions": list(watch_payload.get("cautions") or []),
+            "blockers": [],
+            "pressure_conflict_level": "NONE",
+            "spike_origin": True,
+            "spike_context": watch_payload.get("spike_context"),
+        }
+        self._maybe_send_watch_alert(watch_payload)
 
     def _process_5m_candle(self, candle_5m):
         """Process 5-minute candle and generate signal"""
@@ -4702,6 +5133,9 @@ class SignalService:
                     "first_target_price": spot_target_price,
                     "projected_premium_sl": projected_premium_sl,
                     "projected_premium_t1": projected_premium_t1,
+                    "entry_bid": selected_option_contract.get("top_bid_price") if selected_option_contract else None,
+                    "entry_ask": selected_option_contract.get("top_ask_price") if selected_option_contract else None,
+                    "entry_spread": selected_option_contract.get("spread") if selected_option_contract else None,
                     "time_regime": balanced_pro["time_regime"],
                     "option_stop_loss_pct": risk_profile["hard_premium_stop_pct"],
                     "option_target_pct": risk_profile["target_pct"],
@@ -4746,6 +5180,7 @@ class SignalService:
                 self._safe_save_ml_features(ml_features, ml_prob)
             
             self._clear_pending_entry_watch()
+            self._clear_pending_spike_watch()
             self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
             self.signals_generated += 1
         else:
@@ -4888,6 +5323,8 @@ class SignalService:
 
                 current_minute = current_time.replace(second=0, microsecond=0)
                 if current_minute != self.last_monitor_check_minute:
+                    if not self.active_trade_monitor:
+                        self._maybe_prepare_option_spike_watch()
                     if self.pending_entry_watch:
                         self._maybe_fire_pending_entry_watch(latest_candle)
                     if self.active_trade_monitor:

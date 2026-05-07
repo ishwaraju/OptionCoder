@@ -1,6 +1,7 @@
 from services.signal_service import SignalService
 from datetime import datetime, timedelta
 from shared.market.oi_quote_confirmation import OIQuoteConfirmation
+from shared.market.option_spike_detector import OptionSpikeDetector
 from zoneinfo import ZoneInfo
 
 
@@ -274,7 +275,7 @@ def test_build_option_sweep_context_detects_broad_bullish_sweep():
     def make_snapshot(ts, shift, call_base, put_base):
         rows = []
         atm = 77500
-        for idx, strike in enumerate(range(77200, 77900, 100)):
+        for idx, strike in enumerate(range(77000, 78100, 100)):
             distance = int((strike - atm) / 100)
             rows.append(
                 {
@@ -333,10 +334,294 @@ def test_build_option_sweep_context_detects_broad_bullish_sweep():
     assert ctx is not None
     assert ctx["direction"] == "CE"
     assert ctx["quality"] == "STRONG"
-    assert ctx["pair_support"] >= 5
+    assert ctx["pair_support"] >= 7
     assert ctx["micro_confirmed"] is True
     assert ctx["persistence_pairs"] >= 3
     assert ctx["trigger_ready"] is True
+
+
+def test_option_spike_detector_detects_broad_bullish_one_minute_spike():
+    detector = OptionSpikeDetector(strike_step=100)
+    base_ts = datetime(2026, 5, 6, 14, 19)
+    previous_ts = datetime(2026, 5, 6, 14, 20)
+
+    def make_snapshot(ts, call_shift, put_shift, call_volume, put_volume):
+        rows = []
+        atm = 77500
+        for idx, strike in enumerate(range(77000, 78100, 100)):
+            distance = int((strike - atm) / 100)
+            rows.append(
+                {
+                    "ts": ts,
+                    "atm_strike": atm,
+                    "strike": strike,
+                    "distance_from_atm": distance,
+                    "option_type": "CE",
+                    "volume": call_volume + (idx * 10000),
+                    "ltp": 120 + (idx * 8) + call_shift,
+                }
+            )
+            rows.append(
+                {
+                    "ts": ts,
+                    "atm_strike": atm,
+                    "strike": strike,
+                    "distance_from_atm": distance,
+                    "option_type": "PE",
+                    "volume": put_volume + (idx * 8000),
+                    "ltp": 220 - (idx * 7) - put_shift,
+                }
+            )
+        return rows
+
+    previous = make_snapshot(base_ts, 0, 0, 100000, 90000)
+    latest = make_snapshot(previous_ts, 18, 12, 260000, 180000)
+    recent_1m = [
+        {"time": datetime(2026, 5, 6, 14, 18), "open": 77190, "high": 77205, "low": 77185, "close": 77200, "volume": 1000},
+        {"time": datetime(2026, 5, 6, 14, 19), "open": 77200, "high": 77215, "low": 77198, "close": 77208, "volume": 1100},
+        {"time": datetime(2026, 5, 6, 14, 20), "open": 77208, "high": 77310, "low": 77205, "close": 77300, "volume": 1800},
+    ]
+
+    ctx = detector.detect(
+        recent_1m_candles=recent_1m,
+        snapshot_groups=[previous, latest],
+        recent_candles_5m=[
+            {"time": datetime(2026, 5, 6, 14, 5), "open": 77120.0, "high": 77180.0, "low": 77100.0, "close": 77175.0},
+            {"time": datetime(2026, 5, 6, 14, 10), "open": 77175.0, "high": 77220.0, "low": 77160.0, "close": 77205.0},
+            {"time": datetime(2026, 5, 6, 14, 15), "open": 77205.0, "high": 77280.0, "low": 77200.0, "close": 77259.0},
+            {"time": datetime(2026, 5, 6, 14, 20), "open": 77259.0, "high": 77340.0, "low": 77250.0, "close": 77310.0},
+        ],
+    )
+
+    assert ctx is not None
+    assert ctx["direction"] == "CE"
+    assert ctx["price_breadth"] >= 7
+    assert ctx["volume_breadth"] >= 6
+    assert ctx["trigger_price"] == 77310.0
+    assert ctx["stage"] == "15M_STRUCTURE_5M_WATCH_1M_ACTIVE"
+
+
+def test_build_option_spike_watch_payload_creates_pending_early_watch():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "SENSEX"
+    service.option_spike_detector = OptionSpikeDetector(strike_step=100)
+    service.db_reader = type(
+        "ReaderStub",
+        (),
+        {
+            "fetch_recent_option_band_snapshots": lambda *args, **kwargs: [
+                [
+                    {"ts": datetime(2026, 5, 6, 14, 19), "atm_strike": 77500, "strike": strike, "distance_from_atm": int((strike - 77500) / 100), "option_type": opt, "volume": 100000, "ltp": (120 + idx * 8) if opt == "CE" else (220 - idx * 7)}
+                    for idx, strike in enumerate(range(77000, 78100, 100))
+                    for opt in ("CE", "PE")
+                ],
+                [
+                    {"ts": datetime(2026, 5, 6, 14, 20), "atm_strike": 77500, "strike": strike, "distance_from_atm": int((strike - 77500) / 100), "option_type": opt, "volume": 260000 if opt == "CE" else 180000, "ltp": (138 + idx * 8) if opt == "CE" else (208 - idx * 7)}
+                    for idx, strike in enumerate(range(77000, 78100, 100))
+                    for opt in ("CE", "PE")
+                ],
+            ]
+        },
+    )()
+    service._build_journal_note = lambda *args, **kwargs: "spike watch"
+
+    recent_1m = [
+        {"time": datetime(2026, 5, 6, 14, 18), "open": 77190, "high": 77205, "low": 77185, "close": 77200, "volume": 1000},
+        {"time": datetime(2026, 5, 6, 14, 19), "open": 77200, "high": 77215, "low": 77198, "close": 77208, "volume": 1100},
+        {"time": datetime(2026, 5, 6, 14, 20), "open": 77208, "high": 77310, "low": 77205, "close": 77300, "volume": 1800},
+    ]
+
+    service.db_reader.fetch_recent_candles_5m = lambda instrument, limit=9: [
+        {"time": datetime(2026, 5, 6, 14, 5), "open": 77120.0, "high": 77180.0, "low": 77100.0, "close": 77175.0},
+        {"time": datetime(2026, 5, 6, 14, 10), "open": 77175.0, "high": 77220.0, "low": 77160.0, "close": 77205.0},
+        {"time": datetime(2026, 5, 6, 14, 15), "open": 77205.0, "high": 77280.0, "low": 77200.0, "close": 77259.0},
+        {"time": datetime(2026, 5, 6, 14, 20), "open": 77259.0, "high": 77340.0, "low": 77250.0, "close": 77310.0},
+    ]
+    service._build_oi_ladder_context = lambda price: {"support": 77200, "resistance": 77500}
+    payload = service._build_option_spike_watch_payload(recent_1m)
+
+    assert payload is not None
+    assert payload["direction"] == "CE"
+    assert payload["watch_bucket"] == "WATCH_CONFIRMATION_PENDING"
+    assert payload["decision_label"] == "WATCH_CE_SPIKE"
+    assert payload["spike_context"]["quality"] == "STRONG"
+    assert "15m" in payload["context"].lower()
+
+
+def test_banknifty_style_spike_is_classified_strong_with_broad_option_volume():
+    detector = OptionSpikeDetector(strike_step=100)
+    previous = []
+    latest = []
+    atm = 55200
+    ce_deltas = [24000, 31000, 70200, 67230, 38490, 52000, 61000, 43000, 36000, 28000, 22000]
+    pe_deltas = [18000, 22000, 45300, 55020, 42000, 30000, 28000, 25000, 22000, 18000, 15000]
+    for idx, strike in enumerate(range(54700, 55800, 100)):
+        distance = int((strike - atm) / 100)
+        previous.extend([
+            {"ts": datetime(2026, 5, 6, 14, 21), "atm_strike": atm, "strike": strike, "distance_from_atm": distance, "option_type": "CE", "volume": 100000, "ltp": 100 + idx * 10},
+            {"ts": datetime(2026, 5, 6, 14, 21), "atm_strike": atm, "strike": strike, "distance_from_atm": distance, "option_type": "PE", "volume": 90000, "ltp": 220 - idx * 9},
+        ])
+        latest.extend([
+            {"ts": datetime(2026, 5, 6, 14, 22), "atm_strike": atm, "strike": strike, "distance_from_atm": distance, "option_type": "CE", "volume": 100000 + ce_deltas[idx], "ltp": 128 + idx * 10},
+            {"ts": datetime(2026, 5, 6, 14, 22), "atm_strike": atm, "strike": strike, "distance_from_atm": distance, "option_type": "PE", "volume": 90000 + pe_deltas[idx], "ltp": 205 - idx * 9},
+        ])
+
+    recent_1m = [
+        {"time": datetime(2026, 5, 6, 14, 19), "open": 55135.2, "high": 55357.15, "low": 55128.55, "close": 55307.5, "volume": 27120},
+        {"time": datetime(2026, 5, 6, 14, 20), "open": 55310.0, "high": 55409.1, "low": 55309.35, "close": 55390.9, "volume": 27120},
+        {"time": datetime(2026, 5, 6, 14, 21), "open": 55393.8, "high": 55510.35, "low": 55381.1, "close": 55500.65, "volume": 27120},
+    ]
+
+    ctx = detector.detect(recent_1m, [previous, latest])
+
+    assert ctx is not None
+    assert ctx["quality"] == "STRONG"
+
+
+def test_spike_watch_can_trigger_even_if_microstructure_data_is_unavailable():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.pending_entry_watch = {
+        "instrument": "NIFTY",
+        "direction": "CE",
+        "trigger_price": 24220.0,
+        "invalidate_price": 24200.0,
+        "first_target_price": 24260.0,
+        "score": 86,
+        "entry_score": 80,
+        "confidence": "HIGH",
+        "signal_type": "BREAKOUT_CONFIRM",
+        "signal_grade": "A",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "quality": "A",
+        "time_regime": "INTRAMINUTE_SPIKE",
+        "created_at": datetime(2026, 5, 6, 14, 22),
+        "last_checked_minute": None,
+        "reason": "1m option spike watch",
+        "fast_track_ready": True,
+        "strong_watch_setup": True,
+        "hybrid_mode": True,
+        "cautions": ["one_minute_spike_watch"],
+        "blockers": [],
+        "pressure_conflict_level": "NONE",
+        "spike_origin": True,
+        "spike_context": {"quality": "STRONG", "price_breadth": 7, "volume_breadth": 7},
+    }
+    service.option_data = {"atm": 24200}
+    service.strike_selector = type(
+        "StrikeSelectorStub",
+        (),
+        {"select_strike_with_reason": lambda *args, **kwargs: (24200, "test")},
+    )()
+    service._pending_watch_risk_reward_ok = lambda pending: True
+    service._confirm_signal_microstructure = lambda **kwargs: (False, "Microstructure data unavailable", None, None)
+
+    recent_1m = [
+        {"time": datetime(2026, 5, 6, 14, 22), "open": 24205.0, "high": 24225.0, "low": 24203.0, "close": 24218.0, "volume": 1000},
+        {"time": datetime(2026, 5, 6, 14, 23), "open": 24218.0, "high": 24242.0, "low": 24216.0, "close": 24234.0, "volume": 1300},
+    ]
+
+    result = service._evaluate_pending_entry_watch(recent_1m)
+
+    assert result is not None
+    assert result["status"] == "TRIGGERED"
+
+
+def test_elite_manual_watch_can_trigger_on_clean_reclaim_without_extra_buffer():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.pending_entry_watch = {
+        "instrument": "NIFTY",
+        "direction": "CE",
+        "trigger_price": 24220.0,
+        "invalidate_price": 24198.0,
+        "first_target_price": 24270.0,
+        "score": 84,
+        "entry_score": 78,
+        "confidence": "HIGH",
+        "signal_type": "BREAKOUT_CONFIRM",
+        "signal_grade": "A",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "quality": "A",
+        "time_regime": "MID_MORNING",
+        "created_at": datetime(2026, 5, 6, 14, 22),
+        "last_checked_minute": None,
+        "reason": "manual breakout confirm watch",
+        "fast_track_ready": False,
+        "strong_watch_setup": True,
+        "elite_watch_ready": True,
+        "hybrid_mode": False,
+        "cautions": [],
+        "blockers": [],
+        "pressure_conflict_level": "NONE",
+    }
+    service.option_data = {"atm": 24200}
+    service.strike_selector = type(
+        "StrikeSelectorStub",
+        (),
+        {"select_strike_with_reason": lambda *args, **kwargs: (24200, "test")},
+    )()
+    service._pending_watch_risk_reward_ok = lambda pending: True
+    service._confirm_signal_microstructure = lambda **kwargs: (True, "micro confirmed", None, None)
+
+    recent_1m = [
+        {"time": datetime(2026, 5, 6, 14, 22), "open": 24210.0, "high": 24219.0, "low": 24206.0, "close": 24214.0, "volume": 900},
+        {"time": datetime(2026, 5, 6, 14, 23), "open": 24214.0, "high": 24224.0, "low": 24212.0, "close": 24221.0, "volume": 760},
+    ]
+
+    result = service._evaluate_pending_entry_watch(recent_1m)
+
+    assert result is not None
+    assert result["status"] == "TRIGGERED"
+
+
+def test_watch_alert_eligibility_allows_only_strong_spike_watch():
+    service = SignalService.__new__(SignalService)
+
+    strong_payload = {
+        "score": 86,
+        "entry_score": 80,
+        "confidence": "HIGH",
+        "signal_grade": "A",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "setup": "BREAKOUT_CONFIRM",
+        "blockers": [],
+        "cautions": ["one_minute_spike_watch"],
+        "pressure_conflict_level": "NONE",
+        "spike_context": {"quality": "STRONG", "price_breadth": 8, "volume_breadth": 8},
+    }
+    weak_payload = {
+        **strong_payload,
+        "signal_grade": "B",
+        "spike_context": {"quality": "MODERATE", "price_breadth": 6, "volume_breadth": 6},
+    }
+
+    assert service._watch_alert_is_eligible(strong_payload) is True
+    assert service._watch_alert_is_eligible(weak_payload) is False
+
+
+def test_watch_alert_eligibility_filters_weak_manual_setup_watch():
+    service = SignalService.__new__(SignalService)
+
+    weak_manual = {
+        "score": 79,
+        "entry_score": 73,
+        "confidence": "HIGH",
+        "signal_grade": "A",
+        "watch_bucket": "WATCH_SETUP",
+        "setup": "BREAKOUT_CONFIRM",
+        "blockers": [],
+        "cautions": [],
+        "pressure_conflict_level": "NONE",
+    }
+    clean_manual = {
+        **weak_manual,
+        "score": 84,
+        "entry_score": 78,
+    }
+
+    assert service._watch_alert_is_eligible(weak_manual) is False
+    assert service._watch_alert_is_eligible(clean_manual) is True
 
 
 def test_infer_flip_context_marks_pe_failure_for_ce_reversal():
