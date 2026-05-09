@@ -79,21 +79,7 @@ FROM signals_issued
 WHERE DATE(ts AT TIME ZONE 'Asia/Kolkata') = '2026-04-16'
 ORDER BY ts DESC;
 
--- 6. Check Scalp Signals (if any generated today)
-SELECT 
-    timestamp AT TIME ZONE 'Asia/Kolkata' as signal_time,
-    instrument,
-    signal_type,
-    entry_price,
-    target_points,
-    stop_points,
-    score,
-    status
-FROM scalp_signals_1m
-WHERE DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = '2026-04-16'
-ORDER BY timestamp DESC;
-
--- 7. Count Total Rows Today (Summary)
+-- 6. Count Total Rows Today (Summary)
 SELECT '1m Candles' as data_type, instrument, COUNT(*) as total_rows
 FROM candles_1m
 WHERE DATE(ts AT TIME ZONE 'Asia/Kolkata') = '2026-04-16'

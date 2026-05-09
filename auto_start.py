@@ -41,23 +41,6 @@ class AutoScheduler:
         except Exception:
             return []
 
-    def _verify_scalp_services_started(self, retries=4, delay_seconds=1.5):
-        pending = set(self.instruments)
-        started = {}
-        for _ in range(retries):
-            resolved = []
-            for instrument in pending:
-                pids = self._find_running_pids(f"services/scalp_signal_service.py --instrument {instrument}")
-                if pids:
-                    started[instrument] = pids
-                    resolved.append(instrument)
-            for instrument in resolved:
-                pending.discard(instrument)
-            if not pending:
-                break
-            time.sleep(delay_seconds)
-        return started, sorted(pending)
-
     def _verify_telegram_started(self, retries=4, delay_seconds=1.5):
         pids = []
         for _ in range(retries):
@@ -140,7 +123,6 @@ class AutoScheduler:
         self._log("🔎 Startup Status Snapshot")
         self._log_service_snapshot("Collectors", ["python3", "tools/run_collectors.py", "status"])
         self._log_service_snapshot("Signals", ["python3", "tools/run_signals.py", "status"])
-        self._log_service_snapshot("Scalp", ["python3", "tools/run_scalp.py", "status"])
         telegram_pids = self._find_running_pids("services/telegram_bot_service.py")
         if telegram_pids:
             self._log(f"📋 Telegram:")
@@ -208,52 +190,6 @@ class AutoScheduler:
         except Exception as e:
             self._log(f"❌ Error starting signals: {e}")
     
-    def start_scalp_signals(self):
-        """Start scalp signal services (non-blocking)"""
-        try:
-            self._log("🚀 Starting Scalp Signal Services (1m)")
-            from shared.utils.log_utils import build_log_path
-            log_file = build_log_path("run_scalp")
-            cmd = ["python3", "-u", "tools/run_scalp.py", "start", "--instruments"] + self.instruments
-            log_fh = open(log_file, "a")
-            subprocess.Popen(
-                cmd,
-                cwd=os.getcwd(),
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-            )
-            time.sleep(2)
-            started, missing = self._verify_scalp_services_started()
-            if missing:
-                self._log(
-                    f"⚠️ Scalp start incomplete. Running: {', '.join(f'{k}={v[0]}' for k, v in started.items()) or 'none'} | "
-                    f"Missing: {', '.join(missing)} | log={log_file}"
-                )
-            else:
-                self._log(
-                    f"✅ Scalp services started: {', '.join(f'{k}={v[0]}' for k, v in started.items())} | log={log_file}"
-                )
-        except Exception as e:
-            self._log(f"❌ Error starting scalp services: {e}")
-
-    def stop_scalp_signals(self):
-        """Stop scalp signal services"""
-        try:
-            self._log("🛑 Stopping Scalp Signal Services...")
-            cmd = ["python3", "tools/run_scalp.py", "stop"]
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
-            stdout = (result.stdout or "").strip()
-            stderr = (result.stderr or "").strip()
-            if stdout:
-                self._log(f"✅ Scalp stop output: {stdout}")
-            elif stderr:
-                self._log(f"⚠️ Scalp stop stderr: {stderr}")
-            else:
-                self._log("✅ Scalp services stop command completed")
-        except Exception as e:
-            self._log(f"❌ Error stopping scalp services: {e}")
-    
     def start_telegram_bot(self):
         """Start telegram bot (non-blocking)"""
         try:
@@ -307,8 +243,6 @@ class AutoScheduler:
         except Exception as e:
             self._log(f"❌ Error stopping signals: {e}")
 
-        self.stop_scalp_signals()
-
         try:
             # Stop telegram bot
             self._log("🛑 Stopping Telegram Bot...")
@@ -321,7 +255,6 @@ class AutoScheduler:
         self._log("🔎 Post-stop Status Snapshot")
         self._log_service_snapshot("Collectors", ["python3", "tools/run_collectors.py", "status"])
         self._log_service_snapshot("Signals", ["python3", "tools/run_signals.py", "status"])
-        self._log_service_snapshot("Scalp", ["python3", "tools/run_scalp.py", "status"])
         telegram_pids = self._find_running_pids("services/telegram_bot_service.py")
         self._log("📋 Telegram:")
         if telegram_pids:
@@ -385,7 +318,6 @@ class AutoScheduler:
         time.sleep(5)  # Wait for collectors to initialize
 
         self.start_signals()
-        self.start_scalp_signals()  # Also start scalping
         time.sleep(4 * 60)  # Wait 4 minutes until 9:18 AM IST
 
         self.start_telegram_bot()

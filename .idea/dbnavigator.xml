@@ -55,10 +55,7 @@
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files>
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/ml_features_log" />
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/signals_issued" />
-    </open-files>
+    <open-files />
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
     <prerequisites />
@@ -84,7 +81,7 @@
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.alert_reviews_5m" active-filter-id="53a41dd7-6b3d-4b74-80c7-0985670ba13f">
       <filter id="53a41dd7-6b3d-4b74-80c7-0985670ba13f" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>alert_ts >= CURRENT_DATE<br>and alert_ts < CURRENT_DATE + interval '1 day';]]></condition>
+        <condition><![CDATA[<br><br><br>-- enter your custom conditions here<br>alert_ts >= CURRENT_DATE<br>and alert_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.signals_issued" active-filter-id="7888d48c-ed21-464c-bfcd-65579db85fda">

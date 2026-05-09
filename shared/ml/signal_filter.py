@@ -371,6 +371,7 @@ class MLSignalFilter:
         prob = max(0.05, min(0.95, prob))
 
         if blockers:
+            prob = min(prob, max(0.05, threshold - 0.01))
             return False, f"Rule blocked: {', '.join(blockers[:3])} (p={prob:.1%}, thr={threshold:.1%}, {profile_tag})", prob
 
         if prob >= threshold:

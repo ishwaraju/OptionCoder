@@ -77,7 +77,7 @@ def test_opening_drive_can_fire_during_opening_session():
         Config.TEST_MODE = original_test_mode
 
 
-def test_aggressive_mode_allows_clean_mid_score_continuation():
+def test_aggressive_mode_keeps_mid_score_continuation_on_watch():
     original_test_mode = Config.TEST_MODE
     original_aggressive_mode = Config.AGGRESSIVE_MODE
     Config.TEST_MODE = False
@@ -108,9 +108,9 @@ def test_aggressive_mode_allows_clean_mid_score_continuation():
             candle_volume=900000,
         )
 
-        assert signal == "CE"
-        assert "Aggressive bullish continuation" in reason
-        assert strategy.last_signal_type == "AGGRESSIVE_CONTINUATION"
+        assert signal is None
+        assert strategy.last_signal_type == "RETEST"
+        assert strategy.last_decision_state in {"IGNORE", "WATCH"}
     finally:
         Config.TEST_MODE = original_test_mode
         Config.AGGRESSIVE_MODE = original_aggressive_mode

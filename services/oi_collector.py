@@ -57,7 +57,7 @@ class OICollector:
         self.last_oi_collection = 0
         self.oi_collection_interval = 300  # Every 5 minutes (full data)
         self.last_option_band_collection = 0
-        self.option_band_interval = 300  # Every 5 minutes
+        self.option_band_interval = int(os.getenv("OPTION_BAND_INTERVAL_SECONDS", "60"))
         
         # Hybrid OI change tracking
         self.last_change_tracking = 0
@@ -221,6 +221,197 @@ class OICollector:
         except Exception as e:
             return None
 
+    @staticmethod
+    def _safe_float(value, default=None):
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _safe_int(value, default=0):
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _build_option_band_rows(self, option_data, current_time):
+        rows = []
+        for snapshot in option_data.get("band_snapshots") or []:
+            rows.append(
+                (
+                    current_time,
+                    self.instrument,
+                    self._safe_int(snapshot.get("atm_strike")),
+                    self._safe_int(snapshot.get("strike")),
+                    self._safe_int(snapshot.get("distance_from_atm")),
+                    snapshot.get("option_type"),
+                    snapshot.get("security_id"),
+                    self._safe_int(snapshot.get("oi")),
+                    self._safe_int(snapshot.get("volume")),
+                    self._safe_float(snapshot.get("ltp"), 0.0),
+                    self._safe_float(snapshot.get("iv"), 0.0),
+                    self._safe_float(snapshot.get("top_bid_price")),
+                    self._safe_int(snapshot.get("top_bid_quantity")) if snapshot.get("top_bid_quantity") is not None else None,
+                    self._safe_float(snapshot.get("top_ask_price")),
+                    self._safe_int(snapshot.get("top_ask_quantity")) if snapshot.get("top_ask_quantity") is not None else None,
+                    self._safe_float(snapshot.get("spread")),
+                    self._safe_float(snapshot.get("average_price")),
+                    self._safe_int(snapshot.get("previous_oi")) if snapshot.get("previous_oi") is not None else None,
+                    self._safe_int(snapshot.get("previous_volume")) if snapshot.get("previous_volume") is not None else None,
+                    self._safe_float(snapshot.get("delta")),
+                    self._safe_float(snapshot.get("theta")),
+                    self._safe_float(snapshot.get("gamma")),
+                    self._safe_float(snapshot.get("vega")),
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _snapshot_key(row):
+        return (row.get("strike"), row.get("option_type"))
+
+    def _match_previous_contract(self, current_row, previous_group):
+        key = self._snapshot_key(current_row)
+        for row in previous_group or []:
+            if self._snapshot_key(row) == key:
+                return row
+        return None
+
+    def _derive_liquidity_quality(self, row):
+        ltp = self._safe_float(row.get("ltp"), 0.0) or 0.0
+        spread = self._safe_float(row.get("spread"), 0.0) or 0.0
+        bid_qty = self._safe_int(row.get("top_bid_quantity"), 0)
+        ask_qty = self._safe_int(row.get("top_ask_quantity"), 0)
+        spread_pct = (spread / ltp * 100.0) if ltp > 0 else None
+        if spread_pct is None:
+            return "UNKNOWN", spread_pct
+        if spread_pct <= 2.0 and bid_qty >= 50 and ask_qty >= 50:
+            return "GOOD", spread_pct
+        if spread_pct <= 5.0 and bid_qty > 0 and ask_qty > 0:
+            return "OK", spread_pct
+        return "POOR", spread_pct
+
+    def _build_option_market_state_rows(self, option_data, current_time):
+        current_rows = option_data.get("band_snapshots") or []
+        if not current_rows:
+            return []
+
+        previous_groups = self.db_reader.fetch_recent_option_band_snapshots(
+            self.instrument,
+            before_ts=current_time - timedelta(seconds=1),
+            limit=3,
+        )
+        prev_1m = previous_groups[-1] if previous_groups else []
+        prev_3m = previous_groups[0] if previous_groups else []
+        underlying_price = self._safe_float(option_data.get("underlying_price"))
+        atm_strike = self._safe_int(option_data.get("atm"))
+        state_rows = []
+
+        for direction in ("CE", "PE"):
+            side_rows = [row for row in current_rows if row.get("option_type") == direction]
+            if not side_rows:
+                continue
+            atm_row = min(
+                side_rows,
+                key=lambda row: abs(self._safe_int(row.get("distance_from_atm"), 999999)),
+            )
+            prev_1 = self._match_previous_contract(atm_row, prev_1m)
+            prev_3 = self._match_previous_contract(atm_row, prev_3m)
+            ltp = self._safe_float(atm_row.get("ltp"), 0.0) or 0.0
+            prev_ltp_1 = self._safe_float((prev_1 or {}).get("ltp"))
+            prev_ltp_3 = self._safe_float((prev_3 or {}).get("ltp"))
+            premium_change_1m = round(ltp - prev_ltp_1, 2) if prev_ltp_1 is not None else None
+            premium_change_3m = round(ltp - prev_ltp_3, 2) if prev_ltp_3 is not None else None
+            volume = self._safe_int(atm_row.get("volume"), 0)
+            oi = self._safe_int(atm_row.get("oi"), 0)
+            prev_volume = self._safe_int((prev_1 or {}).get("volume"), 0)
+            prev_oi = self._safe_int((prev_1 or {}).get("oi"), 0)
+            volume_delta = max(0, volume - prev_volume) if prev_1 else None
+            oi_delta = oi - prev_oi if prev_1 else None
+            liquidity_quality, spread_pct = self._derive_liquidity_quality(atm_row)
+
+            near_rows = [
+                row for row in side_rows
+                if abs(self._safe_int(row.get("distance_from_atm"), 999999)) <= 2
+            ]
+            breadth_hits = 0
+            for row in near_rows:
+                prev = self._match_previous_contract(row, prev_1m)
+                if not prev:
+                    continue
+                row_ltp = self._safe_float(row.get("ltp"), 0.0) or 0.0
+                prev_ltp = self._safe_float(prev.get("ltp"), 0.0) or 0.0
+                if row_ltp > prev_ltp:
+                    breadth_hits += 1
+            option_breadth_score = round((breadth_hits / len(near_rows)) * 100.0, 2) if near_rows else 0.0
+
+            if premium_change_1m is None:
+                premium_state = "UNKNOWN"
+            elif premium_change_1m > 0 and option_breadth_score >= 60:
+                premium_state = "EXPANDING"
+            elif premium_change_1m > 0:
+                premium_state = "UP"
+            elif premium_change_1m < 0:
+                premium_state = "FADING"
+            else:
+                premium_state = "FLAT"
+
+            if premium_state == "EXPANDING" and liquidity_quality in {"GOOD", "OK"}:
+                recommended_action = "READY"
+            elif liquidity_quality == "POOR" or premium_state in {"FADING", "UNKNOWN"}:
+                recommended_action = "AVOID"
+            else:
+                recommended_action = "WAIT"
+
+            reason = (
+                f"premium={premium_state} | breadth={option_breadth_score:.0f} | "
+                f"liq={liquidity_quality} | d1={premium_change_1m if premium_change_1m is not None else 'NA'}"
+            )
+            state_rows.append(
+                (
+                    current_time,
+                    self.instrument,
+                    direction,
+                    underlying_price,
+                    atm_strike,
+                    self._safe_int(atm_row.get("strike")),
+                    ltp,
+                    premium_change_1m,
+                    premium_change_3m,
+                    volume_delta,
+                    oi_delta,
+                    self._safe_float(atm_row.get("iv")),
+                    self._safe_float(atm_row.get("spread")),
+                    round(spread_pct, 4) if spread_pct is not None else None,
+                    self._safe_float(atm_row.get("top_bid_price")),
+                    self._safe_float(atm_row.get("top_ask_price")),
+                    self._safe_int(atm_row.get("top_bid_quantity")) if atm_row.get("top_bid_quantity") is not None else None,
+                    self._safe_int(atm_row.get("top_ask_quantity")) if atm_row.get("top_ask_quantity") is not None else None,
+                    option_breadth_score,
+                    premium_state,
+                    liquidity_quality,
+                    recommended_action,
+                    reason,
+                )
+            )
+        return state_rows
+
+    def _persist_option_band_and_state(self, option_data, current_time):
+        option_band_rows = self._build_option_band_rows(option_data, current_time)
+        if option_band_rows:
+            self.db_writer.insert_option_band_snapshots_1m(option_band_rows)
+            self.option_bands_collected += len(option_band_rows)
+
+        state_rows = self._build_option_market_state_rows(option_data, current_time)
+        if state_rows:
+            self.db_writer.insert_option_market_state_1m(state_rows)
+        return len(option_band_rows), len(state_rows)
+
     def _collect_oi_snapshot(self):
         """Collect OI snapshot from Dhan API"""
         try:
@@ -300,45 +491,9 @@ class OICollector:
                 self._log("No option chain data for bands")
                 return False
 
-            current_price = option_data.get("underlying_price") or self._get_current_price()
-            atm_strike = int(option_data.get("atm") or (round(current_price / 50) * 50))
-            option_band_rows = []
-
-            for snapshot in option_data["band_snapshots"]:
-                option_band_rows.append(
-                    (
-                        current_time,
-                        self.instrument,
-                        int(snapshot["atm_strike"]),
-                        int(snapshot["strike"]),
-                        int(snapshot.get("distance_from_atm", 0)),
-                        snapshot["option_type"],
-                        snapshot.get("security_id"),
-                        int(snapshot.get("oi", 0)),
-                        int(snapshot.get("volume", 0)),
-                        float(snapshot.get("ltp", 0)),
-                        float(snapshot.get("iv", 0)),
-                        float(snapshot.get("top_bid_price")) if snapshot.get("top_bid_price") is not None else None,
-                        int(snapshot.get("top_bid_quantity")) if snapshot.get("top_bid_quantity") is not None else None,
-                        float(snapshot.get("top_ask_price")) if snapshot.get("top_ask_price") is not None else None,
-                        int(snapshot.get("top_ask_quantity")) if snapshot.get("top_ask_quantity") is not None else None,
-                        float(snapshot.get("spread")) if snapshot.get("spread") is not None else None,
-                        float(snapshot.get("average_price")) if snapshot.get("average_price") is not None else None,
-                        int(snapshot.get("previous_oi")) if snapshot.get("previous_oi") is not None else None,
-                        int(snapshot.get("previous_volume")) if snapshot.get("previous_volume") is not None else None,
-                        float(snapshot.get("delta")) if snapshot.get("delta") is not None else None,
-                        float(snapshot.get("theta")) if snapshot.get("theta") is not None else None,
-                        float(snapshot.get("gamma")) if snapshot.get("gamma") is not None else None,
-                        float(snapshot.get("vega")) if snapshot.get("vega") is not None else None,
-                    )
-                )
-
-            # Store option bands
-            if option_band_rows:
-                self.db_writer.insert_option_band_snapshots_1m(option_band_rows)
-                self.option_bands_collected += len(option_band_rows)
-                
-                self._log(f"Option Bands | ATM: {atm_strike} | Bands: {len(option_band_rows)}")
+            band_count, state_count = self._persist_option_band_and_state(option_data, current_time)
+            if band_count:
+                self._log(f"Option Bands | ATM: {option_data.get('atm')} | Bands: {band_count} | States: {state_count}")
             
             return True
             
@@ -391,6 +546,10 @@ class OICollector:
                 return False
 
             band_snapshots = option_data["band_snapshots"]
+            band_count, state_count = self._persist_option_band_and_state(option_data, current_time)
+            if band_count:
+                self._log(f"1m Option State | Bands: {band_count} | States: {state_count}")
+
             total_ce_oi = sum(row["oi"] for row in band_snapshots if row["option_type"] == "CE")
             total_pe_oi = sum(row["oi"] for row in band_snapshots if row["option_type"] == "PE")
             total_ce_volume = sum(row["volume"] for row in band_snapshots if row["option_type"] == "CE")
@@ -626,6 +785,7 @@ class OICollector:
                 if self._should_track_oi_changes():
                     self._track_oi_changes()
                     self.last_change_tracking = current_time
+                    self.last_option_band_collection = current_time
                     self.watchdog.touch({"phase": "tracking_oi_changes", "dhan_connected": self.dhan_client.connected, "pid": self.pid})
                 
                 # Collect full OI snapshot if due (every 5 minutes)

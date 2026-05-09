@@ -36,6 +36,8 @@ from shared.market.oi_quote_confirmation import OIQuoteConfirmation
 from shared.market.option_spike_detector import OptionSpikeDetector
 from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
 from strategies.shared.breakout_strategy import BreakoutStrategy
+from strategies.shared.one_minute_momentum import OneMinuteMomentumQuality
+from strategies.shared.option_buyer_score import calculate_option_buyer_entry_score, option_buyer_action
 from strategies.shared.strike_selector import StrikeSelector
 from strategies.shared.actionable_rules import InstrumentActionableRules
 from shared.utils.logger import TradeLogger
@@ -89,6 +91,7 @@ class SignalService:
         
         # Strategy
         self.strategy = BreakoutStrategy(instrument=self.instrument)
+        self.one_minute_momentum = OneMinuteMomentumQuality(min_score=30)
         self.strike_selector = StrikeSelector(self.instrument)
         
         # Logging and notifications
@@ -2001,6 +2004,38 @@ class SignalService:
                     micro_reason = "Spike watch microstructure override"
                 else:
                     return {"status": "INVALIDATED", "reason": f"1m trigger lacked microstructure confirmation: {micro_reason}"}
+            momentum_checker = getattr(self, "one_minute_momentum", None) or OneMinuteMomentumQuality(min_score=30)
+            momentum_quality = momentum_checker.evaluate(
+                direction=direction,
+                recent_1m_candles=recent_1m_candles,
+                volume_signal="STRONG" if volume_ok else "NORMAL",
+                oi_bias="BULLISH" if direction == "CE" else "BEARISH",
+                pressure_bias=(
+                    "NEUTRAL"
+                    if pending.get("pressure_conflict_level") not in {None, "NONE"}
+                    else ("BULLISH" if direction == "CE" else "BEARISH")
+                ),
+            )
+            if (
+                not momentum_quality["ok"]
+                and not (fast_track_ready or hybrid_mode or elite_watch_ready)
+            ):
+                return {"status": "INVALIDATED", "reason": momentum_quality["reason"]}
+            final_entry_score = calculate_option_buyer_entry_score(
+                base_entry_score=pending.get("entry_score"),
+                strategy_score=pending.get("score"),
+                momentum_score=momentum_quality.get("score"),
+                blockers=pending.get("blockers"),
+                cautions=pending.get("cautions"),
+                confidence=pending.get("confidence"),
+                signal_grade=pending.get("signal_grade"),
+            )
+            min_final_score = 64 if (fast_track_ready or hybrid_mode or elite_watch_ready) else 70
+            if final_entry_score < min_final_score:
+                return {
+                    "status": "INVALIDATED",
+                    "reason": f"Option-buyer entry score weak ({final_entry_score} < {min_final_score})",
+                }
         if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
             return None
 
@@ -2008,9 +2043,12 @@ class SignalService:
             "status": "TRIGGERED",
             "price": latest["close"],
             "time": latest["time"],
-            "reason": "1m trigger confirmed after 5m watch",
+            "reason": f"1m trigger confirmed after 5m watch | {momentum_quality['reason']} ({momentum_quality['score']})",
             "selected_strike": selected_strike if trigger_hit else None,
             "micro_reason": micro_reason if trigger_hit else None,
+            "momentum_quality": momentum_quality,
+            "option_buyer_entry_score": final_entry_score,
+            "option_buyer_action": option_buyer_action(final_entry_score),
         }
 
     def _maybe_fire_pending_entry_watch(self, latest_5m_candle):
@@ -2030,9 +2068,24 @@ class SignalService:
 
         evaluation = self._evaluate_pending_entry_watch(recent_1m_candles)
         if not evaluation:
+            self._safe_save_entry_decision_1m(
+                ts=minute_key,
+                pending=self.pending_entry_watch,
+                decision="WAIT",
+                latest_1m=latest_1m,
+                reason="Waiting for 1m trigger confirmation",
+            )
             return
 
         if evaluation["status"] in {"EXPIRED", "INVALIDATED"}:
+            self._safe_save_entry_decision_1m(
+                ts=minute_key,
+                pending=self.pending_entry_watch,
+                decision=evaluation["status"],
+                latest_1m=latest_1m,
+                evaluation=evaluation,
+                reason=evaluation.get("reason"),
+            )
             self._clear_pending_entry_watch()
             return
 
@@ -2057,6 +2110,17 @@ class SignalService:
                 evaluation["price"],
                 before_ts=evaluation["time"],
             )
+
+        self._safe_save_entry_decision_1m(
+            ts=evaluation["time"],
+            pending=pending,
+            decision="TRIGGERED",
+            latest_1m=latest_1m,
+            evaluation=evaluation,
+            option_contract=option_contract,
+            strike=strike,
+            reason=f"{evaluation.get('reason')} | {evaluation.get('micro_reason') or 'micro confirmed'}",
+        )
 
         option_price = (option_contract or {}).get("ltp")
         stop_loss_option_price = None
@@ -3932,6 +3996,7 @@ class SignalService:
         try:
             if not self.active_trade_monitor:
                 return
+            minutes_since_signal = int(self.active_trade_monitor.get("minutes_active") or 0)
             row = (
                 self.active_trade_monitor.get("entry_time"),
                 ts,
@@ -3948,13 +4013,103 @@ class SignalService:
                 float(monitor_data.get("pnl_points")) if monitor_data.get("pnl_points") is not None else None,
                 float(monitor_data.get("max_favorable_ltp")) if monitor_data.get("max_favorable_ltp") is not None else None,
                 float(monitor_data.get("max_adverse_ltp")) if monitor_data.get("max_adverse_ltp") is not None else None,
-                int(self.active_trade_monitor.get("minutes_active") or 0),
+                minutes_since_signal,
                 monitor_data.get("guidance"),
                 monitor_data.get("reason"),
             )
             self.db_writer.insert_option_signal_outcome_1m(row)
+            self._safe_save_option_signal_horizon_outcome(ts, monitor_data, minutes_since_signal)
         except Exception as e:
             self._log(f"DB save error (option outcome): {e}")
+
+    @staticmethod
+    def _classify_option_horizon_outcome(pnl_points, max_favorable_points, max_adverse_points):
+        pnl = float(pnl_points or 0)
+        max_fav = float(max_favorable_points or 0)
+        max_adv = float(max_adverse_points or 0)
+        if max_fav >= 20 or pnl >= 12:
+            return "WIN"
+        if max_adv <= -12 and pnl <= 0:
+            return "LOSS"
+        if pnl > 0:
+            return "POSITIVE"
+        if pnl < 0:
+            return "NEGATIVE"
+        return "FLAT"
+
+    def _safe_save_option_signal_horizon_outcome(self, ts, monitor_data, minutes_since_signal):
+        if minutes_since_signal not in {1, 2, 3, 5}:
+            return
+        try:
+            entry_price = monitor_data.get("entry_price")
+            option_price = monitor_data.get("option_price")
+            pnl_points = monitor_data.get("pnl_points")
+            max_fav_ltp = monitor_data.get("max_favorable_ltp")
+            max_adv_ltp = monitor_data.get("max_adverse_ltp")
+            max_fav_points = (
+                float(max_fav_ltp) - float(entry_price)
+                if max_fav_ltp is not None and entry_price is not None else pnl_points
+            )
+            max_adv_points = (
+                float(max_adv_ltp) - float(entry_price)
+                if max_adv_ltp is not None and entry_price is not None else pnl_points
+            )
+            pnl_percent = (
+                (float(pnl_points) / float(entry_price)) * 100.0
+                if pnl_points is not None and entry_price not in {None, 0} else None
+            )
+            row = (
+                self.active_trade_monitor.get("entry_time"),
+                minutes_since_signal,
+                ts,
+                self.instrument,
+                monitor_data.get("signal"),
+                self.active_trade_monitor.get("strike"),
+                float(self.active_trade_monitor.get("entry_underlying_price")) if self.active_trade_monitor.get("entry_underlying_price") is not None else None,
+                float(monitor_data.get("price")) if monitor_data.get("price") is not None else None,
+                float(entry_price) if entry_price is not None else None,
+                float(option_price) if option_price is not None else None,
+                float(pnl_points) if pnl_points is not None else None,
+                float(pnl_percent) if pnl_percent is not None else None,
+                float(max_fav_points) if max_fav_points is not None else None,
+                float(max_adv_points) if max_adv_points is not None else None,
+                self._classify_option_horizon_outcome(pnl_points, max_fav_points, max_adv_points),
+            )
+            self.db_writer.insert_option_signal_horizon_outcome(row)
+        except Exception as e:
+            self._log(f"DB save error (option horizon outcome): {e}")
+
+    @staticmethod
+    def _option_contract_spread_percent(option_contract):
+        if not option_contract:
+            return None
+        spread = option_contract.get("spread")
+        ltp = option_contract.get("ltp")
+        if spread is None:
+            bid = option_contract.get("top_bid_price")
+            ask = option_contract.get("top_ask_price")
+            if bid is not None and ask is not None:
+                spread = float(ask) - float(bid)
+        if spread is None or not ltp:
+            return None
+        return (float(spread) / max(float(ltp), 1.0)) * 100.0
+
+    def _build_option_buyer_entry_score(self, pending, evaluation=None, option_contract=None):
+        evaluation = evaluation or {}
+        momentum = evaluation.get("momentum_quality") or {}
+        score = calculate_option_buyer_entry_score(
+            base_entry_score=pending.get("entry_score"),
+            strategy_score=pending.get("score"),
+            momentum_score=momentum.get("score"),
+            premium_state=evaluation.get("premium_state"),
+            liquidity_quality=evaluation.get("liquidity_quality"),
+            spread_percent=self._option_contract_spread_percent(option_contract),
+            blockers=pending.get("blockers"),
+            cautions=pending.get("cautions"),
+            confidence=pending.get("confidence"),
+            signal_grade=pending.get("signal_grade"),
+        )
+        return score, option_buyer_action(score)
 
     def _sync_ml_outcome_from_monitor(self):
         """Backfill ML outcome from premium-based monitor results for the active signal."""
@@ -4089,6 +4244,68 @@ class SignalService:
             self.db_writer.insert_signal_issued(row)
         except Exception as e:
             self._log(f"DB save error (signal issued): {e}")
+
+    def _safe_save_entry_decision_1m(
+        self,
+        ts,
+        pending,
+        decision,
+        latest_1m,
+        evaluation=None,
+        option_contract=None,
+        strike=None,
+        reason=None,
+    ):
+        """Persist every 1m option-buyer entry gate decision."""
+        try:
+            if not pending or not latest_1m:
+                return
+
+            option_contract = option_contract or {}
+            evaluation = evaluation or {}
+            option_buyer_score, option_buyer_decision = self._build_option_buyer_entry_score(
+                pending,
+                evaluation=evaluation,
+                option_contract=option_contract,
+            )
+            row = (
+                ts,
+                self.instrument,
+                pending.get("created_at"),
+                pending.get("direction"),
+                decision,
+                float(evaluation.get("price") or latest_1m.get("close")) if (evaluation.get("price") or latest_1m.get("close")) is not None else None,
+                float(latest_1m.get("open")) if latest_1m.get("open") is not None else None,
+                float(latest_1m.get("high")) if latest_1m.get("high") is not None else None,
+                float(latest_1m.get("low")) if latest_1m.get("low") is not None else None,
+                float(latest_1m.get("close")) if latest_1m.get("close") is not None else None,
+                int(latest_1m.get("volume")) if latest_1m.get("volume") is not None else None,
+                float(pending.get("trigger_price")) if pending.get("trigger_price") is not None else None,
+                float(pending.get("invalidate_price")) if pending.get("invalidate_price") is not None else None,
+                float(pending.get("first_target_price")) if pending.get("first_target_price") is not None else None,
+                int(strike or evaluation.get("selected_strike")) if (strike or evaluation.get("selected_strike")) is not None else None,
+                float(option_contract.get("ltp")) if option_contract.get("ltp") is not None else None,
+                float(option_contract.get("top_bid_price")) if option_contract.get("top_bid_price") is not None else None,
+                float(option_contract.get("top_ask_price")) if option_contract.get("top_ask_price") is not None else None,
+                float(option_contract.get("spread")) if option_contract.get("spread") is not None else None,
+                int(pending.get("score")) if pending.get("score") is not None else None,
+                int(pending.get("entry_score")) if pending.get("entry_score") is not None else None,
+                pending.get("signal_type"),
+                pending.get("signal_grade"),
+                pending.get("confidence"),
+                pending.get("watch_bucket"),
+                pending.get("time_regime"),
+                int(pending.get("minutes_since_watch")) if pending.get("minutes_since_watch") is not None else None,
+                int(option_buyer_score),
+                option_buyer_decision,
+                reason or evaluation.get("reason") or pending.get("reason"),
+                list(pending.get("blockers") or []),
+                list(pending.get("cautions") or []),
+                getattr(self, "option_data_source", None),
+            )
+            self.db_writer.insert_entry_decision_1m(row)
+        except Exception as e:
+            self._log(f"DB save error (entry decision 1m): {e}")
 
     def _safe_save_ml_features(self, ml_features, ml_prob):
         """Save ML features to database for training."""
@@ -5036,7 +5253,7 @@ class SignalService:
         self._safe_save_strategy_decision(
             ts=candle_5m["time"],
             price=price,
-            signal=candidate_signal,
+            signal=signal,
             reason=enriched_reason,
             volume_signal=volume_signal,
             oi_bias=oi_bias,
@@ -5059,7 +5276,7 @@ class SignalService:
         self.audit_logger.log_decision(
             instrument=self.instrument,
             price=price,
-            signal=candidate_signal or "NO_TRADE",
+            signal=signal or "NO_TRADE",
             strike=selected_strike,
             score=self.strategy.last_score,
             confidence=self.strategy.last_confidence,

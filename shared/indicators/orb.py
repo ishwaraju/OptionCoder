@@ -46,6 +46,17 @@ class ORB:
     def get_orb_levels(self):
         return self.orb_high, self.orb_low
 
+    def check_breakout(self, price, buffer=0):
+        """Return CE/PE when price breaks the ORB range, otherwise None."""
+        if self.orb_high is None or self.orb_low is None:
+            return None
+
+        if price >= self.orb_high + buffer:
+            return "CE"
+        if price <= self.orb_low - buffer:
+            return "PE"
+        return None
+
     def is_orb_ready(self):
         return self.orb_ready
 

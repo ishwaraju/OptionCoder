@@ -15,6 +15,22 @@ from config import Config
 
 
 MAX_MINUTES = 20
+HORIZONS = (1, 2, 3, 5)
+
+
+def classify_horizon(pnl_points, max_favorable_points, max_adverse_points):
+    pnl = float(pnl_points or 0)
+    max_fav = float(max_favorable_points or 0)
+    max_adv = float(max_adverse_points or 0)
+    if max_fav >= 20 or pnl >= 12:
+        return "WIN"
+    if max_adv <= -12 and pnl <= 0:
+        return "LOSS"
+    if pnl > 0:
+        return "POSITIVE"
+    if pnl < 0:
+        return "NEGATIVE"
+    return "FLAT"
 
 
 def parse_args():
@@ -137,6 +153,7 @@ def main():
 
                 max_fav = option_entry_ltp
                 max_adv = option_entry_ltp
+                horizon_candidates = []
                 for observed_ts, option_ltp, option_bid, option_ask, option_spread, underlying_price in observed_rows:
                     if option_ltp is None:
                         continue
@@ -146,6 +163,17 @@ def main():
                     minutes_since_signal = max(
                         0,
                         int((observed_ts - signal_ts).total_seconds() // 60),
+                    )
+                    horizon_candidates.append(
+                        {
+                            "observed_ts": observed_ts,
+                            "option_ltp": float(option_ltp),
+                            "underlying_price": underlying_price,
+                            "pnl_points": pnl_points,
+                            "minutes_since_signal": minutes_since_signal,
+                            "max_favorable_points": float(max_fav) - float(option_entry_ltp),
+                            "max_adverse_points": float(max_adv) - float(option_entry_ltp),
+                        }
                     )
                     cur.execute(
                         """
@@ -192,6 +220,60 @@ def main():
                         ),
                     )
                     inserted += 1
+
+                for horizon in HORIZONS:
+                    candidates = [item for item in horizon_candidates if item["minutes_since_signal"] >= horizon]
+                    if not candidates:
+                        continue
+                    chosen = min(candidates, key=lambda item: item["minutes_since_signal"])
+                    pnl_percent = (
+                        (chosen["pnl_points"] / float(option_entry_ltp)) * 100.0
+                        if option_entry_ltp else None
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO option_signal_horizon_outcomes
+                        (
+                            signal_ts, horizon_minutes, observed_ts, instrument, signal, strike,
+                            underlying_entry_price, underlying_price, option_entry_ltp, option_ltp,
+                            pnl_points, pnl_percent, max_favorable_points, max_adverse_points,
+                            outcome_label
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (signal_ts, horizon_minutes, instrument, signal, strike) DO UPDATE
+                        SET observed_ts = EXCLUDED.observed_ts,
+                            underlying_entry_price = EXCLUDED.underlying_entry_price,
+                            underlying_price = EXCLUDED.underlying_price,
+                            option_entry_ltp = EXCLUDED.option_entry_ltp,
+                            option_ltp = EXCLUDED.option_ltp,
+                            pnl_points = EXCLUDED.pnl_points,
+                            pnl_percent = EXCLUDED.pnl_percent,
+                            max_favorable_points = EXCLUDED.max_favorable_points,
+                            max_adverse_points = EXCLUDED.max_adverse_points,
+                            outcome_label = EXCLUDED.outcome_label;
+                        """,
+                        (
+                            signal_ts,
+                            horizon,
+                            chosen["observed_ts"],
+                            instrument,
+                            signal,
+                            strike,
+                            underlying_entry_price,
+                            chosen["underlying_price"],
+                            option_entry_ltp,
+                            chosen["option_ltp"],
+                            chosen["pnl_points"],
+                            pnl_percent,
+                            chosen["max_favorable_points"],
+                            chosen["max_adverse_points"],
+                            classify_horizon(
+                                chosen["pnl_points"],
+                                chosen["max_favorable_points"],
+                                chosen["max_adverse_points"],
+                            ),
+                        ),
+                    )
         conn.commit()
 
     print(f"outcome_rows_upserted={inserted}")

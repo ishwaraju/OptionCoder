@@ -138,6 +138,61 @@ def _safe_float(value):
         return None
 
 
+def _normalize_review_row(row):
+    if len(row) == 24:
+        return row
+    if len(row) == 20:
+        (
+            signal_ts,
+            instrument,
+            signal,
+            strike,
+            buy_price,
+            underlying_price,
+            score,
+            setup_type,
+            strike_reason,
+            chosen_candidate_score,
+            chosen_expected_edge,
+            chosen_rank,
+            chosen_outcome_pnl,
+            chosen_max_fav,
+            top_strike,
+            top_buy_price,
+            top_candidate_score,
+            top_expected_edge,
+            top_outcome_pnl,
+            top_max_fav,
+        ) = row
+        return (
+            signal_ts,
+            instrument,
+            signal,
+            strike,
+            buy_price,
+            underlying_price,
+            score,
+            setup_type,
+            strike_reason,
+            chosen_candidate_score,
+            chosen_expected_edge,
+            chosen_rank,
+            chosen_outcome_pnl,
+            chosen_max_fav,
+            None,
+            None,
+            top_strike,
+            top_buy_price,
+            top_candidate_score,
+            top_expected_edge,
+            top_outcome_pnl,
+            top_max_fav,
+            None,
+            None,
+        )
+    raise ValueError(f"Unexpected review row shape: expected 20 or 24 columns, got {len(row)}")
+
+
 def build_daily_summary(rows):
     summary = {
         "total_signals": len(rows),
@@ -152,6 +207,7 @@ def build_daily_summary(rows):
     }
 
     for row in rows:
+        row = _normalize_review_row(row)
         (
             signal_ts,
             instrument,

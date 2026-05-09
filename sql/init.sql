@@ -1,7 +1,9 @@
 BEGIN;
 
 DROP TABLE IF EXISTS trade_monitor_events_1m CASCADE;
+DROP TABLE IF EXISTS entry_decisions_1m CASCADE;
 DROP TABLE IF EXISTS option_signal_outcomes_1m CASCADE;
+DROP TABLE IF EXISTS option_market_state_1m CASCADE;
 DROP TABLE IF EXISTS option_signal_candidates_5m CASCADE;
 DROP TABLE IF EXISTS signals_issued CASCADE;
 DROP TABLE IF EXISTS strategy_decisions_5m CASCADE;
@@ -231,6 +233,35 @@ CREATE TABLE option_signal_candidates_5m (
   UNIQUE (ts, instrument, candidate_direction, strike)
 );
 
+CREATE TABLE option_market_state_1m (
+  id BIGSERIAL PRIMARY KEY,
+  ts TIMESTAMPTZ NOT NULL,
+  instrument TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  underlying_price NUMERIC(12,2),
+  atm_strike INTEGER,
+  strike INTEGER,
+  option_ltp NUMERIC(12,2),
+  premium_change_1m NUMERIC(12,2),
+  premium_change_3m NUMERIC(12,2),
+  volume_delta BIGINT,
+  oi_delta BIGINT,
+  iv NUMERIC(12,4),
+  spread NUMERIC(12,2),
+  spread_percent NUMERIC(12,4),
+  bid_price NUMERIC(12,2),
+  ask_price NUMERIC(12,2),
+  bid_quantity BIGINT,
+  ask_quantity BIGINT,
+  option_breadth_score NUMERIC(12,2),
+  premium_state TEXT,
+  liquidity_quality TEXT,
+  recommended_action TEXT,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ts, instrument, direction)
+);
+
 CREATE TABLE option_signal_outcomes_1m (
   id BIGSERIAL PRIMARY KEY,
   signal_ts TIMESTAMPTZ NOT NULL,
@@ -253,6 +284,66 @@ CREATE TABLE option_signal_outcomes_1m (
   reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (signal_ts, observed_ts, instrument, signal, strike)
+);
+
+CREATE TABLE option_signal_horizon_outcomes (
+  id BIGSERIAL PRIMARY KEY,
+  signal_ts TIMESTAMPTZ NOT NULL,
+  horizon_minutes INTEGER NOT NULL,
+  observed_ts TIMESTAMPTZ,
+  instrument TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  strike INTEGER NOT NULL,
+  underlying_entry_price NUMERIC(12,2),
+  underlying_price NUMERIC(12,2),
+  option_entry_ltp NUMERIC(12,2),
+  option_ltp NUMERIC(12,2),
+  pnl_points NUMERIC(12,2),
+  pnl_percent NUMERIC(12,4),
+  max_favorable_points NUMERIC(12,2),
+  max_adverse_points NUMERIC(12,2),
+  outcome_label TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (signal_ts, horizon_minutes, instrument, signal, strike)
+);
+
+CREATE TABLE entry_decisions_1m (
+  id BIGSERIAL PRIMARY KEY,
+  ts TIMESTAMPTZ NOT NULL,
+  instrument TEXT NOT NULL,
+  watch_ts TIMESTAMPTZ,
+  direction TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  underlying_price NUMERIC(12,2),
+  candle_open NUMERIC(12,2),
+  candle_high NUMERIC(12,2),
+  candle_low NUMERIC(12,2),
+  candle_close NUMERIC(12,2),
+  candle_volume BIGINT,
+  trigger_price NUMERIC(12,2),
+  invalidate_price NUMERIC(12,2),
+  first_target_price NUMERIC(12,2),
+  strike INTEGER,
+  option_ltp NUMERIC(12,2),
+  option_bid NUMERIC(12,2),
+  option_ask NUMERIC(12,2),
+  option_spread NUMERIC(12,2),
+  score INTEGER,
+  entry_score INTEGER,
+  signal_type TEXT,
+  signal_grade TEXT,
+  confidence TEXT,
+  watch_bucket TEXT,
+  time_regime TEXT,
+  minutes_since_watch INTEGER,
+  option_buyer_entry_score INTEGER,
+  option_buyer_action TEXT,
+  reason TEXT,
+  blockers_json JSONB,
+  cautions_json JSONB,
+  option_data_source TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (ts, instrument, watch_ts, direction)
 );
 
 CREATE TABLE trade_monitor_events_1m (
@@ -304,6 +395,7 @@ CREATE INDEX idx_c5m_ts ON candles_5m (ts DESC);
 CREATE INDEX idx_sig_issued_inst_ts ON signals_issued (instrument, ts DESC);
 CREATE INDEX idx_option_sig_candidates_inst_ts ON option_signal_candidates_5m (instrument, ts DESC);
 CREATE INDEX idx_option_sig_outcomes_inst_signal_ts ON option_signal_outcomes_1m (instrument, signal_ts DESC);
+CREATE INDEX idx_option_sig_horizon_inst_ts ON option_signal_horizon_outcomes (instrument, signal_ts DESC);
 
 CREATE INDEX idx_oi_inst_ts ON oi_snapshots_1m (instrument, ts DESC);
 CREATE INDEX idx_oi_sentiment ON oi_snapshots_1m (instrument, oi_sentiment, ts DESC);

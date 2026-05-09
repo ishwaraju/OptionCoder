@@ -325,13 +325,14 @@ class DataCollector:
     def _safe_save_1m_candle(self, instrument, candle_1m):
         """Safely save 1-minute candle to database"""
         try:
-            # Update volume from API cache if candle volume is 0
+            # Use API cumulative volume as a fallback only after converting it
+            # to a per-minute delta. Writing the raw cumulative value into each
+            # candle makes every minute look like the same high-volume bar.
             candle_volume = int(candle_1m["volume"])
             if candle_volume == 0:
-                api_volume = self.volume_cache.get(instrument)
-                if api_volume:
-                    candle_volume = int(api_volume)
-                    # Update the candle object for display
+                api_delta = self._extract_api_volume_delta(instrument)
+                if api_delta > 0:
+                    candle_volume = api_delta
                     candle_1m["volume"] = candle_volume
 
             row = (
@@ -346,6 +347,33 @@ class DataCollector:
             self.db.insert_candle_1m(row)
         except Exception as e:
             self._log(f"DB save error (1m candle): {e}")
+
+    def _extract_api_volume_delta(self, instrument):
+        """Return positive per-minute volume delta from the cached API total."""
+        api_volume = self.volume_cache.get(instrument)
+        if not api_volume:
+            return 0
+
+        try:
+            api_volume = int(api_volume)
+        except (TypeError, ValueError):
+            return 0
+
+        if api_volume <= 0:
+            return 0
+
+        last_seen = self.last_seen_api_volume[instrument]
+        if last_seen is None:
+            self.last_seen_api_volume[instrument] = api_volume
+            return 0
+
+        if api_volume < last_seen:
+            self.last_seen_api_volume[instrument] = api_volume
+            return 0
+
+        delta = api_volume - last_seen
+        self.last_seen_api_volume[instrument] = api_volume
+        return max(0, delta)
 
     def _safe_save_5m_candle(self, instrument, candle_5m):
         """Safely save 5-minute candle to database"""

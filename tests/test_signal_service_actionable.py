@@ -575,6 +575,67 @@ def test_elite_manual_watch_can_trigger_on_clean_reclaim_without_extra_buffer():
     assert result["status"] == "TRIGGERED"
 
 
+def test_entry_decision_1m_audit_row_is_written_for_wait_state():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.option_data_source = "CACHE"
+    rows = []
+    service.db_writer = type(
+        "WriterStub",
+        (),
+        {"insert_entry_decision_1m": lambda self, row: rows.append(row)},
+    )()
+    service._log = lambda message: None
+
+    pending = {
+        "created_at": datetime(2026, 5, 6, 14, 22),
+        "direction": "CE",
+        "trigger_price": 24220.0,
+        "invalidate_price": 24198.0,
+        "first_target_price": 24270.0,
+        "score": 84,
+        "entry_score": 78,
+        "signal_type": "BREAKOUT_CONFIRM",
+        "signal_grade": "A",
+        "confidence": "HIGH",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "time_regime": "MID_MORNING",
+        "minutes_since_watch": 1,
+        "reason": "manual breakout confirm watch",
+        "blockers": [],
+        "cautions": ["one_minute_spike_watch"],
+    }
+    latest_1m = {
+        "time": datetime(2026, 5, 6, 14, 23),
+        "open": 24214.0,
+        "high": 24218.0,
+        "low": 24212.0,
+        "close": 24216.0,
+        "volume": 760,
+    }
+
+    service._safe_save_entry_decision_1m(
+        ts=latest_1m["time"],
+        pending=pending,
+        decision="WAIT",
+        latest_1m=latest_1m,
+        reason="Waiting for 1m trigger confirmation",
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row[1] == "NIFTY"
+    assert row[3] == "CE"
+    assert row[4] == "WAIT"
+    assert row[11] == 24220.0
+    assert row[20] == 78
+    assert row[27] >= 0
+    assert row[28] in {"ACTION", "READY", "WAIT", "AVOID"}
+    assert row[30] == []
+    assert row[31] == ["one_minute_spike_watch"]
+    assert row[32] == "CACHE"
+
+
 def test_watch_alert_eligibility_allows_only_strong_spike_watch():
     service = SignalService.__new__(SignalService)
 

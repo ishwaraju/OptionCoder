@@ -67,7 +67,7 @@ def test_blocks_high_score_continuation_when_pressure_is_opposite():
     assert signal is None
 
 
-def test_allows_medium_score_continuation_follow_through_for_bullish_setup():
+def test_keeps_medium_score_continuation_on_watch_for_bullish_setup():
     strategy = BreakoutStrategy()
 
     signal, reason = strategy.generate_signal(
@@ -97,8 +97,9 @@ def test_allows_medium_score_continuation_follow_through_for_bullish_setup():
         candle_time=datetime(2026, 4, 10, 10, 20),
     )
 
-    assert signal == "CE"
-    assert "Continuation follow-through" in reason
+    assert signal is None
+    assert strategy.last_decision_state == "WATCH"
+    assert "direction_present_but_filters_incomplete" in strategy.last_blockers
 
 
 def test_no_valid_setup_is_split_into_specific_blockers():
@@ -139,7 +140,7 @@ def test_no_valid_setup_is_split_into_specific_blockers():
     assert "low_tick_density" in strategy.last_blockers
 
 
-def test_retest_entry_triggers_after_breakout_watch_is_created():
+def test_retest_entry_can_trigger_on_first_clean_breakout():
     strategy = BreakoutStrategy()
 
     signal_1, _ = strategy.generate_signal(
@@ -169,8 +170,8 @@ def test_retest_entry_triggers_after_breakout_watch_is_created():
         candle_time=datetime(2026, 4, 10, 10, 0),
     )
 
-    assert signal_1 is None
-    assert strategy.confirmation_setup is not None or strategy.retest_setup is not None
+    assert signal_1 == "CE"
+    assert strategy.last_signal_type == "CONTINUATION"
 
     strategy._set_retest_setup("CE", 23900, datetime(2026, 4, 10, 10, 5), 68)
 
@@ -236,7 +237,8 @@ def test_choppy_regime_blocks_continuation_without_strong_volume():
     )
 
     assert signal is None
-    assert strategy.last_signal_type == "NONE"
+    assert strategy.last_signal_type == "BREAKOUT_CONFIRM"
+    assert strategy.last_decision_state == "WATCH"
 
 
 def test_breakout_confirmation_triggers_after_weak_breakout_watch():
@@ -299,7 +301,7 @@ def test_breakout_confirmation_triggers_after_weak_breakout_watch():
     )
 
     assert signal_2 == "CE"
-    assert "confirmation" in reason_2.lower()
+    assert "retest" in reason_2.lower() or "confirmation" in reason_2.lower()
 
 
 def test_nifty_strong_option_sweep_can_override_choppy_breakout_regime():
@@ -482,7 +484,8 @@ def test_opening_reversal_is_blocked_for_option_buyer():
     )
 
     assert signal is None
-    assert strategy.last_signal_type == "NONE"
+    assert strategy.last_signal_type == "BREAKOUT_CONFIRM"
+    assert strategy.last_decision_state == "WATCH"
 
 
 def test_sensex_expiry_allows_high_conviction_midday_trend_trade():

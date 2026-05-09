@@ -9,9 +9,9 @@ class ExpiryDayRules:
     Keeps expiry logic separate from the base strategy so normal sessions stay clean.
     """
 
-    def __init__(self, time_utils, instrument="NIFTY"):
+    def __init__(self, time_utils, instrument=None):
         self.time_utils = time_utils
-        self.instrument = (instrument or "NIFTY").upper()
+        self.instrument = (instrument or Config.SYMBOL or "NIFTY").upper()
         self.profile = get_expiry_profile(self.instrument)
 
     @staticmethod

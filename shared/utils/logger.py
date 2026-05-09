@@ -15,7 +15,7 @@ class TradeLogger:
         # self.signal_file = "data/signals.csv"  # Removed - using database as primary storage
         self.trade_file = "data/trades.csv"
         # self.decision_file = "data/decision_audit.csv"  # Removed - using database as primary storage
-        # self.summary_file = f"data/session_summary_{self._now_ist().strftime('%Y%m%d')}.txt"  # Removed - using database as primary storage
+        self.summary_file = f"data/session_summary_{self._now_ist().strftime('%Y%m%d')}.txt"
 
         # Create files if not exist
         # self.create_file_if_not_exists(self.signal_file, [...])  # Removed - using database as primary storage

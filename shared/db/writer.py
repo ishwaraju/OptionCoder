@@ -16,6 +16,9 @@ class DBWriter:
         self._signals_issued_has_option_columns = None
         self._option_signal_candidate_table_exists = None
         self._option_signal_outcome_table_exists = None
+        self._option_signal_horizon_outcome_table_exists = None
+        self._entry_decision_table_exists = None
+        self._option_market_state_table_exists = None
 
     def close(self):
         self.conn = None
@@ -548,6 +551,130 @@ class DBWriter:
         """
         self._execute(query, row)
 
+    def insert_option_signal_horizon_outcome(self, row):
+        if self._option_signal_horizon_outcome_table_exists is None:
+            self._option_signal_horizon_outcome_table_exists = self._table_exists("option_signal_horizon_outcomes")
+        if not self._option_signal_horizon_outcome_table_exists:
+            return
+
+        query = """
+        INSERT INTO option_signal_horizon_outcomes
+        (
+            signal_ts, horizon_minutes, observed_ts, instrument, signal, strike,
+            underlying_entry_price, underlying_price, option_entry_ltp, option_ltp,
+            pnl_points, pnl_percent, max_favorable_points, max_adverse_points,
+            outcome_label
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (signal_ts, horizon_minutes, instrument, signal, strike) DO UPDATE
+        SET observed_ts = EXCLUDED.observed_ts,
+            underlying_entry_price = EXCLUDED.underlying_entry_price,
+            underlying_price = EXCLUDED.underlying_price,
+            option_entry_ltp = EXCLUDED.option_entry_ltp,
+            option_ltp = EXCLUDED.option_ltp,
+            pnl_points = EXCLUDED.pnl_points,
+            pnl_percent = EXCLUDED.pnl_percent,
+            max_favorable_points = EXCLUDED.max_favorable_points,
+            max_adverse_points = EXCLUDED.max_adverse_points,
+            outcome_label = EXCLUDED.outcome_label;
+        """
+        self._execute(query, row)
+
+    def insert_option_market_state_1m(self, rows):
+        if self._option_market_state_table_exists is None:
+            self._option_market_state_table_exists = self._table_exists("option_market_state_1m")
+        if not self._option_market_state_table_exists:
+            return
+
+        query = """
+        INSERT INTO option_market_state_1m
+        (
+            ts, instrument, direction, underlying_price, atm_strike, strike,
+            option_ltp, premium_change_1m, premium_change_3m, volume_delta,
+            oi_delta, iv, spread, spread_percent, bid_price, ask_price,
+            bid_quantity, ask_quantity, option_breadth_score, premium_state,
+            liquidity_quality, recommended_action, reason
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ts, instrument, direction) DO UPDATE
+        SET underlying_price = EXCLUDED.underlying_price,
+            atm_strike = EXCLUDED.atm_strike,
+            strike = EXCLUDED.strike,
+            option_ltp = EXCLUDED.option_ltp,
+            premium_change_1m = EXCLUDED.premium_change_1m,
+            premium_change_3m = EXCLUDED.premium_change_3m,
+            volume_delta = EXCLUDED.volume_delta,
+            oi_delta = EXCLUDED.oi_delta,
+            iv = EXCLUDED.iv,
+            spread = EXCLUDED.spread,
+            spread_percent = EXCLUDED.spread_percent,
+            bid_price = EXCLUDED.bid_price,
+            ask_price = EXCLUDED.ask_price,
+            bid_quantity = EXCLUDED.bid_quantity,
+            ask_quantity = EXCLUDED.ask_quantity,
+            option_breadth_score = EXCLUDED.option_breadth_score,
+            premium_state = EXCLUDED.premium_state,
+            liquidity_quality = EXCLUDED.liquidity_quality,
+            recommended_action = EXCLUDED.recommended_action,
+            reason = EXCLUDED.reason;
+        """
+        self._execute_many(query, rows)
+
+    def insert_entry_decision_1m(self, row):
+        if self._entry_decision_table_exists is None:
+            self._entry_decision_table_exists = self._table_exists("entry_decisions_1m")
+        if not self._entry_decision_table_exists:
+            return
+
+        serialized = list(row)
+        serialized[30] = json.dumps(serialized[30] or [])
+        serialized[31] = json.dumps(serialized[31] or [])
+        query = """
+        INSERT INTO entry_decisions_1m
+        (
+            ts, instrument, watch_ts, direction, decision, underlying_price,
+            candle_open, candle_high, candle_low, candle_close, candle_volume,
+            trigger_price, invalidate_price, first_target_price,
+            strike, option_ltp, option_bid, option_ask, option_spread,
+            score, entry_score, signal_type, signal_grade, confidence,
+            watch_bucket, time_regime, minutes_since_watch,
+            option_buyer_entry_score, option_buyer_action, reason,
+            blockers_json, cautions_json, option_data_source
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (ts, instrument, watch_ts, direction) DO UPDATE
+        SET decision = EXCLUDED.decision,
+            underlying_price = EXCLUDED.underlying_price,
+            candle_open = EXCLUDED.candle_open,
+            candle_high = EXCLUDED.candle_high,
+            candle_low = EXCLUDED.candle_low,
+            candle_close = EXCLUDED.candle_close,
+            candle_volume = EXCLUDED.candle_volume,
+            trigger_price = EXCLUDED.trigger_price,
+            invalidate_price = EXCLUDED.invalidate_price,
+            first_target_price = EXCLUDED.first_target_price,
+            strike = EXCLUDED.strike,
+            option_ltp = EXCLUDED.option_ltp,
+            option_bid = EXCLUDED.option_bid,
+            option_ask = EXCLUDED.option_ask,
+            option_spread = EXCLUDED.option_spread,
+            score = EXCLUDED.score,
+            entry_score = EXCLUDED.entry_score,
+            signal_type = EXCLUDED.signal_type,
+            signal_grade = EXCLUDED.signal_grade,
+            confidence = EXCLUDED.confidence,
+            watch_bucket = EXCLUDED.watch_bucket,
+            time_regime = EXCLUDED.time_regime,
+            minutes_since_watch = EXCLUDED.minutes_since_watch,
+            option_buyer_entry_score = EXCLUDED.option_buyer_entry_score,
+            option_buyer_action = EXCLUDED.option_buyer_action,
+            reason = EXCLUDED.reason,
+            blockers_json = EXCLUDED.blockers_json,
+            cautions_json = EXCLUDED.cautions_json,
+            option_data_source = EXCLUDED.option_data_source;
+        """
+        self._execute(query, tuple(serialized))
+
     def insert_alert_review_5m(self, row):
         """
         row = (
@@ -603,29 +730,6 @@ class DBWriter:
             structure_state = EXCLUDED.structure_state,
             quality = EXCLUDED.quality,
             time_regime = EXCLUDED.time_regime;
-        """
-        self._execute(query, row)
-
-    def insert_scalp_signal(self, row):
-        """
-        Insert scalp signal to scalp_signals_1m table
-        row = (
-            ts, instrument, signal, entry_price, target_price, stop_loss,
-            score, reason, status, exit_ts, exit_price, pnl
-        )
-        """
-        query = """
-        INSERT INTO scalp_signals_1m
-        (
-            ts, instrument, signal, entry_price, target_price, stop_loss,
-            score, reason, status, exit_ts, exit_price, pnl
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (ts, instrument) DO UPDATE
-        SET status = EXCLUDED.status,
-            exit_ts = EXCLUDED.exit_ts,
-            exit_price = EXCLUDED.exit_price,
-            pnl = EXCLUDED.pnl;
         """
         self._execute(query, row)
 
