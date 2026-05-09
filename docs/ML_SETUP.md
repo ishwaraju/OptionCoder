@@ -26,11 +26,11 @@ Or manually:
 pip install scikit-learn pandas numpy joblib
 ```
 
-### 2. Create ML Features Table
+### 2. Create Database Schema
 
 ```bash
-# Run the SQL migration
-psql -d your_db -f sql/add_ml_features_table.sql
+# Fresh schema setup. This is destructive because it recreates tables.
+psql -d your_db -f sql/init.sql
 ```
 
 ### 3. Restart Signal Services
@@ -157,7 +157,7 @@ pip install scikit-learn pandas numpy joblib
 | `shared/ml/feature_extractor.py` | Extract ML features from signals |
 | `shared/ml/signal_filter.py` | Filter signals using ML or rules |
 | `tools/train_ml_model.py` | Train model on historical data |
-| `sql/add_ml_features_table.sql` | Database table for ML features |
+| `sql/init.sql` | Complete database schema, including ML feature tables |
 | `requirements_ml.txt` | Python dependencies |
 | `models/signal_predictor.pkl` | Trained model file (auto-created) |
 

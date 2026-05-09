@@ -126,10 +126,6 @@
       </filter>
     </filter-actions>
   </component>
-  <component name="DBNavigator.Project.FileConnectionMappingManager">
-    <mapping file-url="file://$PROJECT_DIR$/sql/add_option_signal_tracking.sql" connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" session-id="MAIN" current-schema="optioncoder" />
-    <mapping file-url="file://$PROJECT_DIR$/sql/add_ml_features_table.sql" connection-id="virtual-postgres-connection" session-id="MAIN" current-schema="" />
-  </component>
   <component name="DBNavigator.Project.ObjectQuickFilterManager">
     <last-used-operator value="EQUAL" />
     <filters />

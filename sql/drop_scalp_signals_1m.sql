@@ -1,1 +1,0 @@
-DROP TABLE IF EXISTS scalp_signals_1m CASCADE;

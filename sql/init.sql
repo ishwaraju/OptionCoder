@@ -1,7 +1,10 @@
 BEGIN;
 
+DROP VIEW IF EXISTS ml_training_data CASCADE;
+DROP TABLE IF EXISTS ml_features_log CASCADE;
 DROP TABLE IF EXISTS trade_monitor_events_1m CASCADE;
 DROP TABLE IF EXISTS entry_decisions_1m CASCADE;
+DROP TABLE IF EXISTS option_signal_horizon_outcomes CASCADE;
 DROP TABLE IF EXISTS option_signal_outcomes_1m CASCADE;
 DROP TABLE IF EXISTS option_market_state_1m CASCADE;
 DROP TABLE IF EXISTS option_signal_candidates_5m CASCADE;
@@ -385,6 +388,87 @@ CREATE TABLE alert_reviews_5m (
   UNIQUE (alert_ts, instrument, alert_kind, direction, setup_type)
 );
 
+CREATE TABLE ml_features_log (
+  id BIGSERIAL PRIMARY KEY,
+  alert_ts TIMESTAMPTZ NOT NULL,
+  instrument TEXT NOT NULL,
+  signal_direction TEXT NOT NULL,
+  score INTEGER,
+  confidence TEXT,
+  adx NUMERIC(5,2),
+  volume_ratio NUMERIC(5,2),
+  oi_change_pct NUMERIC(6,2),
+  vwap_distance NUMERIC(6,3),
+  time_hour INTEGER,
+  time_regime TEXT,
+  iv_rank NUMERIC(5,2),
+  spread_pct NUMERIC(6,3),
+  atr NUMERIC(8,2),
+  price_momentum NUMERIC(6,3),
+  pressure_conflict_level TEXT,
+  oi_bias TEXT,
+  oi_trend TEXT,
+  wall_break_alert TEXT,
+  support_wall_state TEXT,
+  resistance_wall_state TEXT,
+  oi_divergence TEXT,
+  signal_type TEXT,
+  signal_grade TEXT,
+  has_hybrid_mode BOOLEAN,
+  entry_score INTEGER,
+  context_score INTEGER,
+  trend_15m TEXT,
+  trend_5m TEXT,
+  trend_aligned BOOLEAN,
+  target_points NUMERIC(6,2),
+  stop_points NUMERIC(6,2),
+  risk_reward_ratio NUMERIC(4,2),
+  actual_outcome TEXT,
+  max_favorable_points NUMERIC(6,2),
+  max_adverse_points NUMERIC(6,2),
+  close_pnl_points NUMERIC(6,2),
+  outcome_tag TEXT,
+  ml_predicted_prob NUMERIC(5,4),
+  ml_prediction TEXT,
+  ml_was_correct BOOLEAN,
+  model_version TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE OR REPLACE VIEW ml_training_data AS
+SELECT
+  id,
+  instrument,
+  signal_direction,
+  score,
+  adx,
+  volume_ratio,
+  oi_change_pct,
+  vwap_distance,
+  time_hour,
+  time_regime,
+  iv_rank,
+  spread_pct,
+  atr,
+  price_momentum,
+  pressure_conflict_level,
+  oi_bias,
+  trend_15m,
+  trend_aligned,
+  risk_reward_ratio,
+  CASE
+    WHEN actual_outcome = 'PROFIT' THEN 1
+    WHEN actual_outcome = 'LOSS' THEN 0
+    ELSE NULL
+  END AS target_label,
+  max_favorable_points,
+  max_adverse_points,
+  close_pnl_points
+FROM ml_features_log
+WHERE actual_outcome IS NOT NULL
+  AND actual_outcome IN ('PROFIT', 'LOSS');
+
 CREATE INDEX idx_instrument_profiles_enabled ON instrument_profiles (enabled, instrument);
 
 CREATE INDEX idx_c1m_inst_ts ON candles_1m (instrument, ts DESC);
@@ -421,6 +505,14 @@ CREATE INDEX idx_signals_issued_quality ON signals_issued (instrument, signal_qu
 CREATE INDEX idx_monitor_inst_ts ON trade_monitor_events_1m (instrument, ts DESC);
 CREATE INDEX idx_monitor_entry ON trade_monitor_events_1m (instrument, entry_ts DESC);
 CREATE INDEX idx_alert_reviews_inst_ts ON alert_reviews_5m (instrument, alert_ts DESC);
+CREATE INDEX idx_ml_features_alert_ts ON ml_features_log (alert_ts DESC);
+CREATE INDEX idx_ml_features_instrument ON ml_features_log (instrument);
+CREATE INDEX idx_ml_features_outcome ON ml_features_log (actual_outcome) WHERE actual_outcome IS NOT NULL;
+CREATE INDEX idx_ml_features_prediction ON ml_features_log (ml_prediction);
+CREATE INDEX idx_ml_features_train ON ml_features_log (instrument, actual_outcome, score) WHERE actual_outcome IS NOT NULL;
+CREATE UNIQUE INDEX uq_ml_features_alert_signal ON ml_features_log (alert_ts, instrument, signal_direction);
+
+COMMENT ON TABLE ml_features_log IS 'Stores signal features for ML training and prediction. Features logged at signal time, outcomes filled later from alert_reviews.';
 
 INSERT INTO instrument_profiles (
   instrument, exchange_segment, security_id, strike_step, lot_size, enabled, min_score_threshold, atr_multiplier, notes
