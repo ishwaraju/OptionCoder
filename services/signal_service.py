@@ -800,6 +800,32 @@ class SignalService:
         self.last_data_health = result
         return result
 
+    @staticmethod
+    def _derive_option_volume_signal(option_data):
+        """Use option-band participation when index/futures candle volume is unavailable."""
+        if not option_data:
+            return None
+
+        band_rows = option_data.get("band_snapshots") or []
+        ce_band_volume = float(option_data.get("ce_volume_band") or 0)
+        pe_band_volume = float(option_data.get("pe_volume_band") or 0)
+
+        if band_rows and (ce_band_volume <= 0 or pe_band_volume <= 0):
+            ce_band_volume = sum(float(row.get("volume") or 0) for row in band_rows if row.get("option_type") == "CE")
+            pe_band_volume = sum(float(row.get("volume") or 0) for row in band_rows if row.get("option_type") == "PE")
+
+        total_volume = ce_band_volume + pe_band_volume
+        if total_volume <= 0:
+            return None
+
+        smaller_side = max(min(ce_band_volume, pe_band_volume), 1.0)
+        dominant_ratio = max(ce_band_volume, pe_band_volume) / smaller_side
+        atm_total = float(option_data.get("ce_volume") or 0) + float(option_data.get("pe_volume") or 0)
+
+        if dominant_ratio >= 1.35 or atm_total >= total_volume * 0.18:
+            return "STRONG"
+        return "NORMAL"
+
     def _evaluate_oi_wall_guard(self, signal, price, oi_ladder_data=None, pressure_metrics=None):
         signal = (signal or "").upper()
         if signal not in {"CE", "PE"} or price is None:
@@ -2149,6 +2175,8 @@ class SignalService:
                 "first_target_price": pending.get("first_target_price"),
                 "stop_loss_option_price": stop_loss_option_price,
                 "first_target_option_price": first_target_option_price,
+                "option_stop_loss_pct": pending.get("option_stop_loss_pct"),
+                "option_target_pct": pending.get("option_target_pct"),
                 "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
                 "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
                 "entry_spread": option_contract.get("spread") if option_contract else None,
@@ -4835,9 +4863,11 @@ class SignalService:
         atr_value = self.atr.update(candle_5m)
         buffer = self.atr.get_buffer()
         
-        # Update volume analysis
+        # Update volume analysis. For index option buying, option-band CE/PE
+        # participation is more useful than index/futures candle volume.
         self.volume.update(candle_5m)
-        volume_signal = self.volume.get_volume_signal(candle_5m["volume"])
+        option_volume_signal = self._derive_option_volume_signal(self.option_data)
+        volume_signal = option_volume_signal or self.volume.get_volume_signal(candle_5m["volume"])
         
         # Update OI analysis
         if self.option_data:
@@ -4895,11 +4925,6 @@ class SignalService:
         trend_15m = self._derive_15m_trend_from_5m(recent_candles_5m)
         feed_health = self._assess_raw_feed_health(candle_5m["time"])
         can_trade_live = True if Config.TEST_MODE else self.time_utils.can_trade()
-        if feed_health["label"] == "RISKY":
-            self.strategy.last_cautions = list(dict.fromkeys(list(self.strategy.last_cautions or []) + ["feed_quality_risky"]))
-        elif feed_health["label"] == "REJECT":
-            self.strategy.last_blockers = list(dict.fromkeys(list(self.strategy.last_blockers or []) + ["feed_quality_reject"]))
-
         # Generate signal
         signal, reason = self.strategy.generate_signal(
             price=price,
@@ -4930,8 +4955,13 @@ class SignalService:
             participation_metrics=participation_metrics,
             oi_ladder_data=oi_ladder_data,
             option_sweep_context=option_sweep_context,
-            can_trade=can_trade_live and feed_health["label"] != "REJECT",
+            can_trade=can_trade_live,
         )
+        if feed_health["label"] == "RISKY":
+            self.strategy.last_cautions = list(dict.fromkeys(list(self.strategy.last_cautions or []) + ["feed_quality_risky"]))
+        elif feed_health["label"] == "REJECT":
+            self.strategy.last_blockers = list(dict.fromkeys(list(self.strategy.last_blockers or []) + ["feed_quality_reject"]))
+
         if signal and feed_health["label"] == "REJECT":
             signal = None
             reason = f"Raw data health rejected ({feed_health['summary']})"

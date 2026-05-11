@@ -748,6 +748,92 @@ class BreakoutStrategy:
 
         return True
 
+    def _late_day_price_expansion_ready(
+        self,
+        *,
+        current_now,
+        scored_direction,
+        price,
+        vwap,
+        prev_low,
+        prev_high,
+        candle_open,
+        candle_high,
+        candle_low,
+        candle_close,
+        candle_range,
+        candle_body,
+        atr,
+        buffer,
+        volume_signal,
+        candle_liquidity_ok,
+        pressure_conflict_level,
+        support=None,
+        resistance=None,
+        wall_break_alert=None,
+        support_wall_state=None,
+        resistance_wall_state=None,
+    ):
+        if current_now is None or current_now < self.time_utils._parse_clock("14:25"):
+            return None
+        if scored_direction not in {"CE", "PE"} or not candle_liquidity_ok:
+            return None
+        if volume_signal not in {"NORMAL", "STRONG"}:
+            return None
+        if pressure_conflict_level == "HARD":
+            return None
+        if None in (price, vwap, candle_open, candle_high, candle_low, candle_close):
+            return None
+
+        if scored_direction == "PE":
+            if prev_low is None or not (price < vwap and candle_close < candle_open):
+                return None
+            level = prev_low
+            if support is not None and support < prev_low and candle_close < support:
+                level = support
+            trigger_touched = candle_low
+            trigger_close_ok = candle_close <= level - max(buffer * 0.25, 3)
+            trigger_wick_ok = candle_low <= level - max(buffer * 0.25, 3)
+            invalidate_price = max(
+                value for value in (prev_high, vwap, candle_high) if value is not None
+            )
+        else:
+            if prev_high is None or not (price > vwap and candle_close > candle_open):
+                return None
+            level = prev_high
+            if resistance is not None and resistance > prev_high and candle_close > resistance:
+                level = resistance
+            trigger_touched = candle_high
+            trigger_close_ok = candle_close >= level + max(buffer * 0.25, 3)
+            trigger_wick_ok = candle_high >= level + max(buffer * 0.25, 3)
+            invalidate_price = min(
+                value for value in (prev_low, vwap, candle_low) if value is not None
+            )
+
+        body_ratio = candle_body / candle_range if candle_range else 0
+        min_range = max((atr or 0) * 0.35, buffer * 1.2, 8)
+
+        if not trigger_close_ok:
+            return None
+        if not trigger_wick_ok:
+            return None
+        if body_ratio < 0.38 or candle_range < min_range:
+            return None
+
+        wall_aligned = (
+            (scored_direction == "CE" and wall_break_alert == "RESISTANCE_BREAK_RISK")
+            or (scored_direction == "PE" and wall_break_alert == "SUPPORT_BREAK_RISK")
+            or (scored_direction == "CE" and resistance_wall_state == "WEAKENING")
+            or (scored_direction == "PE" and support_wall_state == "WEAKENING")
+        )
+
+        return {
+            "level": level,
+            "trigger_touched": trigger_touched,
+            "invalidate_price": invalidate_price,
+            "wall_aligned": wall_aligned,
+        }
+
     @staticmethod
     def _watch_bucket(signal_type, blockers, cautions):
         return watch_bucket(signal_type, blockers, cautions)
@@ -3075,8 +3161,6 @@ class BreakoutStrategy:
     def _is_invalid_candle(self, candle_open, candle_high, candle_low, candle_close, candle_volume):
         if None in (candle_open, candle_high, candle_low, candle_close):
             return False
-        if candle_volume == 0:
-            return True
         return candle_open == candle_high == candle_low == candle_close
 
     def _analyze_options_volume(self, atm_ce_volume, atm_pe_volume, signal_direction):
@@ -3560,6 +3644,76 @@ class BreakoutStrategy:
         if sweep_pressure_override and pressure_conflict_level == "MODERATE":
             pressure_conflict_level = "MILD"
         self.last_pressure_conflict_level = pressure_conflict_level
+        late_day_expansion = self._late_day_price_expansion_ready(
+            current_now=current_now,
+            scored_direction=scored_direction,
+            price=price,
+            vwap=vwap,
+            prev_low=prev_low,
+            prev_high=prev_high,
+            candle_open=candle_open,
+            candle_high=candle_high,
+            candle_low=candle_low,
+            candle_close=candle_close,
+            candle_range=candle_range,
+            candle_body=candle_body,
+            atr=atr,
+            buffer=buffer,
+            volume_signal=volume_signal,
+            candle_liquidity_ok=candle_liquidity_ok,
+            pressure_conflict_level=pressure_conflict_level,
+            support=support,
+            resistance=resistance,
+            wall_break_alert=wall_break_alert,
+            support_wall_state=support_wall_state,
+            resistance_wall_state=resistance_wall_state,
+        )
+        if late_day_expansion:
+            late_day_label = "breakout" if scored_direction == "CE" else "breakdown"
+            cautions = self._append_cautions(
+                cautions,
+                f"late_day_{late_day_label}_watch",
+                "theta_fast_exit_required",
+            )
+            if late_day_expansion["wall_aligned"]:
+                cautions = self._append_cautions(cautions, "oi_wall_break_confirmed")
+                components.append("late_day_oi_wall_confirmed")
+            else:
+                cautions = self._append_cautions(cautions, "oi_wall_not_confirmed")
+            aligned_floor = 72 if volume_signal == "STRONG" else 68
+            unconfirmed_floor = 70 if volume_signal == "STRONG" else 66
+            score = max(
+                score,
+                aligned_floor if late_day_expansion["wall_aligned"] else unconfirmed_floor,
+            )
+            self.last_score = score
+            self.last_context_score = score
+            self.last_score_components = components
+            if self.last_entry_score <= 0:
+                self.last_entry_score = max(62, score - 4)
+            return self._emit_trade_signal(
+                scored_direction,
+                "BREAKOUT_CONFIRM",
+                score,
+                volume_signal,
+                pressure_metrics,
+                cautions,
+                blockers=blockers,
+                regime=f"LATE_DAY_{late_day_label.upper()}",
+                candle_time=candle_time,
+                message=f"Late-day {'resistance breakout above' if scored_direction == 'CE' else 'support breakdown below'} {round(late_day_expansion['level'], 2)}",
+                trigger_price=late_day_expansion["level"],
+                invalidate_price=late_day_expansion["invalidate_price"],
+                atr=atr,
+                support=support,
+                resistance=resistance,
+                remember_level=late_day_expansion["level"],
+                emitted_level=late_day_expansion["level"],
+                buffer=buffer,
+                reset_retest=True,
+                reset_confirmation=True,
+                mark_emitted=True,
+            )
         strong_sweep_trade_ready = self._strong_option_sweep_trade_ready(
             option_sweep_context=option_sweep_context,
             direction=scored_direction,

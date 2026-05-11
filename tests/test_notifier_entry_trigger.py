@@ -23,6 +23,8 @@ def test_entry_trigger_notification_includes_spot_and_risk_plan():
             "first_target_price": 24288.45,
             "stop_loss_option_price": 145.07,
             "first_target_option_price": 259.99,
+            "option_stop_loss_pct": 23,
+            "option_target_pct": 38,
             "entry_bid": 187.9,
             "entry_ask": 188.4,
             "entry_spread": 0.5,
@@ -42,5 +44,42 @@ def test_entry_trigger_notification_includes_spot_and_risk_plan():
     assert "SL 24211.5" in message
     assert "T1 24288.45" in message
     assert "BUY 24250 CE near 188.40 (bid 187.90 / ask 188.40). Chase mat karo above 188.40." in message
-    assert "OptSL 145.07" in message
-    assert "OptT1 259.99" in message
+    assert "OptSL 145.07 (-23%)" in message
+    assert "OptT1 259.99 (+38%)" in message
+
+
+def test_trade_notification_includes_actual_premium_levels_and_percentages():
+    notifier = Notifier()
+    notifier.enabled = True
+    captured = []
+    notifier.send_alert = lambda message: captured.append(message)
+
+    notifier.send_trade_notification(
+        {
+            "instrument": "NIFTY",
+            "signal": "PE",
+            "strike": 23950,
+            "confidence": "MEDIUM",
+            "signal_type": "BREAKOUT_CONFIRM",
+            "signal_grade": "B",
+            "price": 111.6,
+            "spot_price": 23895.2,
+            "trigger_price": 23900,
+            "invalidate_price": 23945,
+            "first_target_price": 23840,
+            "projected_premium_sl": 98.21,
+            "projected_premium_t1": 136.15,
+            "option_stop_loss_pct": 12,
+            "option_target_pct": 22,
+            "entry_bid": 111.1,
+            "entry_ask": 111.6,
+            "entry_spread": 0.5,
+            "decision_label": "CONFIRMED_PE_ENTRY",
+        }
+    )
+
+    assert captured
+    message = captured[0]
+    assert "BUY 23950 PE near 111.60" in message
+    assert "OptSL 98.21 (-12%)" in message
+    assert "OptT1 136.15 (+22%)" in message

@@ -20,3 +20,13 @@ for c in candles:
     print("VWAP:", v)
 
 print("Signal:", vwap.get_vwap_signal(price=112))
+
+
+def test_vwap_falls_back_to_typical_price_average_when_volume_is_zero():
+    calc = VWAPCalculator()
+
+    first = calc.update({"time": datetime(2026, 5, 11, 10, 10), "high": 110, "low": 100, "close": 105, "volume": 0})
+    second = calc.update({"time": datetime(2026, 5, 11, 10, 15), "high": 120, "low": 108, "close": 114, "volume": 0})
+
+    assert first == 105
+    assert round(second, 2) == 109.5

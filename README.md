@@ -96,6 +96,16 @@ Review whether the chosen option signal was the best available candidate:
 python3 /Users/ishwar/Documents/OptionCoder/tools/review_option_signals.py --date 2026-04-30
 ```
 
+Print the option-buyer day table after market close:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/buyer_day_table.py --date YYYY-MM-DD
+```
+
+Example:
+```bash
+python3 /Users/ishwar/Documents/OptionCoder/tools/buyer_day_table.py --date 2026-05-11 --horizon 5
+```
+
 Start `data_collector` and `oi_collector` together for all supported instruments:
 ```bash
 python3 /Users/ishwar/Documents/OptionCoder/tools/run_collectors.py

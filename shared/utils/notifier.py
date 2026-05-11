@@ -114,6 +114,17 @@ def _safe_float(value):
         return None
 
 
+def _premium_plan_label(label, value, pct=None):
+    value_f = _safe_float(value)
+    pct_f = _safe_float(pct)
+    if value_f is None:
+        return None
+    if pct_f is None:
+        return f"{label} {value_f:.2f}"
+    sign = "+" if label.upper().endswith("T1") else "-"
+    return f"{label} {value_f:.2f} ({sign}{abs(pct_f):.0f}%)"
+
+
 def _entry_buy_line(signal, strike, price, bid_price=None, ask_price=None, spread=None):
     signal = (signal or "").upper()
     option_side = signal if signal in {"CE", "PE"} else "OPT"
@@ -432,10 +443,12 @@ class Notifier:
         if market_line:
             lines.append(market_line)
         contract_bits = []
-        if projected_premium_sl is not None:
-            contract_bits.append(f"OptSL {round(projected_premium_sl, 2)}")
-        if projected_premium_t1 is not None:
-            contract_bits.append(f"OptT1 {round(projected_premium_t1, 2)}")
+        sl_label = _premium_plan_label("OptSL", projected_premium_sl, option_stop_loss_pct)
+        t1_label = _premium_plan_label("OptT1", projected_premium_t1, option_target_pct)
+        if sl_label:
+            contract_bits.append(sl_label)
+        if t1_label:
+            contract_bits.append(t1_label)
         if contract_bits:
             lines.append(" | ".join(contract_bits))
         if action_text:
@@ -593,6 +606,8 @@ class Notifier:
         first_target_price = trigger_data.get("first_target_price")
         stop_loss_option_price = trigger_data.get("stop_loss_option_price")
         first_target_option_price = trigger_data.get("first_target_option_price")
+        option_stop_loss_pct = trigger_data.get("option_stop_loss_pct")
+        option_target_pct = trigger_data.get("option_target_pct")
         context = trigger_data.get("context")
         risk_note = trigger_data.get("risk_note")
         decision_label = trigger_data.get("decision_label")
@@ -616,10 +631,12 @@ class Notifier:
         if signal_grade and signal_grade != "SKIP":
             summary.append(f"G:{signal_grade}")
         premium_plan_bits = []
-        if stop_loss_option_price is not None:
-            premium_plan_bits.append(f"OptSL {stop_loss_option_price}")
-        if first_target_option_price is not None:
-            premium_plan_bits.append(f"OptT1 {first_target_option_price}")
+        sl_label = _premium_plan_label("OptSL", stop_loss_option_price, option_stop_loss_pct)
+        t1_label = _premium_plan_label("OptT1", first_target_option_price, option_target_pct)
+        if sl_label:
+            premium_plan_bits.append(sl_label)
+        if t1_label:
+            premium_plan_bits.append(t1_label)
 
         lines = [header]
         ist_label = _ist_now_label()

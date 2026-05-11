@@ -93,6 +93,32 @@ def test_sensex_option_sweep_override_allows_clean_reversal():
     assert service._is_option_buyer_actionable("CE", candle_time=datetime(2026, 4, 16, 14, 25)) is True
 
 
+def test_option_volume_signal_uses_band_volume_when_candle_volume_missing():
+    signal = SignalService._derive_option_volume_signal(
+        {
+            "ce_volume_band": 120_000,
+            "pe_volume_band": 115_000,
+            "ce_volume": 8_000,
+            "pe_volume": 9_000,
+        }
+    )
+
+    assert signal == "NORMAL"
+
+
+def test_option_volume_signal_marks_strong_when_one_side_dominates():
+    signal = SignalService._derive_option_volume_signal(
+        {
+            "ce_volume_band": 180_000,
+            "pe_volume_band": 100_000,
+            "ce_volume": 15_000,
+            "pe_volume": 10_000,
+        }
+    )
+
+    assert signal == "STRONG"
+
+
 def test_nifty_option_sweep_override_allows_clean_reversal():
     service = build_service("REVERSAL", "B", "MEDIUM")
     service.instrument = "NIFTY"

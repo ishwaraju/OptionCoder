@@ -453,6 +453,61 @@ def test_high_conviction_opening_breakdown_allowed_even_if_far_from_vwap():
     assert "breakdown" in reason.lower()
 
 
+def test_late_day_price_expansion_ready_uses_pe_breakdown_without_index_volume():
+    strategy = BreakoutStrategy()
+
+    result = strategy._late_day_price_expansion_ready(
+        current_now=datetime(2026, 5, 11, 14, 35).time(),
+        scored_direction="PE",
+        price=23870,
+        vwap=23920,
+        prev_low=23890,
+        prev_high=23935,
+        candle_open=23905,
+        candle_high=23908,
+        candle_low=23860,
+        candle_close=23870,
+        candle_range=48,
+        candle_body=35,
+        atr=32,
+        buffer=8,
+        volume_signal="NORMAL",
+        candle_liquidity_ok=True,
+        pressure_conflict_level="NONE",
+    )
+
+    assert result["level"] == 23890
+    assert result["wall_aligned"] is False
+
+
+def test_late_day_price_expansion_ready_allows_ce_breakout_too():
+    strategy = BreakoutStrategy()
+
+    result = strategy._late_day_price_expansion_ready(
+        current_now=datetime(2026, 5, 11, 14, 35).time(),
+        scored_direction="CE",
+        price=24025,
+        vwap=23970,
+        prev_low=23955,
+        prev_high=24000,
+        candle_open=23985,
+        candle_high=24035,
+        candle_low=23982,
+        candle_close=24025,
+        candle_range=53,
+        candle_body=40,
+        atr=35,
+        buffer=8,
+        volume_signal="NORMAL",
+        candle_liquidity_ok=True,
+        pressure_conflict_level="NONE",
+        wall_break_alert="RESISTANCE_BREAK_RISK",
+    )
+
+    assert result["level"] == 24000
+    assert result["wall_aligned"] is True
+
+
 def test_opening_reversal_is_blocked_for_option_buyer():
     strategy = BreakoutStrategy()
 

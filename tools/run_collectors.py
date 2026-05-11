@@ -48,16 +48,29 @@ class CollectorLauncher:
             return {"services": []}
 
     def _save_state(self):
+        services = []
+        for entry in self.processes:
+            process = entry.get("process")
+            pid = entry.get("pid") or (process.pid if process else None)
+            if process is not None and process.poll() is None:
+                services.append(
+                    {
+                        "service": entry["service"],
+                        "instrument": entry["instrument"],
+                        "pid": process.pid,
+                    }
+                )
+            elif process is None and pid and self._pid_is_running(pid):
+                services.append(
+                    {
+                        "service": entry["service"],
+                        "instrument": entry["instrument"],
+                        "pid": pid,
+                    }
+                )
+
         state = {
-            "services": [
-                {
-                    "service": entry["service"],
-                    "instrument": entry["instrument"],
-                    "pid": entry["process"].pid,
-                }
-                for entry in self.processes
-                if entry["process"].poll() is None
-            ]
+            "services": services
         }
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with STATE_FILE.open("w", encoding="utf-8") as f:
@@ -122,6 +135,13 @@ class CollectorLauncher:
     def _service_path(self, service_name):
         return REPO_ROOT / "services" / f"{service_name}.py"
 
+    def _required_service_keys(self):
+        return {("data_collector", "ALL")} | {("oi_collector", instrument) for instrument in self.instruments}
+
+    @staticmethod
+    def _entry_key(entry):
+        return entry.get("service"), entry.get("instrument")
+
     def _spawn(self, service_name, instrument, extra_args=None):
         command = [
             self.python_executable,
@@ -168,7 +188,11 @@ class CollectorLauncher:
             missing = []
             for entry in self.processes:
                 process = entry.get("process")
-                if process is None or process.poll() is not None:
+                pid = entry.get("pid")
+                if process is None:
+                    if not pid or not self._pid_is_running(pid):
+                        missing.append(entry)
+                elif process.poll() is not None:
                     missing.append(entry)
             if not missing:
                 return True, []
@@ -206,13 +230,58 @@ class CollectorLauncher:
     def start(self):
         existing = self._load_processes_from_state()
         if existing:
-            print("[Launcher] Collector services are already running:")
+            existing_keys = {self._entry_key(entry) for entry in existing}
+            missing_keys = self._required_service_keys() - existing_keys
+            if not missing_keys:
+                print("[Launcher] Collector services are already running:")
+                for entry in existing:
+                    print(
+                        f"[Launcher] {entry['service']}:{entry['instrument']} "
+                        f"(pid={entry['pid']})"
+                    )
+                print("[Launcher] Stop them first if you want a fresh restart.")
+                return
+
+            self.processes = existing
+            self.running = True
+            print("[Launcher] Collector services are partially running:")
             for entry in existing:
                 print(
                     f"[Launcher] {entry['service']}:{entry['instrument']} "
                     f"(pid={entry['pid']})"
                 )
-            print("[Launcher] Stop them first if you want a fresh restart.")
+            print(
+                "[Launcher] Starting missing services: "
+                + ", ".join(f"{service}:{instrument}" for service, instrument in sorted(missing_keys))
+            )
+
+            if ("data_collector", "ALL") in missing_keys:
+                self._spawn("data_collector", None, extra_args=["--instruments", *self.instruments])
+                if self.stagger_seconds > 0:
+                    time.sleep(self.stagger_seconds)
+
+            for instrument in self.instruments:
+                if ("oi_collector", instrument) in missing_keys:
+                    self._spawn("oi_collector", instrument)
+                    if self.stagger_seconds > 0:
+                        time.sleep(self.stagger_seconds)
+
+            healthy, missing = self._verify_started_processes()
+            if not healthy:
+                print("[Launcher] Collector startup verification failed.")
+                for entry in missing:
+                    process = entry.get("process")
+                    pid = entry.get("pid") or (process.pid if process else None)
+                    print(
+                        f"[Launcher] Missing/Exited: {entry['service']}:{entry['instrument']} "
+                        f"(pid={pid})"
+                    )
+                self._save_state()
+                raise SystemExit(1)
+
+            print("[Launcher] Missing collector services started.")
+            print("[Launcher] Press Ctrl+C to stop all collectors.")
+            self._save_state()
             return
 
         self.running = True
@@ -371,7 +440,22 @@ class CollectorLauncher:
             while self.running:
                 active_entries = []
                 for entry in self.processes:
-                    return_code = entry["process"].poll()
+                    process = entry.get("process")
+                    pid = entry.get("pid")
+                    if process is None:
+                        if pid and self._pid_is_running(pid):
+                            active_entries.append(entry)
+                            continue
+                        print(
+                            f"[Launcher] {entry['service']}:{entry['instrument']} "
+                            f"exited unexpectedly."
+                        )
+                        self.running = False
+                        self._save_state()
+                        self.stop()
+                        raise SystemExit(1)
+
+                    return_code = process.poll()
                     if return_code is None:
                         active_entries.append(entry)
                         continue

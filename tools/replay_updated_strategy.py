@@ -149,8 +149,31 @@ def to_option_data(band_rows):
         "pcr": pcr,
         "ce_oi": next((row["oi"] for row in ce_rows if row["distance_from_atm"] == 0), 0),
         "pe_oi": next((row["oi"] for row in pe_rows if row["distance_from_atm"] == 0), 0),
+        "ce_volume": next((row["volume"] for row in ce_rows if row["distance_from_atm"] == 0), 0),
+        "pe_volume": next((row["volume"] for row in pe_rows if row["distance_from_atm"] == 0), 0),
+        "ce_volume_band": sum(row["volume"] for row in ce_rows),
+        "pe_volume_band": sum(row["volume"] for row in pe_rows),
         "expiry": None,
     }
+
+
+def derive_option_volume_signal(option_data):
+    if not option_data:
+        return None
+
+    ce_band_volume = float(option_data.get("ce_volume_band") or 0)
+    pe_band_volume = float(option_data.get("pe_volume_band") or 0)
+    total_volume = ce_band_volume + pe_band_volume
+    if total_volume <= 0:
+        return None
+
+    smaller_side = max(min(ce_band_volume, pe_band_volume), 1.0)
+    dominant_ratio = max(ce_band_volume, pe_band_volume) / smaller_side
+    atm_total = float(option_data.get("ce_volume") or 0) + float(option_data.get("pe_volume") or 0)
+
+    if dominant_ratio >= 1.35 or atm_total >= total_volume * 0.18:
+        return "STRONG"
+    return "NORMAL"
 
 
 def participation_row_weight(distance_from_atm):
@@ -391,7 +414,6 @@ def replay(candles, snapshot_map, instrument, disable_continuation=False):
         vwap_value = vwap.update(candle)
         atr_value = atr.update(candle)
         volume.update(candle)
-        volume_signal = volume.get_volume_signal(candle["volume"])
 
         orb.add_candle(candle)
         if orb.is_orb_ready():
@@ -406,6 +428,7 @@ def replay(candles, snapshot_map, instrument, disable_continuation=False):
         current_band_rows = find_latest_band_snapshot(snapshot_map, ts)
         previous_band_rows = find_previous_band_snapshot(snapshot_map, ts)
         option_data = to_option_data(current_band_rows)
+        volume_signal = derive_option_volume_signal(option_data) or volume.get_volume_signal(candle["volume"])
         participation_metrics = build_option_participation_metrics(
             current_band_rows,
             previous_band_rows,

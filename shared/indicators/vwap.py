@@ -6,6 +6,8 @@ class VWAPCalculator:
         self.time_utils = TimeUtils()
         self.cumulative_pv = 0
         self.cumulative_volume = 0
+        self.cumulative_price = 0
+        self.price_count = 0
         self.current_day = None
         self.vwap = None
 
@@ -21,6 +23,8 @@ class VWAPCalculator:
         """Reset VWAP for new trading day"""
         self.cumulative_pv = 0
         self.cumulative_volume = 0
+        self.cumulative_price = 0
+        self.price_count = 0
         self.vwap = None
 
     def update(self, candle):
@@ -50,11 +54,19 @@ class VWAPCalculator:
 
         typical_price = (high + low + close) / 3
 
-        self.cumulative_pv += typical_price * volume
-        self.cumulative_volume += volume
+        self.cumulative_price += typical_price
+        self.price_count += 1
+
+        if volume and volume > 0:
+            self.cumulative_pv += typical_price * volume
+            self.cumulative_volume += volume
 
         if self.cumulative_volume != 0:
             self.vwap = self.cumulative_pv / self.cumulative_volume
+        elif self.price_count:
+            # Index candles can have zero volume; use a session typical-price
+            # average so VWAP-dependent structure checks can still run.
+            self.vwap = self.cumulative_price / self.price_count
 
         return self.vwap
 

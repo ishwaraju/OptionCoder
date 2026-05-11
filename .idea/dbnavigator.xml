@@ -55,7 +55,18 @@
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files />
+    <open-files>
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_market_state_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_candidates_5m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/candles_5m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/oi_snapshots_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_horizon_outcomes" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_band_snapshots_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/entry_decisions_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_outcomes_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/candles_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/signals_issued" />
+    </open-files>
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
     <prerequisites />
@@ -64,9 +75,24 @@
     <connection id="a84c16fc-100f-42ab-b88a-35746d584b15" />
   </component>
   <component name="DBNavigator.Project.DatasetFilterManager">
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.entry_decisions_1m" active-filter-id="59f49b61-631c-49f3-8172-28b24240bc1c">
+      <filter id="59f49b61-631c-49f3-8172-28b24240bc1c" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+      </filter>
+    </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_signal_outcomes_1m" active-filter-id="ddeea384-ed4e-4b44-b2c3-ecd5b72d7f7c">
       <filter id="ddeea384-ed4e-4b44-b2c3-ecd5b72d7f7c" name="Filter" temporary="false" custom-name="false" type="custom">
         <condition><![CDATA[<br>-- enter your custom conditions here<br>signal_ts >= CURRENT_DATE<br>and signal_ts < CURRENT_DATE + interval '1 day';]]></condition>
+      </filter>
+    </filter-actions>
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_market_state_1m" active-filter-id="330982f5-d516-46f1-8f8f-eba941557ee5">
+      <filter id="330982f5-d516-46f1-8f8f-eba941557ee5" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+      </filter>
+    </filter-actions>
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.ml_features_log" active-filter-id="EMPTY_FILTER">
+      <filter id="8d973c9c-6943-4edc-8fdf-deb8c2e12f4a" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>alert_ts >= CURRENT_DATE<br>and alert_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_band_snapshots_1m" active-filter-id="651e43b1-1659-48d5-a53e-c681990a0781">
@@ -74,9 +100,9 @@
         <condition><![CDATA[<br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
-    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.ml_features_log" active-filter-id="EMPTY_FILTER">
-      <filter id="8d973c9c-6943-4edc-8fdf-deb8c2e12f4a" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br>-- enter your custom conditions here<br>alert_ts >= CURRENT_DATE<br>and alert_ts < CURRENT_DATE + interval '1 day';]]></condition>
+    <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.option_signal_horizon_outcomes" active-filter-id="ab927841-8f15-4521-8664-83cb45f3c23a">
+      <filter id="ab927841-8f15-4521-8664-83cb45f3c23a" name="Filter" temporary="false" custom-name="false" type="custom">
+        <condition><![CDATA[<br>-- enter your custom conditions here<br>signal_ts >= CURRENT_DATE<br>and signal_ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.alert_reviews_5m" active-filter-id="53a41dd7-6b3d-4b74-80c7-0985670ba13f">
@@ -91,7 +117,7 @@
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.oi_snapshots_1m" active-filter-id="167dead0-1fa7-42aa-8dc0-de5a877ffbf2">
       <filter id="167dead0-1fa7-42aa-8dc0-de5a877ffbf2" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br><br><br><br><br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+        <condition><![CDATA[<br><br><br><br><br><br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.candles_1m" active-filter-id="ac4a7803-b52f-4d5e-8979-226aa9148160">
