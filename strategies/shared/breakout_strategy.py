@@ -1044,14 +1044,36 @@ class BreakoutStrategy:
         ha_strength,
         recent_candles_5m,
     ):
-        if self.instrument != "NIFTY" or direction not in {"CE", "PE"}:
+        if self.instrument not in {"NIFTY", "BANKNIFTY", "SENSEX"} or direction not in {"CE", "PE"}:
             return False
-        if time_regime not in {"OPENING", "MID_MORNING", "MIDDAY"}:
+
+        profile = {
+            "NIFTY": {
+                "allowed_regimes": {"OPENING", "MID_MORNING", "MIDDAY"},
+                "weak_volume_range_atr": 0.65,
+                "max_extension_floor": 22,
+                "max_extension_atr_mult": 1.35,
+            },
+            "BANKNIFTY": {
+                "allowed_regimes": {"OPENING", "MID_MORNING", "MIDDAY"},
+                "weak_volume_range_atr": 0.72,
+                "max_extension_floor": 38,
+                "max_extension_atr_mult": 1.2,
+            },
+            "SENSEX": {
+                "allowed_regimes": {"OPENING", "MID_MORNING", "MIDDAY", "LATE_DAY"},
+                "weak_volume_range_atr": 0.68,
+                "max_extension_floor": 28,
+                "max_extension_atr_mult": 1.25,
+            },
+        }[self.instrument]
+
+        if time_regime not in profile["allowed_regimes"]:
             return False
         if pressure_conflict_level not in {"NONE", "MILD", "MODERATE"}:
             return False
         if volume_signal == "WEAK":
-            if atr is None or candle_range < atr * 0.65:
+            if atr is None or candle_range < atr * profile["weak_volume_range_atr"]:
                 return False
         elif volume_signal not in {"NORMAL", "STRONG"}:
             return False
@@ -1078,7 +1100,7 @@ class BreakoutStrategy:
             candle_close or price,
             trigger_level,
             atr,
-            max((atr or 0) * 1.35, 22),
+            max((atr or 0) * profile["max_extension_atr_mult"], profile["max_extension_floor"]),
         ):
             return False
         return True

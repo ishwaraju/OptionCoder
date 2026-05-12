@@ -36,32 +36,28 @@ class ExpiryDayRules:
             return False
         return self.time_utils.now_ist().date() == expiry_date
 
+    def _profile_time(self, key, default_clock):
+        value = self.profile.get(key)
+        if not value:
+            return time.fromisoformat(default_clock)
+        if isinstance(value, time):
+            return value
+        return time.fromisoformat(str(value))
+
+    def _profile_int(self, key, default_value):
+        return int(self.profile.get(key, default_value))
+
     def _expiry_vwap_distance_limit(self):
-        symbol = self.instrument
-        if symbol == "SENSEX":
-            return 140
-        if symbol == "BANKNIFTY":
-            return 90
-        return 45
+        return self._profile_int("expiry_vwap_distance_limit", 45)
 
     def _opening_whipsaw_cutoff(self):
-        if self.instrument == "NIFTY":
-            return time(9, 40)
-        return time(9, 45)
+        return self._profile_time("opening_whipsaw_cutoff", "09:45")
 
     def _midday_score_floor(self):
-        if self.instrument == "BANKNIFTY":
-            return 76
-        if self.instrument == "SENSEX":
-            return 74
-        return 78
+        return self._profile_int("midday_score_floor", 78)
 
     def _late_session_score_floor(self):
-        if self.instrument == "BANKNIFTY":
-            return 74
-        if self.instrument == "SENSEX":
-            return 72
-        return 76
+        return self._profile_int("late_session_score_floor", 76)
 
     def evaluate(
             self,
@@ -109,14 +105,14 @@ class ExpiryDayRules:
         )
         high_conviction_expiry_trend = (
             current_signal in {"CE", "PE"}
-            and score >= 76
+            and score >= self._profile_int("high_conviction_expiry_score", 76)
             and confidence in {"MEDIUM", "HIGH"}
             and volume_signal in {"NORMAL", "STRONG"}
             and not opposite_pressure
         )
         soft_expiry_trend = (
             current_signal in {"CE", "PE"}
-            and score >= 72
+            and score >= self._profile_int("soft_expiry_score", 72)
             and confidence in {"MEDIUM", "HIGH"}
             and volume_signal != "WEAK"
         )
@@ -156,12 +152,18 @@ class ExpiryDayRules:
             cautions.append("pre_expiry_positioning_mode")
             adaptive_continuation_mode = self.instrument == "SENSEX"
             soften_pressure_conflict = self.instrument == "SENSEX"
+            watch_direction = (self.profile.get("pre_expiry_watch_direction") or "").upper()
+            watch_min_score = self._profile_int("pre_expiry_watch_min_score", score_floor + 15)
+            watch_volume_signals = {
+                str(item).upper()
+                for item in (self.profile.get("pre_expiry_watch_volume_signals") or ["NORMAL", "STRONG"])
+            }
             watch_friendly_pre_expiry = (
-                self.instrument == "NIFTY"
-                and current_signal == "PE"
+                bool(watch_direction)
+                and current_signal == watch_direction
                 and confidence in {"MEDIUM", "HIGH"}
-                and score >= max(score_floor + 15, 85)
-                and volume_signal in {"NORMAL", "STRONG"}
+                and score >= max(score_floor + 13, watch_min_score)
+                and volume_signal in watch_volume_signals
             )
             relaxed_pre_expiry_volume_ok = (
                 current_signal in {"CE", "PE"}
@@ -219,15 +221,16 @@ class ExpiryDayRules:
             blockers.append("expiry_too_far_from_vwap")
             allow_trade = False
 
-        if current_signal == "CE" and pressure_bias == "BEARISH" and not high_conviction_expiry_trend and score < 78:
+        opposite_pressure_floor = self._profile_int("expiry_opposite_pressure_score_floor", 78)
+        if current_signal == "CE" and pressure_bias == "BEARISH" and not high_conviction_expiry_trend and score < opposite_pressure_floor:
             blockers.append("expiry_opposite_pressure")
             allow_trade = False
-        elif current_signal == "PE" and pressure_bias == "BULLISH" and not high_conviction_expiry_trend and score < 78:
+        elif current_signal == "PE" and pressure_bias == "BULLISH" and not high_conviction_expiry_trend and score < opposite_pressure_floor:
             blockers.append("expiry_opposite_pressure")
             allow_trade = False
 
         cautions.append("expiry_day_mode")
-        if now >= time(13, 0):
+        if now >= self._profile_time("expiry_fast_decay_start", "13:00"):
             cautions.append("expiry_fast_decay")
 
         return {

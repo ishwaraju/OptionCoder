@@ -40,8 +40,18 @@ def test_option_buyer_actionable_blocks_reversal_even_with_a_grade():
 def test_option_buyer_actionable_allows_elite_reversal_without_conflict():
     service = build_service("REVERSAL", "A", "HIGH")
     service.strategy.last_score = 92
+    service.strategy.last_entry_score = 86
     service.strategy.last_pressure_conflict_level = "NONE"
-    assert service._is_option_buyer_actionable("CE") is True
+    assert service._is_option_buyer_actionable("CE", candle_time=datetime(2026, 4, 16, 11, 5)) is True
+
+
+def test_option_buyer_actionable_blocks_nifty_elite_reversal_in_late_session():
+    service = build_service("REVERSAL", "A", "HIGH")
+    service.strategy.last_score = 92
+    service.strategy.last_entry_score = 86
+    service.strategy.last_pressure_conflict_level = "NONE"
+
+    assert service._is_option_buyer_actionable("CE", candle_time=datetime(2026, 4, 16, 13, 35)) is False
 
 
 def test_banknifty_allows_b_grade_breakout_after_11_am():
@@ -687,6 +697,84 @@ def test_watch_alert_eligibility_allows_only_strong_spike_watch():
     assert service._watch_alert_is_eligible(weak_payload) is False
 
 
+def test_preserve_existing_pending_watch_handles_mixed_tz_datetimes():
+    service = SignalService.__new__(SignalService)
+    service.pending_entry_watch = {
+        "created_at": datetime(2026, 5, 12, 9, 56),
+        "signal_type": "BREAKOUT_CONFIRM",
+    }
+    service._pending_watch_max_minutes = lambda pending: 10
+
+    result = service._preserve_existing_pending_watch(
+        {"time": datetime(2026, 5, 12, 10, 1, tzinfo=ZoneInfo("Asia/Kolkata"))}
+    )
+
+    assert result is True
+
+
+def test_evaluate_pending_entry_watch_handles_aware_recent_candles():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "SENSEX"
+    service.pending_entry_watch = {
+        "instrument": "SENSEX",
+        "direction": "CE",
+        "trigger_price": 75398.53,
+        "invalidate_price": 75354.21,
+        "first_target_price": 75487.17,
+        "score": 86,
+        "entry_score": 80,
+        "confidence": "HIGH",
+        "signal_type": "BREAKOUT_CONFIRM",
+        "signal_grade": "A",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "quality": "A",
+        "time_regime": "INTRAMINUTE_SPIKE",
+        "created_at": datetime(2026, 5, 12, 9, 56),
+        "last_checked_minute": None,
+        "reason": "1m option spike watch",
+        "fast_track_ready": True,
+        "strong_watch_setup": True,
+        "hybrid_mode": True,
+        "cautions": ["one_minute_spike_watch"],
+        "blockers": [],
+        "pressure_conflict_level": "NONE",
+        "spike_origin": True,
+        "spike_context": {"quality": "STRONG", "price_breadth": 11, "volume_breadth": 11},
+    }
+    service.option_data = {"atm": 75400}
+    service.strike_selector = type(
+        "StrikeSelectorStub",
+        (),
+        {"select_strike_with_reason": lambda *args, **kwargs: (75400, "test")},
+    )()
+    service._pending_watch_risk_reward_ok = lambda pending: True
+    service._confirm_signal_microstructure = lambda **kwargs: (False, "Microstructure data unavailable", None, None)
+
+    recent_1m = [
+        {
+            "time": datetime(2026, 5, 12, 9, 56, tzinfo=ZoneInfo("Asia/Kolkata")),
+            "open": 75380.0,
+            "high": 75400.0,
+            "low": 75378.0,
+            "close": 75397.0,
+            "volume": 1000,
+        },
+        {
+            "time": datetime(2026, 5, 12, 9, 57, tzinfo=ZoneInfo("Asia/Kolkata")),
+            "open": 75397.0,
+            "high": 75415.0,
+            "low": 75396.0,
+            "close": 75405.0,
+            "volume": 1400,
+        },
+    ]
+
+    result = service._evaluate_pending_entry_watch(recent_1m)
+
+    assert result is not None
+    assert result["status"] == "TRIGGERED"
+
+
 def test_watch_alert_eligibility_filters_weak_manual_setup_watch():
     service = SignalService.__new__(SignalService)
 
@@ -816,6 +904,33 @@ def test_no_trade_zone_allows_single_soft_noise_flag_for_elite_breakout():
         balanced_pro={"time_regime": "MID_MORNING", "setup": "BREAKOUT_CONFIRM"},
         signal="CE",
         selected_option_contract={"ltp": 100, "spread": 1.0},
+    )
+
+    assert zone is None
+
+
+def test_no_trade_zone_allows_clean_high_confidence_midday_breakout_even_in_chop():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.last_data_health = {"label": "GOOD"}
+    service.strategy = type(
+        "StrategyStub",
+        (),
+        {
+            "last_cautions": ["adx_not_confirmed"],
+            "last_pressure_conflict_level": "NONE",
+            "last_entry_score": 81,
+            "last_score": 81,
+            "last_signal_type": "BREAKOUT_CONFIRM",
+            "last_regime": "CHOPPY",
+            "last_confidence": "HIGH",
+        },
+    )()
+
+    zone = service._classify_no_trade_zone(
+        balanced_pro={"time_regime": "MIDDAY", "setup": "BREAKOUT_CONFIRM"},
+        signal="PE",
+        selected_option_contract={"ltp": 100, "spread": 1.2},
     )
 
     assert zone is None

@@ -63,6 +63,22 @@ def build_time_regime_thresholds(instrument, time_regime, fallback_mode, market_
         thresholds["allow_continuation"] = False
         thresholds["allow_fallback_continuation"] = False
 
+    if market_regime in {"TRENDING", "EXPANDING", "OPENING_EXPANSION", "EXPIRY_DAY"}:
+        if time_regime == "MIDDAY":
+            thresholds["breakout_min_score"] = max(56, thresholds["breakout_min_score"] - 2)
+            thresholds["confirm_min_score"] = max(61, thresholds["confirm_min_score"] - 1)
+            thresholds["continuation_min_score"] = max(68, thresholds["continuation_min_score"] - 2)
+            thresholds["high_continuation_min_score"] = max(76, thresholds["high_continuation_min_score"] - 2)
+        elif time_regime == "LATE_DAY":
+            thresholds["breakout_min_score"] = max(56, thresholds["breakout_min_score"] - 2)
+            thresholds["continuation_min_score"] = max(62, thresholds["continuation_min_score"] - 2)
+            thresholds["retest_min_score"] = max(56, thresholds["retest_min_score"] - 1)
+        elif time_regime == "ENDGAME":
+            thresholds["breakout_min_score"] = max(60, thresholds["breakout_min_score"] - 2)
+            thresholds["confirm_min_score"] = max(63, thresholds["confirm_min_score"] - 1)
+            thresholds["continuation_min_score"] = max(74, thresholds["continuation_min_score"] - 2)
+            thresholds["high_continuation_min_score"] = max(78, thresholds["high_continuation_min_score"] - 2)
+
     if Config.ADAPTIVE_THRESHOLDS_ENABLED:
         relax_score = max(0.0, float(Config.ADAPTIVE_THRESHOLD_RELAX_SCORE))
         tighten_score = max(0.0, float(Config.ADAPTIVE_THRESHOLD_TIGHTEN_SCORE))

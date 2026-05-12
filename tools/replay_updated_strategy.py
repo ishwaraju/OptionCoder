@@ -19,6 +19,7 @@ from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
 from shared.market.oi_analyzer import OIAnalyzer
 from shared.market.oi_ladder import OILadder
 from shared.market.pressure_analyzer import PressureAnalyzer
+from strategies.shared.actionable_rules import InstrumentActionableRules
 from strategies.shared.breakout_strategy import BreakoutStrategy
 
 
@@ -89,7 +90,19 @@ def load_option_band_rows(instrument, from_date, to_date):
       oi,
       volume,
       ltp,
-      iv
+      iv,
+      top_bid_price,
+      top_bid_quantity,
+      top_ask_price,
+      top_ask_quantity,
+      spread,
+      average_price,
+      previous_oi,
+      previous_volume,
+      delta,
+      theta,
+      gamma,
+      vega
     FROM option_band_snapshots_1m
     WHERE instrument = '{instrument}'
       AND DATE(ts AT TIME ZONE 'Asia/Kolkata') BETWEEN DATE '{from_date}' AND DATE '{to_date}'
@@ -97,7 +110,7 @@ def load_option_band_rows(instrument, from_date, to_date):
     """
     grouped = defaultdict(list)
     for r in psql(query):
-        r = r + [None] * (9 - len(r))
+        r = r + [None] * (21 - len(r))
         ts = datetime.fromisoformat(r[0])
         grouped[ts].append(
             {
@@ -109,6 +122,18 @@ def load_option_band_rows(instrument, from_date, to_date):
                 "volume": parse_int(r[6]) or 0,
                 "ltp": parse_float(r[7]) or 0.0,
                 "iv": parse_float(r[8]) or 0.0,
+                "top_bid_price": parse_float(r[9]),
+                "top_bid_quantity": parse_int(r[10]),
+                "top_ask_price": parse_float(r[11]),
+                "top_ask_quantity": parse_int(r[12]),
+                "spread": parse_float(r[13]),
+                "average_price": parse_float(r[14]),
+                "previous_oi": parse_int(r[15]),
+                "previous_volume": parse_int(r[16]),
+                "delta": parse_float(r[17]),
+                "theta": parse_float(r[18]),
+                "gamma": parse_float(r[19]),
+                "vega": parse_float(r[20]),
             }
         )
     return grouped
@@ -361,6 +386,71 @@ def can_trade_at(ts):
     return trade_start <= now <= trade_end and not (no_trade_start <= now <= no_trade_end)
 
 
+def live_gate(signal, strategy, instrument, candle_time):
+    if not signal:
+        return False, "NO_SIGNAL"
+    if candle_time is not None and not can_trade_at(candle_time):
+        return False, "time_filter"
+
+    signal_type = (strategy.last_signal_type or "NONE").upper()
+    signal_grade = (strategy.last_signal_grade or "SKIP").upper()
+    confidence = (strategy.last_confidence or "LOW").upper()
+    regime = (strategy.last_regime or "UNKNOWN").upper()
+    score = float(
+        getattr(strategy, "last_entry_score", None)
+        or getattr(strategy, "last_score", 0)
+        or 0
+    )
+    pressure_conflict_level = (
+        getattr(strategy, "last_pressure_conflict_level", "NONE") or "NONE"
+    ).upper()
+
+    if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
+        return False, "signal_type_blocked"
+
+    allowed = InstrumentActionableRules.should_allow_signal(
+        instrument=instrument,
+        signal_type=signal_type,
+        signal_grade=signal_grade,
+        confidence=confidence,
+        regime=regime,
+        candle_time=candle_time,
+        score=getattr(strategy, "last_score", score),
+        entry_score=getattr(strategy, "last_entry_score", getattr(strategy, "last_score", 0)),
+        pressure_conflict_level=pressure_conflict_level,
+    )
+    if instrument in {"NIFTY", "BANKNIFTY"}:
+        if allowed:
+            return True, "live_actionable"
+        return False, "instrument_actionable_rules"
+    if not allowed:
+        return False, "instrument_actionable_rules"
+
+    if signal_type == "BREAKOUT_CONFIRM" and signal_grade == "B" and confidence in {"MEDIUM", "HIGH"} and score >= 80:
+        pass
+    elif signal_grade not in Config.OPTION_BUYER_ALERT_GRADES:
+        return False, "grade_blocked"
+
+    if confidence not in {"MEDIUM", "HIGH"}:
+        return False, "confidence_blocked"
+
+    critical_cautions = {
+        "participation_spread_wide",
+        "participation_weak",
+        "adx_not_confirmed",
+        "higher_tf_not_aligned",
+        "oi_divergence_against",
+    }
+    current_cautions = set(getattr(strategy, "last_cautions", []) or [])
+    caution_hits = current_cautions.intersection(critical_cautions)
+    if len(caution_hits) >= 2 and score < 90:
+        return False, "critical_cautions"
+    if caution_hits and score < 84 and signal_type not in {"BREAKOUT_CONFIRM", "RETEST"}:
+        return False, "caution_score_gate"
+
+    return True, "live_actionable"
+
+
 def derive_15m_trend_from_5m(candles_5m):
     if not candles_5m or len(candles_5m) < 6:
         return None
@@ -445,7 +535,11 @@ def replay(candles, snapshot_map, instrument, disable_continuation=False):
                 price_change=price_change,
                 atm=option_data["atm"],
             )
-            pressure_metrics = pressure.analyze(option_data)
+            pressure_metrics = pressure.analyze(
+                option_data,
+                underlying_price=candle["close"],
+                oi_ladder_data=oi_ladder_data,
+            )
         else:
             oi_bias = "NEUTRAL"
             oi_ladder_data = None
@@ -501,8 +595,19 @@ def replay(candles, snapshot_map, instrument, disable_continuation=False):
                 "regime": strategy.last_regime,
                 "blockers": list(strategy.last_blockers),
                 "cautions": list(strategy.last_cautions),
+                "signal_grade": strategy.last_signal_grade,
+                "entry_score": strategy.last_entry_score,
+                "pressure_conflict_level": strategy.last_pressure_conflict_level,
             }
         )
+
+        if signal:
+            actionable, gate_reason = live_gate(signal, strategy, instrument, ts)
+            results[-1]["live_actionable"] = actionable
+            results[-1]["live_gate_reason"] = gate_reason
+        else:
+            results[-1]["live_actionable"] = False
+            results[-1]["live_gate_reason"] = "NO_SIGNAL"
 
     return results, blocker_counter, caution_counter
 
@@ -527,6 +632,7 @@ def print_summary(results, blocker_counter, caution_counter, args):
     print(f"Disable Continuation: {args.disable_continuation}")
     print(f"Decisions: {len(results)}")
     print(f"Signals: {len(total_signals)}")
+    print(f"Live Actionable Signals: {sum(1 for row in total_signals if row.get('live_actionable'))}")
     print()
     print("Daily Summary")
     for day in sorted(by_day):
@@ -554,7 +660,9 @@ def print_summary(results, blocker_counter, caution_counter, args):
         for row in total_signals:
             print(
                 f"{row['ts']} | {row['signal']} | {row['signal_type']} | "
-                f"score={row['score']} | confidence={row['confidence']} | {row['reason']}"
+                f"score={row['score']} | confidence={row['confidence']} | "
+                f"grade={row.get('signal_grade')} | live={'YES' if row.get('live_actionable') else 'NO'} "
+                f"({row.get('live_gate_reason')}) | {row['reason']}"
             )
 
 

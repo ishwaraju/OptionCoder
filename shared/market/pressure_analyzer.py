@@ -4,6 +4,7 @@ from collections import deque
 class PressureAnalyzer:
     def __init__(self):
         self.last_metrics = None
+        self.flow_edge_history = deque(maxlen=5)
         self.near_call_ratio_history = deque(maxlen=3)
         self.near_put_ratio_history = deque(maxlen=3)
         self.full_call_ratio_history = deque(maxlen=3)
@@ -24,13 +25,29 @@ class PressureAnalyzer:
         ordered = sorted(rows, key=lambda row: row.get(key, 0), reverse=True)
         return ordered[:limit]
 
-    def analyze(self, option_data):
+    @staticmethod
+    def _delta_sum(rows, current_key, previous_key):
+        total = 0
+        found = False
+        for row in rows:
+            current = row.get(current_key)
+            previous = row.get(previous_key)
+            if current is None or previous is None:
+                continue
+            found = True
+            total += float(current) - float(previous)
+        return round(total, 2) if found else 0.0
+
+    def analyze(self, option_data, underlying_price=None, oi_ladder_data=None):
         band_snapshots = option_data.get("band_snapshots", []) if option_data else []
         atm = option_data.get("atm") if option_data else None
 
         if not band_snapshots or atm is None:
             self.last_metrics = None
             return None
+
+        if underlying_price is None and option_data:
+            underlying_price = option_data.get("underlying_price")
 
         ce_rows = [row for row in band_snapshots if row["option_type"] == "CE"]
         pe_rows = [row for row in band_snapshots if row["option_type"] == "PE"]
@@ -75,18 +92,138 @@ class PressureAnalyzer:
         smooth_full_call = round(sum(self.full_call_ratio_history) / len(self.full_call_ratio_history), 2)
         smooth_full_put = round(sum(self.full_put_ratio_history) / len(self.full_put_ratio_history), 2)
 
-        # Near-price PE participation usually supports bullish continuation,
-        # while near-price CE participation often points to bearish pressure.
+        prev_metrics = self.last_metrics or {}
+        prev_underlying = prev_metrics.get("underlying_price")
+        prev_atm_ce_ltp = prev_metrics.get("atm_ce_ltp")
+        prev_atm_pe_ltp = prev_metrics.get("atm_pe_ltp")
+
+        atm_ce_ltp = float(atm_ce.get("ltp", 0) or 0) if atm_ce else 0.0
+        atm_pe_ltp = float(atm_pe.get("ltp", 0) or 0) if atm_pe else 0.0
+        underlying_delta = (
+            round(float(underlying_price) - float(prev_underlying), 2)
+            if underlying_price is not None and prev_underlying is not None
+            else None
+        )
+        atm_ce_ltp_delta = (
+            round(atm_ce_ltp - float(prev_atm_ce_ltp), 2)
+            if prev_atm_ce_ltp is not None
+            else None
+        )
+        atm_pe_ltp_delta = (
+            round(atm_pe_ltp - float(prev_atm_pe_ltp), 2)
+            if prev_atm_pe_ltp is not None
+            else None
+        )
+
+        near_ce_volume_delta = self._delta_sum(near_ce_rows, "volume", "previous_volume")
+        near_pe_volume_delta = self._delta_sum(near_pe_rows, "volume", "previous_volume")
+        near_ce_oi_delta = self._delta_sum(near_ce_rows, "oi", "previous_oi")
+        near_pe_oi_delta = self._delta_sum(near_pe_rows, "oi", "previous_oi")
+        mid_ce_volume_delta = self._delta_sum(mid_ce_rows, "volume", "previous_volume")
+        mid_pe_volume_delta = self._delta_sum(mid_pe_rows, "volume", "previous_volume")
+
+        bullish_score = 0.0
+        bearish_score = 0.0
+        flow_notes = []
+
+        if underlying_delta is not None:
+            if underlying_delta > 0:
+                bullish_score += 7
+                flow_notes.append("spot_up")
+            elif underlying_delta < 0:
+                bearish_score += 7
+                flow_notes.append("spot_down")
+
+        if atm_ce_ltp_delta is not None and atm_pe_ltp_delta is not None:
+            if atm_ce_ltp_delta > 0 and atm_pe_ltp_delta < 0:
+                bullish_score += 10
+                flow_notes.append("ce_up_pe_down")
+            elif atm_pe_ltp_delta > 0 and atm_ce_ltp_delta < 0:
+                bearish_score += 10
+                flow_notes.append("pe_up_ce_down")
+
+        if near_ce_volume_delta > 0 and (atm_ce_ltp_delta or 0) > 0:
+            bullish_score += 8
+            flow_notes.append("ce_flow_active")
+            if near_ce_oi_delta <= 0:
+                bullish_score += 4
+                flow_notes.append("ce_short_covering")
+            elif near_ce_oi_delta > 0:
+                bullish_score += 2
+                flow_notes.append("ce_fresh_buying")
+
+        if near_pe_volume_delta > 0 and (atm_pe_ltp_delta or 0) > 0:
+            bearish_score += 8
+            flow_notes.append("pe_flow_active")
+            if near_pe_oi_delta <= 0:
+                bearish_score += 4
+                flow_notes.append("pe_short_covering")
+            elif near_pe_oi_delta > 0:
+                bearish_score += 2
+                flow_notes.append("pe_fresh_buying")
+
+        if underlying_delta is not None and underlying_delta > 0 and near_pe_oi_delta > max(near_ce_oi_delta, 0) and (atm_pe_ltp_delta or 0) <= 0:
+            bullish_score += 6
+            flow_notes.append("put_writing_support")
+        if underlying_delta is not None and underlying_delta < 0 and near_ce_oi_delta > max(near_pe_oi_delta, 0) and (atm_ce_ltp_delta or 0) <= 0:
+            bearish_score += 6
+            flow_notes.append("call_writing_resistance")
+
+        if mid_ce_volume_delta > mid_pe_volume_delta * 1.1 and (atm_ce_ltp_delta or 0) > 0:
+            bullish_score += 4
+        elif mid_pe_volume_delta > mid_ce_volume_delta * 1.1 and (atm_pe_ltp_delta or 0) > 0:
+            bearish_score += 4
+
+        if oi_ladder_data:
+            trend = (oi_ladder_data.get("trend") or "").upper()
+            build_up = (oi_ladder_data.get("build_up") or "").upper()
+            wall_alert = (oi_ladder_data.get("wall_break_alert") or "").upper()
+            if trend == "BULLISH":
+                bullish_score += 8
+                flow_notes.append("oi_trend_bullish")
+            elif trend == "BEARISH":
+                bearish_score += 8
+                flow_notes.append("oi_trend_bearish")
+            if build_up in {"LONG_BUILDUP", "SHORT_COVERING"}:
+                bullish_score += 6
+                flow_notes.append(build_up.lower())
+            elif build_up in {"SHORT_BUILDUP", "LONG_UNWINDING"}:
+                bearish_score += 6
+                flow_notes.append(build_up.lower())
+            if wall_alert in {"RESISTANCE_BREAK_RISK", "RESISTANCE_SHIFTING_LOWER"}:
+                bullish_score += 4
+            elif wall_alert in {"SUPPORT_BREAK_RISK", "SUPPORT_SHIFTING_HIGHER"}:
+                bearish_score += 4
+
         if smooth_near_put >= 1.15 and smooth_full_put >= 1.05:
-            pressure_bias = "BULLISH"
+            bullish_score += 3
         elif smooth_near_call >= 1.15 and smooth_full_call >= 1.05:
+            bearish_score += 3
+
+        flow_edge = round(abs(bullish_score - bearish_score), 2)
+        self.flow_edge_history.append(flow_edge)
+        smoothed_edge = round(sum(self.flow_edge_history) / len(self.flow_edge_history), 2)
+
+        if bullish_score >= bearish_score + 6:
+            pressure_bias = "BULLISH"
+        elif bearish_score >= bullish_score + 6:
             pressure_bias = "BEARISH"
         else:
             pressure_bias = "NEUTRAL"
 
+        flow_strength = "STRONG" if smoothed_edge >= 14 else "MODERATE" if smoothed_edge >= 7 else "MIXED"
+
         metrics = {
             "atm": atm,
             "pressure_bias": pressure_bias,
+            "flow_strength": flow_strength,
+            "bullish_pressure_score": round(bullish_score, 2),
+            "bearish_pressure_score": round(bearish_score, 2),
+            "flow_edge": flow_edge,
+            "smoothed_flow_edge": smoothed_edge,
+            "flow_notes": flow_notes,
+            "underlying_price": float(underlying_price) if underlying_price is not None else None,
+            "underlying_delta": underlying_delta,
             "near_ce_volume": near_ce_volume,
             "near_pe_volume": near_pe_volume,
             "mid_ce_volume": mid_ce_volume,
@@ -105,6 +242,16 @@ class PressureAnalyzer:
             "smooth_near_put_pressure_ratio": smooth_near_put,
             "smooth_full_call_pressure_ratio": smooth_full_call,
             "smooth_full_put_pressure_ratio": smooth_full_put,
+            "near_ce_volume_delta": near_ce_volume_delta,
+            "near_pe_volume_delta": near_pe_volume_delta,
+            "mid_ce_volume_delta": mid_ce_volume_delta,
+            "mid_pe_volume_delta": mid_pe_volume_delta,
+            "near_ce_oi_delta": near_ce_oi_delta,
+            "near_pe_oi_delta": near_pe_oi_delta,
+            "atm_ce_ltp": atm_ce_ltp,
+            "atm_pe_ltp": atm_pe_ltp,
+            "atm_ce_ltp_delta": atm_ce_ltp_delta,
+            "atm_pe_ltp_delta": atm_pe_ltp_delta,
             "atm_ce_volume": atm_ce.get("volume", 0) if atm_ce else 0,
             "atm_pe_volume": atm_pe.get("volume", 0) if atm_pe else 0,
             "atm_ce_oi": atm_ce.get("oi", 0) if atm_ce else 0,

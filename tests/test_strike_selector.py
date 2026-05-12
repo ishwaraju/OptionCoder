@@ -32,3 +32,52 @@ def test_reversal_prefers_itm_for_cleaner_premium():
 
     assert strike == 51300
     assert "reversal setups" in reason
+
+
+def test_option_chain_quality_can_choose_better_delta_strike():
+    selector = StrikeSelector("NIFTY")
+    strike, reason = selector.select_strike_with_reason(
+        price=22485,
+        signal="CE",
+        volume_signal="STRONG",
+        strategy_score=86,
+        pressure_metrics={"pressure_bias": "BULLISH", "near_put_pressure_ratio": 1.3, "strongest_pe_strike": 22500},
+        option_chain_data={
+            "atm": 22500,
+            "band_snapshots": [
+                {
+                    "strike": 22500,
+                    "distance_from_atm": 0,
+                    "option_type": "CE",
+                    "ltp": 98.0,
+                    "spread": 3.8,
+                    "volume": 180000,
+                    "oi": 140000,
+                    "delta": 0.39,
+                    "theta": -16.0,
+                    "iv": 22.0,
+                    "top_bid_quantity": 20,
+                    "top_ask_quantity": 18,
+                },
+                {
+                    "strike": 22450,
+                    "distance_from_atm": -1,
+                    "option_type": "CE",
+                    "ltp": 126.0,
+                    "spread": 1.2,
+                    "volume": 210000,
+                    "oi": 175000,
+                    "delta": 0.52,
+                    "theta": -8.5,
+                    "iv": 21.0,
+                    "top_bid_quantity": 80,
+                    "top_ask_quantity": 78,
+                },
+            ],
+        },
+        setup_type="BREAKOUT_CONFIRM",
+        time_regime="MID_MORNING",
+    )
+
+    assert strike == 22450
+    assert "buyer-quality pick" in reason

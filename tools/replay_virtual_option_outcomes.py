@@ -131,7 +131,11 @@ def replay_with_outcomes(args):
                 price_change=oi.price_change,
                 atm=option_data["atm"],
             )
-            pressure_metrics = pressure.analyze(option_data)
+            pressure_metrics = pressure.analyze(
+                option_data,
+                underlying_price=candle["close"],
+                oi_ladder_data=oi_ladder_data,
+            )
         else:
             oi_bias = "NEUTRAL"
             oi_ladder_data = None

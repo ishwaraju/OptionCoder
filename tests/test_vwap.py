@@ -30,3 +30,23 @@ def test_vwap_falls_back_to_typical_price_average_when_volume_is_zero():
 
     assert first == 105
     assert round(second, 2) == 109.5
+    assert calc.get_source() == "PRICE_ONLY_FALLBACK"
+
+
+def test_vwap_prefers_explicit_futures_price_and_volume_when_available():
+    calc = VWAPCalculator()
+
+    value = calc.update(
+        {
+            "time": datetime(2026, 5, 11, 10, 10),
+            "high": 110,
+            "low": 100,
+            "close": 105,
+            "volume": 25,
+            "vwap_price": 106.5,
+            "vwap_volume": 100,
+        }
+    )
+
+    assert round(value, 2) == 106.5
+    assert calc.get_source() == "FUTURES"

@@ -22,6 +22,10 @@ class LiveData:
                 "ce_oi": 0,
                 "pe_oi": 0,
                 "fut_volume": 0,
+                "fut_price": None,
+                "fut_open_price": None,
+                "fut_high_price": None,
+                "fut_low_price": None,
                 "last_update_time": None,
                 "last_update_dt": None,
             }
@@ -37,8 +41,12 @@ class LiveData:
         data["last_update_time"] = self.time_utils.current_time_str()
         data["last_update_dt"] = self.time_utils.now_ist()
 
-    def update_futures_data(self, instrument, volume, oi):
+    def update_futures_data(self, instrument, price=None, volume=0, oi=0, open_p=None, high_p=None, low_p=None):
         data = self._ensure_instrument(instrument)
+        data["fut_price"] = price
+        data["fut_open_price"] = open_p
+        data["fut_high_price"] = high_p
+        data["fut_low_price"] = low_p
         data["fut_volume"] = volume
         data["oi"] = oi
         data["last_update_time"] = self.time_utils.current_time_str()
@@ -89,6 +97,10 @@ class LiveData:
             "low": data["low_price"],
             "volume": data["volume"],
             "futures_volume": data["fut_volume"],
+            "futures_price": data["fut_price"],
+            "futures_open": data["fut_open_price"],
+            "futures_high": data["fut_high_price"],
+            "futures_low": data["fut_low_price"],
             "oi": data["oi"],
             "ce_oi": data["ce_oi"],
             "pe_oi": data["pe_oi"],

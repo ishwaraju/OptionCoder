@@ -181,8 +181,12 @@ class LiveFeed:
             instrument = self.future_security_map.get(security_id) or self.index_security_map.get(getattr(Config, "NIFTY_FUTURE_ID", 0), "NIFTY")
             self.live_data.update_futures_data(
                 instrument,
+                data.get("price"),
                 data.get("volume", 0),
-                data.get("oi", 0)
+                data.get("oi", 0),
+                data.get("open"),
+                data.get("high"),
+                data.get("low"),
             )
 
         # OPTIONS (Multiple Strikes)
@@ -453,8 +457,9 @@ class LiveFeed:
                     )
                     self.live_data.update_futures_data(
                         instrument,
+                        instrument_price + random.randint(-8, 8),
                         random.randint(1000, 5000),
-                        random.randint(100000, 200000)
+                        random.randint(100000, 200000),
                     )
 
                 time.sleep(1)

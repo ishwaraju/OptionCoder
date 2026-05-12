@@ -33,6 +33,7 @@ class InstrumentActionableRules:
                 confidence=confidence,
                 regime=regime,
                 score=score,
+                entry_score=entry_score,
                 pressure_conflict_level=pressure_conflict_level,
             )
         if instrument == "BANKNIFTY":
@@ -59,20 +60,39 @@ class InstrumentActionableRules:
         return False
 
     @classmethod
-    def _allow_nifty(cls, signal_type, signal_grade, confidence, regime, score, pressure_conflict_level):
+    def _allow_nifty(cls, signal_type, signal_grade, confidence, regime, score, entry_score, pressure_conflict_level):
+        score = float(score or 0)
+        entry_score = float(entry_score or 0)
         if confidence not in {"MEDIUM", "HIGH"}:
-            return False
-        if regime not in {"TRENDING", "EXPANDING", "OPENING_EXPANSION"}:
             return False
         if pressure_conflict_level not in {"NONE", "MILD"}:
             return False
+        if regime in {"UNKNOWN", "NO_DATA", "NO_TRADE_WINDOW"}:
+            return False
+        late_day_effective_score = max(score, entry_score)
+        late_day_breakdown_ok = (
+            signal_type == "BREAKOUT_CONFIRM"
+            and regime in {"LATE_DAY_BREAKDOWN", "LATE_DAY_BREAKOUT"}
+            and late_day_effective_score >= 70
+            and signal_grade in {"WATCH", "B", "A", "A+"}
+        )
+        if late_day_breakdown_ok:
+            return True
+
+        if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
+            return False
+
+        choppy_regime = regime in {"RANGING", "CHOPPY", "EXPIRY_DAY"}
+        breakout_floor = 82 if choppy_regime else 78
+        confirm_floor = 86 if choppy_regime else 82
+
         if signal_grade in {"A", "A+"}:
-            return signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"} and float(score or 0) >= 78
+            return score >= breakout_floor
         if signal_grade != "B":
             return False
-        if signal_type not in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
+        if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
             return False
-        return float(score or 0) >= 82
+        return score >= confirm_floor
 
     @classmethod
     def _allow_banknifty(

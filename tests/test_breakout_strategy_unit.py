@@ -1,6 +1,7 @@
 from strategies.shared.breakout_strategy import BreakoutStrategy
 from datetime import datetime
 from config import Config
+from strategies.shared.expiry_context import ExpirySessionContext
 from strategies.shared.expiry_day_rules import ExpiryDayRules
 
 
@@ -620,6 +621,46 @@ def test_nifty_pre_expiry_still_blocks_low_confidence_weak_volume_setup():
     assert "pre_expiry_weak_volume" in result["blockers"]
 
 
+def test_expiry_session_context_uses_tuesday_for_nifty_and_thursday_for_sensex():
+    nifty_ctx = ExpirySessionContext(
+        current_date=datetime(2026, 5, 4).date(),
+        instrument="NIFTY",
+    )
+    sensex_ctx = ExpirySessionContext(
+        current_date=datetime(2026, 5, 6).date(),
+        instrument="SENSEX",
+    )
+
+    assert nifty_ctx.session_mode() == "PRE_EXPIRY_POSITIONING"
+    assert sensex_ctx.session_mode() == "PRE_EXPIRY_POSITIONING"
+
+
+def test_sensex_pre_expiry_weak_volume_stays_watch_like_without_nifty_special_flag():
+    rules = ExpiryDayRules(type("TU", (), {})(), instrument="SENSEX")
+    rules.time_utils.now_ist = lambda: datetime(2026, 5, 6, 10, 0)
+    rules.time_utils.current_time = lambda: datetime(2026, 5, 6, 10, 0).time()
+
+    result = rules.evaluate(
+        expiry_value=None,
+        score=70,
+        confidence="MEDIUM",
+        price=78420,
+        vwap=78390,
+        volume_signal="WEAK",
+        pressure_metrics={"pressure_bias": "BEARISH"},
+        current_signal="PE",
+        blockers=[],
+        cautions=[],
+    )
+
+    assert result["is_expiry_day"] is False
+    assert result["session_mode"] == "PRE_EXPIRY_POSITIONING"
+    assert result["allow_trade"] is True
+    assert "pre_expiry_weak_volume" not in result["blockers"]
+    assert "pre_expiry_weak_volume_watch" in result["cautions"]
+    assert "pre_expiry_watch_friendly" not in result["cautions"]
+
+
 def test_sensex_blocks_new_signal_after_235_pm():
     strategy = BreakoutStrategy(instrument="SENSEX")
 
@@ -787,3 +828,30 @@ def test_higher_timeframe_misalignment_marks_caution():
     )
 
     assert "higher_tf_not_aligned" in strategy.last_cautions
+
+
+def test_sensex_trend_day_context_helper_is_available_beyond_nifty():
+    strategy = BreakoutStrategy(instrument="SENSEX")
+    recent_candles = [
+        {"time": datetime(2026, 4, 16, 9, 45), "open": 77020, "high": 77040, "low": 77010, "close": 77032},
+        {"time": datetime(2026, 4, 16, 9, 50), "open": 77032, "high": 77058, "low": 77028, "close": 77051},
+        {"time": datetime(2026, 4, 16, 9, 55), "open": 77051, "high": 77082, "low": 77048, "close": 77076},
+    ]
+
+    ready = strategy._nifty_trend_day_context_ready(
+        direction="CE",
+        price=77064,
+        vwap=77030,
+        orb_high=77040,
+        orb_low=76980,
+        candle_close=77064,
+        candle_range=34,
+        atr=24,
+        time_regime="MID_MORNING",
+        volume_signal="NORMAL",
+        pressure_conflict_level="MILD",
+        ha_strength="BULLISH_STRONG",
+        recent_candles_5m=recent_candles,
+    )
+
+    assert ready is True

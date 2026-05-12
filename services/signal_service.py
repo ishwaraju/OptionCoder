@@ -60,6 +60,23 @@ except ImportError as e:
 
 class SignalService:
     RISK_PROFILE_MATRIX = get_risk_profile_matrix()
+
+    @staticmethod
+    def _coerce_comparable_datetimes(left_dt, right_dt):
+        """Align tz-awareness before subtracting or comparing DB timestamps."""
+        if left_dt is None or right_dt is None:
+            return left_dt, right_dt
+
+        left_has_tz = getattr(left_dt, "tzinfo", None) is not None
+        right_has_tz = getattr(right_dt, "tzinfo", None) is not None
+        if left_has_tz == right_has_tz:
+            return left_dt, right_dt
+        if left_has_tz and not right_has_tz:
+            return left_dt, right_dt.replace(tzinfo=left_dt.tzinfo)
+        if right_has_tz and not left_has_tz:
+            return left_dt.replace(tzinfo=right_dt.tzinfo), right_dt
+        return left_dt, right_dt
+
     def __init__(self, instrument=None):
         self.time_utils = TimeUtils()
         self.profile = get_instrument_profile(instrument)
@@ -1014,44 +1031,6 @@ class SignalService:
         data_health = getattr(self, "last_data_health", None) or {}
         feed_label = (data_health.get("label") or "").upper()
         market_regime = (self.strategy.last_regime or "").upper()
-
-        if feed_label == "RISKY" and score < 85:
-            return {
-                "label": "FEED_RISKY_SKIP",
-                "reason": "Raw feed clean nahi lag raha aur setup elite score ka nahi hai.",
-                "action_text": "Is setup ko skip karo. Feed quality pehle clean honi chahiye.",
-            }
-
-        if spread_percent is not None and spread_percent >= 5.5:
-            return {
-                "label": "WIDE_SPREAD_SKIP",
-                "reason": f"Selected option spread {spread_percent:.2f}% hai, execution risky hai.",
-                "action_text": "Is setup ko skip karo. Spread bahut wide hai.",
-            }
-
-        if "expiry_day_mode" in cautions and time_regime in {"MIDDAY", "LATE_DAY", "ENDGAME"} and score < 78:
-            return {
-                "label": "EXPIRY_PREMIUM_CHAOS",
-                "reason": "Expiry session me premium noise aur fast decay high hai.",
-                "action_text": "Fresh entry avoid karo. Expiry premium abhi noisy hai.",
-            }
-
-        if time_regime in {"LATE_DAY", "ENDGAME"} and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}:
-            conflict = getattr(self.strategy, "last_pressure_conflict_level", "NONE")
-            if conflict not in {"NONE", ""}:
-                return {
-                    "label": "LATE_DAY_WHIPSAW",
-                "reason": "Late-day reversal zone me pressure conflict present hai.",
-                "action_text": "Skip ya wait karo. Late-day whipsaw risk high hai.",
-            }
-
-        if time_regime == "MIDDAY" and market_regime in {"RANGING", "CHOPPY"} and score < 82:
-            return {
-                "label": "MIDDAY_RANGE_SKIP",
-                "reason": "Midday ranging/choppy regime me premium clean explode karna mushkil hota hai.",
-                "action_text": "Watch-only raho. Midday me cleaner expansion ka wait karo.",
-            }
-
         critical_noise_flags = {
             flag for flag in {
                 "participation_weak",
@@ -1069,6 +1048,59 @@ class SignalService:
             and confidence == "HIGH"
             and score >= 88
         )
+        clean_momentum_setup = (
+            signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION", "OPENING_DRIVE"}
+            and confidence in {"MEDIUM", "HIGH"}
+            and score >= 80
+            and not has_hard_conflict
+        )
+
+        if feed_label == "RISKY" and score < 85:
+            return {
+                "label": "FEED_RISKY_SKIP",
+                "reason": "Raw feed clean nahi lag raha aur setup elite score ka nahi hai.",
+                "action_text": "Is setup ko skip karo. Feed quality pehle clean honi chahiye.",
+            }
+
+        if spread_percent is not None and spread_percent >= 5.5:
+            return {
+                "label": "WIDE_SPREAD_SKIP",
+                "reason": f"Selected option spread {spread_percent:.2f}% hai, execution risky hai.",
+                "action_text": "Is setup ko skip karo. Spread bahut wide hai.",
+            }
+
+        if (
+            "expiry_day_mode" in cautions
+            and time_regime in {"MIDDAY", "LATE_DAY", "ENDGAME"}
+            and score < 78
+            and not (clean_momentum_setup and score >= 82)
+        ):
+            return {
+                "label": "EXPIRY_PREMIUM_CHAOS",
+                "reason": "Expiry session me premium noise aur fast decay high hai.",
+                "action_text": "Fresh entry avoid karo. Expiry premium abhi noisy hai.",
+            }
+
+        if time_regime in {"LATE_DAY", "ENDGAME"} and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}:
+            conflict = getattr(self.strategy, "last_pressure_conflict_level", "NONE")
+            if conflict not in {"NONE", ""} and not (clean_momentum_setup and score >= 82):
+                return {
+                    "label": "LATE_DAY_WHIPSAW",
+                    "reason": "Late-day reversal zone me pressure conflict present hai.",
+                    "action_text": "Skip ya wait karo. Late-day whipsaw risk high hai.",
+                }
+
+        if (
+            time_regime == "MIDDAY"
+            and market_regime in {"RANGING", "CHOPPY"}
+            and score < 82
+            and not (clean_momentum_setup and confidence == "HIGH")
+        ):
+            return {
+                "label": "MIDDAY_RANGE_SKIP",
+                "reason": "Midday ranging/choppy regime me premium clean explode karna mushkil hota hai.",
+                "action_text": "Watch-only raho. Midday me cleaner expansion ka wait karo.",
+            }
         if (
             len(critical_noise_flags) >= 2
             or (has_hard_conflict and "adx_not_confirmed" in critical_noise_flags)
@@ -1447,6 +1479,8 @@ class SignalService:
         current_time = candle_5m.get("time")
         if created_at is None or current_time is None:
             return False
+
+        created_at, current_time = self._coerce_comparable_datetimes(created_at, current_time)
 
         age_minutes = int((current_time - created_at).total_seconds() // 60)
         if age_minutes < 0:
@@ -1894,15 +1928,11 @@ class SignalService:
         previous = recent_1m_candles[-2]
         created_at = pending["created_at"]
         if created_at is not None and latest["time"] is not None:
-            if getattr(created_at, "tzinfo", None) is None and getattr(latest["time"], "tzinfo", None) is not None:
-                created_at = created_at.replace(tzinfo=latest["time"].tzinfo)
-            elif getattr(created_at, "tzinfo", None) is not None and getattr(latest["time"], "tzinfo", None) is None:
-                latest = {**latest, "time": latest["time"].replace(tzinfo=created_at.tzinfo)}
-                previous = {
-                    **previous,
-                    "time": previous["time"].replace(tzinfo=created_at.tzinfo)
-                    if getattr(previous["time"], "tzinfo", None) is None else previous["time"],
-                }
+            created_at, latest_time = self._coerce_comparable_datetimes(created_at, latest["time"])
+            latest = {**latest, "time": latest_time}
+            previous_time = previous["time"]
+            _, previous_time = self._coerce_comparable_datetimes(created_at, previous_time)
+            previous = {**previous, "time": previous_time}
         minutes_since_watch = int((latest["time"] - created_at).total_seconds() // 60)
         if minutes_since_watch < 1:
             return None
@@ -1999,15 +2029,23 @@ class SignalService:
         if trigger_hit and not self._pending_watch_not_too_late(pending, latest["close"]):
             return {"status": "INVALIDATED", "reason": "1m trigger arrived too late after move extension"}
         if trigger_hit:
+            live_pressure_metrics = (
+                self.pressure.analyze(
+                    self.option_data,
+                    underlying_price=latest["close"],
+                )
+                if getattr(self, "pressure", None) and getattr(self, "option_data", None)
+                else None
+            )
             quality_ok, quality_reason = self._pending_watch_quality_ok(pending, latest, previous)
             if not quality_ok:
                 return {"status": "INVALIDATED", "reason": quality_reason}
             selected_strike, _ = self.strike_selector.select_strike_with_reason(
                 price=latest["close"],
                 signal=direction,
-                volume_signal="NORMAL",
+                volume_signal="STRONG" if volume_ok or pending.get("strong_watch_setup") else "NORMAL",
                 strategy_score=pending.get("score") or 0,
-                pressure_metrics=None,
+                pressure_metrics=live_pressure_metrics,
                 cautions=pending.get("cautions"),
                 option_chain_data=self.option_data,
                 setup_type=pending.get("signal_type"),
@@ -2269,7 +2307,14 @@ class SignalService:
         prior_5m = recent_5m_candles[-2] if len(recent_5m_candles) >= 2 else active_5m
         live_pressure_summary = None
         try:
-            current_pressure_metrics = self.pressure.analyze(self.option_data) if getattr(self, "pressure", None) and getattr(self, "option_data", None) else None
+            current_pressure_metrics = (
+                self.pressure.analyze(
+                    self.option_data,
+                    underlying_price=last_close,
+                )
+                if getattr(self, "pressure", None) and getattr(self, "option_data", None)
+                else None
+            )
             live_pressure_summary = self._build_pressure_summary(
                 pressure_metrics=current_pressure_metrics,
                 participation_metrics=None,
@@ -2886,12 +2931,19 @@ class SignalService:
                 entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
                 pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
             )
+        late_reversal_window = (
+            candle_time is not None
+            and candle_time.time() >= datetime.strptime("13:30", "%H:%M").time()
+        )
         if (
-            signal_type in {"REVERSAL", "TRAP_REVERSAL"}
+            self.instrument == "NIFTY"
+            and signal_type in {"REVERSAL", "TRAP_REVERSAL"}
             and signal_grade in {"A", "A+"}
             and confidence == "HIGH"
             and getattr(self.strategy, "last_pressure_conflict_level", "NONE") == "NONE"
-            and score >= 90
+            and float(getattr(self.strategy, "last_score", 0) or 0) >= 88
+            and float(getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)) or 0) >= 84
+            and not late_reversal_window
         ):
             return True
         if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
@@ -2903,7 +2955,7 @@ class SignalService:
             confidence=confidence,
             regime=regime,
             candle_time=candle_time,
-            score=score,
+            score=getattr(self.strategy, "last_score", score),
             entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
             pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
         ):
@@ -3399,6 +3451,14 @@ class SignalService:
         if not pressure_metrics:
             return None
 
+        flow_bullish = pressure_metrics.get("bullish_pressure_score")
+        flow_bearish = pressure_metrics.get("bearish_pressure_score")
+        if flow_bullish is not None and flow_bearish is not None:
+            return {
+                "bullish_score": round(min(max(float(flow_bullish), 0.0), 100.0), 1),
+                "bearish_score": round(min(max(float(flow_bearish), 0.0), 100.0), 1),
+            }
+
         bullish_score = 0.0
         bearish_score = 0.0
 
@@ -3467,6 +3527,13 @@ class SignalService:
         bits = [f"Pressure {bias} ({strength})", f"Bull {bullish_score} vs Bear {bearish_score}"]
 
         if pressure_metrics:
+            underlying_delta = pressure_metrics.get("underlying_delta")
+            if underlying_delta is not None:
+                bits.append(f"spotΔ {underlying_delta}")
+            ce_price_delta = pressure_metrics.get("atm_ce_ltp_delta")
+            pe_price_delta = pressure_metrics.get("atm_pe_ltp_delta")
+            if ce_price_delta is not None and pe_price_delta is not None:
+                bits.append(f"ATM CEΔ {ce_price_delta} / PEΔ {pe_price_delta}")
             near_put = pressure_metrics.get("near_put_pressure_ratio")
             near_call = pressure_metrics.get("near_call_pressure_ratio")
             if near_put is not None and near_call is not None:
@@ -3482,6 +3549,9 @@ class SignalService:
                         call_ratio=pressure_metrics.get("call_wall_strength_ratio"),
                     )
                 )
+            flow_notes = pressure_metrics.get("flow_notes") or []
+            if flow_notes:
+                bits.append("flow " + ", ".join(flow_notes[:4]))
 
         if direction in {"CE", "PE"} and participation_metrics:
             directional = participation_metrics.get(direction) or {}
@@ -4875,8 +4945,16 @@ class SignalService:
 
         oi_signal = self.oi.get_oi_signal()
         oi_bias = self.oi.get_bias()
-        pressure_metrics = self.pressure.analyze(self.option_data) if self.option_data else None
         oi_ladder_data = self._build_oi_ladder_context(price)
+        pressure_metrics = (
+            self.pressure.analyze(
+                self.option_data,
+                underlying_price=price,
+                oi_ladder_data=oi_ladder_data,
+            )
+            if self.option_data
+            else None
+        )
         fallback_context = None
         if not self.option_data or not self.option_data.get("band_snapshots"):
             fallback_context = self._build_oi_snapshot_fallback_context(price, candle_5m["time"])

@@ -56,16 +56,14 @@
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
     <open-files>
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_market_state_1m" />
       <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_candidates_5m" />
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/candles_5m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/strategy_decisions_5m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_market_state_1m" />
       <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/oi_snapshots_1m" />
       <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_horizon_outcomes" />
       <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_band_snapshots_1m" />
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/entry_decisions_1m" />
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_outcomes_1m" />
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/candles_1m" />
       <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/signals_issued" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_outcomes_1m" />
     </open-files>
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
