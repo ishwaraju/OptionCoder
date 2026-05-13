@@ -51,8 +51,26 @@ def calculate_entry_score(
     adx_trade_ok,
     mtf_trade_ok,
     pressure_conflict_level="NONE",
+    price_structure_score=None,
+    option_flow_score=None,
+    oi_structure_score=None,
+    contract_quality_score=None,
 ):
     entry_score = min(int(score), 100)
+    score_parts = [
+        float(price_structure_score or 0.0),
+        float(option_flow_score or 0.0),
+        float(oi_structure_score or 0.0),
+        float(contract_quality_score or 0.0),
+    ]
+    if any(part > 0 for part in score_parts):
+        weighted_base = (
+            score_parts[0] * 0.40
+            + score_parts[1] * 0.25
+            + score_parts[2] * 0.20
+            + score_parts[3] * 0.15
+        )
+        entry_score = int(round((entry_score * 0.82) + (weighted_base * 0.18)))
     if breakout_body_ok:
         entry_score += 8
     else:

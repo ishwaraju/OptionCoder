@@ -18,7 +18,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Show daily signal calibration/debug table")
     parser.add_argument("--date", required=True, help="Trading day in YYYY-MM-DD (Asia/Kolkata)")
     parser.add_argument("--instrument", choices=["NIFTY", "BANKNIFTY", "SENSEX"], required=True)
-    parser.add_argument("--horizon", type=int, default=5, choices=[1, 2, 3, 5])
+    parser.add_argument("--horizon", type=int, default=5, choices=[1, 2, 3, 5, 10, 15, 20])
     parser.add_argument("--min-score", type=float, default=60.0)
     return parser.parse_args()
 

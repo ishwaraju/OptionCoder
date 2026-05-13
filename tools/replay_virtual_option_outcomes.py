@@ -182,6 +182,7 @@ def replay_with_outcomes(args):
             option_chain_data=option_data,
             setup_type=strategy.last_signal_type,
             time_regime=strategy.last_time_regime,
+            candle_time=ts,
         )
         entry = option_row_at(snapshot_map, ts, strike, signal)
         horizon = option_row_at(snapshot_map, ts + timedelta(minutes=args.horizon), strike, signal)

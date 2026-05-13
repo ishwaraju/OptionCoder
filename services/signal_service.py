@@ -48,6 +48,31 @@ from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.option_data_cache import OptionDataCache
 from shared.utils.option_greeks import enrich_contract_greeks, format_greek_summary, project_option_price
+from services.signal_pending_watch_utils import (
+    candle_body_ratio as pending_watch_candle_body_ratio,
+    candle_close_strength as pending_watch_candle_close_strength,
+    pending_watch_elite_ready as pending_watch_elite_ready_helper,
+    pending_watch_max_minutes as pending_watch_max_minutes_helper,
+    pending_watch_retrigger_eligible as pending_watch_retrigger_eligible_helper,
+)
+from services.signal_pending_watch_eval import evaluate_pending_entry_watch
+from services.signal_pending_watch_state import set_pending_entry_watch
+from services.signal_pending_watch_trigger import maybe_fire_pending_entry_watch
+from services.signal_trade_monitor_dispatch import (
+    maybe_send_trade_monitor_update,
+    monitor_alert_is_high_priority,
+    should_send_trade_monitor_alert,
+)
+from services.signal_trade_monitor_eval import evaluate_trade_monitor
+from services.signal_trade_monitor_state import start_trade_monitor
+from services.signal_trade_monitor_utils import (
+    drawdown_from_peak_percent as trade_monitor_drawdown_from_peak_percent,
+    dynamic_trail_percent as trade_monitor_dynamic_trail_percent,
+    estimate_live_atr as trade_monitor_estimate_live_atr,
+    option_pnl_percent as trade_monitor_option_pnl_percent,
+    spread_widening_percent as trade_monitor_spread_widening_percent,
+    update_psar_style_level as trade_monitor_update_psar_style_level,
+)
 
 # ML Signal Enhancement (FREE - scikit-learn)
 try:
@@ -272,131 +297,46 @@ class SignalService:
         self._handle_runtime_gap_recovery("processing/feed gap")
 
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
-        """Start 1-minute manual trade monitor after a signal."""
-        option_contract = self._get_option_contract_snapshot(selected_strike, signal, before_ts=candle_5m.get("close_time") or candle_5m["time"])
-        option_contract = self._greek_enriched_option_contract(
-            option_contract,
-            signal,
-            price,
-            before_ts=candle_5m.get("close_time") or candle_5m["time"],
-        )
-        reference_contract = self._get_atm_reference_option_contract(
-            signal=signal,
-            before_ts=candle_5m.get("close_time") or candle_5m["time"],
-        )
-        self._current_risk_option_contract = option_contract
-        self._current_risk_reference_contract = reference_contract
-        option_entry_price = option_contract.get("ltp") if option_contract else None
-        risk_profile = self._resolve_trade_risk_profile(
-            setup_type=(balanced_pro or {}).get("setup"),
-            quality=(balanced_pro or {}).get("quality"),
-            confidence=getattr(self.strategy, "last_confidence", None),
-            cautions=getattr(self.strategy, "last_cautions", None),
-        )
-        self._current_risk_option_contract = None
-        self._current_risk_reference_contract = None
-        stop_loss_pct = float(risk_profile["hard_premium_stop_pct"])
-        target_pct = float(risk_profile["target_pct"])
-        trail_pct = float(risk_profile["trail_from_peak_pct"])
-        stop_loss_price = round(option_entry_price * (1 - stop_loss_pct / 100.0), 2) if option_entry_price else None
-        first_target_option_price = round(option_entry_price * (1 + target_pct / 100.0), 2) if option_entry_price else None
-        pressure_summary = (balanced_pro or {}).get("pressure_summary") or {}
-        signal_key = self._build_signal_key(candle_5m["time"], self.instrument, signal, selected_strike)
-        self.active_trade_monitor = {
-            "signal": signal,
-            "signal_key": signal_key,
-            "signal_ts": candle_5m["time"],
-            "signal_type": (balanced_pro or {}).get("setup"),
-            "signal_grade": getattr(self.strategy, "last_signal_grade", None),
-            "entry_confidence": getattr(self.strategy, "last_confidence", None),
-            "entry_score": getattr(self.strategy, "last_entry_score", None),
-            "entry_time": candle_5m["time"],
-            "entry_price": option_entry_price if option_entry_price is not None else price,
-            "entry_underlying_price": price,
-            "invalidate_underlying_price": (self.strategy.last_entry_plan or {}).get("invalidate_price"),
-            "strike": selected_strike,
-            "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
-            "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
-            "entry_spread": option_contract.get("spread") if option_contract else None,
-            "entry_iv": option_contract.get("iv") if option_contract else None,
-            "entry_delta": option_contract.get("delta") if option_contract else None,
-            "entry_gamma": option_contract.get("gamma") if option_contract else None,
-            "entry_theta": option_contract.get("theta") if option_contract else None,
-            "entry_vega": option_contract.get("vega") if option_contract else None,
-            "entry_greeks_source": option_contract.get("greeks_source") if option_contract else None,
-            "entry_greek_summary": format_greek_summary(option_contract),
-            "max_favorable_option_ltp": option_entry_price,
-            "max_adverse_option_ltp": option_entry_price,
-            "stop_loss_pct": stop_loss_pct,
-            "target_pct": target_pct,
-            "trail_pct": trail_pct,
-            "setup_bucket": risk_profile["setup_bucket"],
-            "risk_note": risk_profile["risk_note"],
-            "session_bucket": risk_profile.get("session_bucket"),
-            "iv_bucket": risk_profile.get("iv_bucket"),
-            "market_iv_regime": risk_profile.get("market_iv_regime"),
-            "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
-            "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
-            "profit_lock_trigger_pct": risk_profile.get("profit_lock_trigger_pct"),
-            "partial_trigger_pct": risk_profile.get("partial_trigger_pct"),
-            "runner_trigger_pct": risk_profile.get("runner_trigger_pct"),
-            "runner_trail_bonus": risk_profile.get("runner_trail_bonus"),
-            "allow_endgame_runner": bool(risk_profile.get("allow_endgame_runner")),
-            "time_extension_minutes": risk_profile.get("time_extension_minutes"),
-            "expiry_fast_decay": bool(risk_profile.get("expiry_fast_decay")),
-            "stop_loss_option_price": stop_loss_price,
-            "first_target_option_price": first_target_option_price,
-            "partial_booked": False,
-            "profit_lock_armed": False,
-            "quality": balanced_pro["quality"],
-            "time_regime": balanced_pro["time_regime"],
-            "entry_pressure_bias": pressure_summary.get("bias"),
-            "entry_pressure_strength": pressure_summary.get("strength"),
-            "psar_style_level": (self.strategy.last_entry_plan or {}).get("invalidate_price"),
-            "entry_atr": (self.strategy.last_entry_plan or {}).get("atr"),
-            "last_notified_minute": None,
-            "last_sent_monitor_minute": None,
-            "last_sent_guidance": None,
-            "last_sent_decision_label": None,
-            "last_sent_pnl_percent": None,
-            "minutes_active": 0,
-        }
+        return start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike)
 
     @staticmethod
     def _option_pnl_percent(entry_price, option_price):
-        if entry_price in (None, 0) or option_price is None:
-            return None
-        try:
-            return round(((float(option_price) - float(entry_price)) / float(entry_price)) * 100, 2)
-        except Exception:
-            return None
+        return trade_monitor_option_pnl_percent(entry_price, option_price)
 
     @staticmethod
     def _drawdown_from_peak_percent(peak_price, option_price):
-        if peak_price in (None, 0) or option_price is None:
+        return trade_monitor_drawdown_from_peak_percent(peak_price, option_price)
+
+    @staticmethod
+    def _spread_widening_percent(entry_spread, current_spread):
+        return trade_monitor_spread_widening_percent(entry_spread, current_spread)
+
+    def _option_three_bar_momentum(self, recent_1m_candles, strike, signal):
+        if not recent_1m_candles or strike is None or signal not in {"CE", "PE"}:
             return None
-        try:
-            return round(((float(peak_price) - float(option_price)) / float(peak_price)) * 100, 2)
-        except Exception:
+        sampled = recent_1m_candles[-3:]
+        prices = []
+        for candle in sampled:
+            snap = self._get_option_contract_snapshot(strike, signal, before_ts=candle.get("time"))
+            if snap and snap.get("ltp") is not None:
+                prices.append(float(snap.get("ltp")))
+        if len(prices) < 3:
             return None
+        if signal == "CE":
+            if prices[2] > prices[1] > prices[0]:
+                return "EXPANDING"
+            if prices[2] < prices[1] < prices[0]:
+                return "FAILING"
+        else:
+            if prices[2] > prices[1] > prices[0]:
+                return "EXPANDING"
+            if prices[2] < prices[1] < prices[0]:
+                return "FAILING"
+        return "STALLING"
 
     @staticmethod
     def _estimate_live_atr(recent_5m_candles, fallback=None):
-        try:
-            if recent_5m_candles:
-                ranges = [
-                    abs(float(candle["high"]) - float(candle["low"]))
-                    for candle in recent_5m_candles[-4:]
-                    if candle.get("high") is not None and candle.get("low") is not None
-                ]
-                if ranges:
-                    return round(sum(ranges) / len(ranges), 2)
-        except Exception:
-            pass
-        try:
-            return round(float(fallback), 2) if fallback is not None else None
-        except Exception:
-            return None
+        return trade_monitor_estimate_live_atr(recent_5m_candles, fallback)
 
     def _get_atm_reference_option_contract(self, signal, before_ts=None):
         atm_strike = (self.option_data or {}).get("atm")
@@ -409,51 +349,11 @@ class SignalService:
 
     @staticmethod
     def _dynamic_trail_percent(base_trail_pct, setup_bucket, live_atr, underlying_price, time_regime=None):
-        trail_pct = float(base_trail_pct or 0.0)
-        if live_atr and underlying_price:
-            atr_pct = (float(live_atr) / max(float(underlying_price), 1.0)) * 100.0
-            if atr_pct >= 0.22:
-                trail_pct += 2.0
-            elif atr_pct >= 0.14:
-                trail_pct += 1.0
-            elif atr_pct <= 0.08:
-                trail_pct = max(7.0, trail_pct - 1.0)
-
-        setup_bucket = (setup_bucket or "").upper()
-        if setup_bucket == "REVERSAL":
-            trail_pct += 1.5
-        elif setup_bucket == "CONTINUATION":
-            trail_pct += 1.0
-        elif setup_bucket == "BREAKOUT":
-            trail_pct = max(7.0, trail_pct)
-
-        time_regime = (time_regime or "").upper()
-        if time_regime == "ENDGAME":
-            trail_pct = max(7.0, trail_pct - 1.0)
-        elif time_regime == "OPENING":
-            trail_pct += 0.5
-
-        return round(min(max(trail_pct, 7.0), 14.0), 2)
+        return trade_monitor_dynamic_trail_percent(base_trail_pct, setup_bucket, live_atr, underlying_price, time_regime)
 
     @staticmethod
     def _update_psar_style_level(signal, existing_level, latest_1m, previous_1m, live_atr=None):
-        signal = (signal or "").upper()
-        level = float(existing_level) if existing_level is not None else None
-        atr_buffer = max(float(live_atr or 0.0) * 0.12, 2.0)
-
-        if signal == "CE":
-            candidate = min(
-                float(previous_1m.get("low") or latest_1m.get("low") or 0.0),
-                float(latest_1m.get("low") or 0.0),
-            ) - atr_buffer
-            return round(max(level, candidate), 2) if level is not None else round(candidate, 2)
-        if signal == "PE":
-            candidate = max(
-                float(previous_1m.get("high") or latest_1m.get("high") or 0.0),
-                float(latest_1m.get("high") or 0.0),
-            ) + atr_buffer
-            return round(min(level, candidate), 2) if level is not None else round(candidate, 2)
-        return level
+        return trade_monitor_update_psar_style_level(signal, existing_level, latest_1m, previous_1m, live_atr)
 
     @staticmethod
     def _entry_decision_label(signal):
@@ -1712,69 +1612,31 @@ class SignalService:
         return covered <= (total_path * 0.55)
 
     def _pending_watch_max_minutes(self, pending):
-        if not pending:
-            return 20
+        return pending_watch_max_minutes_helper(self.instrument, pending)
 
-        if pending.get("hybrid_mode"):
-            if self.instrument == "BANKNIFTY":
-                return 18
-            if self.instrument == "SENSEX":
-                return 16
-            return 30
+    @staticmethod
+    def _pending_watch_retrigger_eligible(pending, latest, previous):
+        return pending_watch_retrigger_eligible_helper(pending, latest, previous)
 
-        if self.instrument == "SENSEX":
-            return 14
-        if self.instrument == "BANKNIFTY":
-            return 16
-        return 20
+    def _rearm_pending_entry_watch(self, latest, reason):
+        if not self.pending_entry_watch:
+            return
+        self.pending_entry_watch["created_at"] = latest.get("time")
+        self.pending_entry_watch["last_checked_minute"] = None
+        self.pending_entry_watch["retrigger_count"] = int(self.pending_entry_watch.get("retrigger_count") or 0) + 1
+        self.pending_entry_watch["retrigger_reason"] = reason
 
     @staticmethod
     def _pending_watch_elite_ready(pending):
-        if not pending:
-            return False
-        signal_grade = (pending.get("signal_grade") or "").upper()
-        confidence = (pending.get("confidence") or "").upper()
-        setup = (pending.get("signal_type") or "").upper()
-        score = float(pending.get("score") or 0)
-        entry_score = float(pending.get("entry_score") or 0)
-        return bool(
-            pending.get("strong_watch_setup")
-            and signal_grade in {"A", "A+"}
-            and confidence == "HIGH"
-            and setup in {"BREAKOUT_CONFIRM", "RETEST", "REVERSAL", "TRAP_REVERSAL"}
-            and score >= 82
-            and entry_score >= 76
-        )
+        return pending_watch_elite_ready_helper(pending)
 
     @staticmethod
     def _candle_close_strength(candle, direction):
-        high = candle.get("high")
-        low = candle.get("low")
-        close = candle.get("close")
-        if high is None or low is None or close is None:
-            return 0.0
-
-        range_size = float(high) - float(low)
-        if range_size <= 0:
-            return 0.0
-
-        if direction == "CE":
-            return (float(close) - float(low)) / range_size
-        return (float(high) - float(close)) / range_size
+        return pending_watch_candle_close_strength(candle, direction)
 
     @staticmethod
     def _candle_body_ratio(candle):
-        high = candle.get("high")
-        low = candle.get("low")
-        open_price = candle.get("open")
-        close = candle.get("close")
-        if None in {high, low, open_price, close}:
-            return 0.0
-
-        range_size = float(high) - float(low)
-        if range_size <= 0:
-            return 0.0
-        return abs(float(close) - float(open_price)) / range_size
+        return pending_watch_candle_body_ratio(candle)
 
     def _pending_watch_quality_ok(self, pending, latest, previous):
         direction = pending.get("direction")
@@ -1925,1067 +1787,29 @@ class SignalService:
         return False, None
 
     def _set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m):
-        if not watch_payload:
-            if not self._preserve_existing_pending_watch(candle_5m):
-                self._clear_pending_entry_watch()
-            return
-
-        direction = watch_payload.get("direction")
-        trigger_price = watch_payload.get("trigger_price")
-        if direction not in {"CE", "PE"} or trigger_price is None:
-            self._clear_pending_entry_watch()
-            return
-
-        score = watch_payload.get("score") or 0
-        entry_score = watch_payload.get("entry_score") or 0
-        watch_bucket = watch_payload.get("watch_bucket")
-        signal_grade = watch_payload.get("signal_grade")
-        confidence = watch_payload.get("confidence")
-        setup = watch_payload.get("setup")
-        hybrid_mode = Config.HYBRID_MANUAL_MODE
-        fast_track_ready = (
-            score >= 74
-            and entry_score >= 68
-            and watch_bucket == "WATCH_CONFIRMATION_PENDING"
-            and confidence in {"MEDIUM", "HIGH"}
-        )
-        if hybrid_mode and setup in {"REVERSAL", "BREAKOUT_CONFIRM", "RETEST", "TRAP_REVERSAL"}:
-            fast_track_ready = fast_track_ready or (
-                score >= 70
-                and entry_score >= 60
-                and confidence in {"MEDIUM", "HIGH"}
-            )
-        strong_watch_setup = (
-            score >= 76
-            and entry_score >= 70
-            and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP"}
-        )
-        if hybrid_mode:
-            strong_watch_setup = strong_watch_setup or (
-                score >= 70
-                and entry_score >= 60
-                and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP", "WATCH_CONTEXT"}
-                and setup in {"BREAKOUT_CONFIRM", "RETEST", "REVERSAL", "TRAP_REVERSAL"}
-            )
-
-        if watch_bucket == "WATCH_CONTEXT" and not strong_watch_setup:
-            self._clear_pending_entry_watch()
-            return
-        min_context_score = 64 if hybrid_mode else 68
-        min_entry_score = 54 if hybrid_mode else 60
-        if score < min_context_score and entry_score < min_entry_score:
-            self._clear_pending_entry_watch()
-            return
-
-        temp_pending = {
-            "instrument": self.instrument,
-            "signal_type": watch_payload.get("setup"),
-            "cautions": list(watch_payload.get("cautions") or []),
-            "blockers": list(watch_payload.get("blockers") or []),
-            "pressure_conflict_level": (
-                getattr(self.strategy, "last_pressure_conflict_level", None)
-                or (balanced_pro or {}).get("pressure_conflict_level")
-            ),
-            "time_regime": (balanced_pro or {}).get("time_regime"),
-        }
-        conflicts_too_high, _ = self._pending_watch_conflicts_too_high(temp_pending)
-        if conflicts_too_high:
-            self._clear_pending_entry_watch()
-            return
-
-        self.pending_entry_watch = {
-            "instrument": self.instrument,
-            "direction": direction,
-            "trigger_price": float(trigger_price),
-            "invalidate_price": watch_payload.get("invalidate_price"),
-            "first_target_price": watch_payload.get("first_target_price"),
-            "option_stop_loss_pct": watch_payload.get("option_stop_loss_pct"),
-            "option_target_pct": watch_payload.get("option_target_pct"),
-            "option_trail_pct": watch_payload.get("option_trail_pct"),
-            "risk_note": watch_payload.get("risk_note"),
-            "context": watch_payload.get("context"),
-            "score": score,
-            "entry_score": entry_score,
-            "confidence": confidence,
-            "signal_type": watch_payload.get("setup"),
-            "signal_grade": signal_grade,
-            "watch_bucket": watch_payload.get("watch_bucket"),
-            "quality": (balanced_pro or {}).get("quality"),
-            "time_regime": (balanced_pro or {}).get("time_regime"),
-            "created_at": candle_5m["time"],
-            "last_checked_minute": None,
-            "reason": watch_payload.get("reason"),
-            "fast_track_ready": fast_track_ready,
-            "strong_watch_setup": strong_watch_setup,
-            "elite_watch_ready": self._pending_watch_elite_ready(
-                {
-                    "signal_grade": signal_grade,
-                    "confidence": confidence,
-                    "signal_type": setup,
-                    "score": score,
-                    "entry_score": entry_score,
-                    "strong_watch_setup": strong_watch_setup,
-                }
-            ),
-            "hybrid_mode": hybrid_mode,
-            "cautions": list(watch_payload.get("cautions") or []),
-            "blockers": list(watch_payload.get("blockers") or []),
-            "pressure_conflict_level": (
-                getattr(self.strategy, "last_pressure_conflict_level", None)
-                or (balanced_pro or {}).get("pressure_conflict_level")
-            ),
-        }
-        self.pending_entry_watch = self._rebalance_pending_watch_plan(self.pending_entry_watch, candle_5m)
+        return set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m)
 
     def _evaluate_pending_entry_watch(self, recent_1m_candles):
-        if not self.pending_entry_watch or len(recent_1m_candles) < 2:
-            return None
-
-        pending = self.pending_entry_watch
-        latest = recent_1m_candles[-1]
-        previous = recent_1m_candles[-2]
-        created_at = pending["created_at"]
-        if created_at is not None and latest["time"] is not None:
-            created_at, latest_time = self._coerce_comparable_datetimes(created_at, latest["time"])
-            latest = {**latest, "time": latest_time}
-            previous_time = previous["time"]
-            _, previous_time = self._coerce_comparable_datetimes(created_at, previous_time)
-            previous = {**previous, "time": previous_time}
-        minutes_since_watch = int((latest["time"] - created_at).total_seconds() // 60)
-        if minutes_since_watch < 1:
-            return None
-        max_watch_minutes = self._pending_watch_max_minutes(pending)
-        if minutes_since_watch > max_watch_minutes:
-            return {"status": "EXPIRED", "reason": "1m confirmation window expired"}
-        pending["minutes_since_watch"] = minutes_since_watch
-
-        conflicts_too_high, conflict_reason = self._pending_watch_conflicts_too_high(pending)
-        if conflicts_too_high:
-            return {"status": "INVALIDATED", "reason": conflict_reason}
-
-        trigger_price = pending["trigger_price"]
-        invalidate_price = pending.get("invalidate_price")
-        direction = pending["direction"]
-        fast_track_ready = pending.get("fast_track_ready", False)
-        elite_watch_ready = pending.get("elite_watch_ready", False)
-        hybrid_mode = pending.get("hybrid_mode", False)
-        one_min_buffer = 2 if self.instrument == "NIFTY" else 5
-        if fast_track_ready:
-            one_min_buffer = 1 if self.instrument == "NIFTY" else 3
-        elif hybrid_mode:
-            one_min_buffer = 1 if self.instrument == "NIFTY" else 2
-        if elite_watch_ready and minutes_since_watch <= 3:
-            one_min_buffer = max(0 if self.instrument == "NIFTY" else 1, one_min_buffer - 1)
-        if self.instrument == "BANKNIFTY" and minutes_since_watch >= 6:
-            one_min_buffer = max(one_min_buffer, 4)
-        if self.instrument == "SENSEX" and minutes_since_watch >= 6:
-            one_min_buffer = max(one_min_buffer, 3)
-
-        if not self._pending_watch_risk_reward_ok(pending):
-            return {"status": "INVALIDATED", "reason": "Watch risk-reward not attractive for 1m trigger"}
-
-        if direction == "CE":
-            if invalidate_price is not None and latest["low"] <= invalidate_price:
-                return {"status": "INVALIDATED", "reason": "Watch invalidated before 1m trigger"}
-            trigger_hit = latest["close"] > trigger_price and latest["high"] >= trigger_price + one_min_buffer
-            body_ok = latest["close"] >= latest["open"]
-            follow_through_ok = latest["close"] > previous["high"] or (
-                previous["close"] > trigger_price and latest["close"] >= previous["close"]
-            )
-            if hybrid_mode:
-                trigger_hit = trigger_hit or (latest["high"] >= trigger_price and latest["close"] >= trigger_price)
-                follow_through_ok = follow_through_ok or latest["close"] >= trigger_price
-            if elite_watch_ready and minutes_since_watch <= 3:
-                trigger_hit = trigger_hit or (
-                    latest["high"] >= trigger_price
-                    and latest["close"] >= trigger_price
-                    and latest["close"] >= latest["open"]
-                )
-                follow_through_ok = follow_through_ok or (
-                    latest["close"] >= trigger_price
-                    and latest["close"] >= previous["close"]
-                )
-        else:
-            if invalidate_price is not None and latest["high"] >= invalidate_price:
-                return {"status": "INVALIDATED", "reason": "Watch invalidated before 1m trigger"}
-            trigger_hit = latest["close"] < trigger_price and latest["low"] <= trigger_price - one_min_buffer
-            body_ok = latest["close"] <= latest["open"]
-            follow_through_ok = latest["close"] < previous["low"] or (
-                previous["close"] < trigger_price and latest["close"] <= previous["close"]
-            )
-            if hybrid_mode:
-                trigger_hit = trigger_hit or (latest["low"] <= trigger_price and latest["close"] <= trigger_price)
-                follow_through_ok = follow_through_ok or latest["close"] <= trigger_price
-            if elite_watch_ready and minutes_since_watch <= 3:
-                trigger_hit = trigger_hit or (
-                    latest["low"] <= trigger_price
-                    and latest["close"] <= trigger_price
-                    and latest["close"] <= latest["open"]
-                )
-                follow_through_ok = follow_through_ok or (
-                    latest["close"] <= trigger_price
-                    and latest["close"] <= previous["close"]
-                )
-
-        volume_ok = self._one_minute_trigger_volume_ok(recent_1m_candles)
-        if hybrid_mode and pending.get("strong_watch_setup") and latest.get("volume", 0) > 0:
-            volume_ok = True if latest["volume"] >= max(previous.get("volume", 0) * 0.8, 1) else volume_ok
-        if elite_watch_ready and latest.get("volume", 0) > 0:
-            prior = recent_1m_candles[-4:-1]
-            prior_volumes = [candle.get("volume") or 0 for candle in prior]
-            avg_prior_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0
-            volume_ok = volume_ok or latest["volume"] >= max(avg_prior_volume * 0.7, previous.get("volume", 0) * 0.75, 1)
-        if fast_track_ready and trigger_hit and volume_ok:
-            if direction == "CE":
-                body_ok = body_ok or latest["high"] >= trigger_price + (one_min_buffer * 2)
-                follow_through_ok = follow_through_ok or latest["close"] >= trigger_price
-            else:
-                body_ok = body_ok or latest["low"] <= trigger_price - (one_min_buffer * 2)
-                follow_through_ok = follow_through_ok or latest["close"] <= trigger_price
-        elif hybrid_mode and trigger_hit and volume_ok:
-            body_ok = body_ok or abs((latest["close"] or 0) - (latest["open"] or 0)) > 0
-        if trigger_hit and not self._pending_watch_not_too_late(pending, latest["close"]):
-            return {"status": "INVALIDATED", "reason": "1m trigger arrived too late after move extension"}
-        if trigger_hit:
-            live_pressure_metrics = (
-                self.pressure.analyze(
-                    self.option_data,
-                    underlying_price=latest["close"],
-                )
-                if getattr(self, "pressure", None) and getattr(self, "option_data", None)
-                else None
-            )
-            quality_ok, quality_reason = self._pending_watch_quality_ok(pending, latest, previous)
-            if not quality_ok:
-                return {"status": "INVALIDATED", "reason": quality_reason}
-            selected_strike, _ = self.strike_selector.select_strike_with_reason(
-                price=latest["close"],
-                signal=direction,
-                volume_signal="STRONG" if volume_ok or pending.get("strong_watch_setup") else "NORMAL",
-                strategy_score=pending.get("score") or 0,
-                pressure_metrics=live_pressure_metrics,
-                cautions=pending.get("cautions"),
-                option_chain_data=self.option_data,
-                setup_type=pending.get("signal_type"),
-                time_regime=pending.get("time_regime"),
-            )
-            strict_confirmation = (pending.get("signal_type") or "").upper() in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}
-            confirmed, micro_reason, _, _ = self._confirm_signal_microstructure(
-                signal=direction,
-                selected_strike=selected_strike,
-                timestamp=latest["time"],
-                price=latest["close"],
-                strict=strict_confirmation,
-            )
-            if not confirmed:
-                if (
-                    micro_reason in {"Microstructure data unavailable", "Insufficient OI data"}
-                    and self._pending_watch_spike_micro_override_ready(pending, latest)
-                ):
-                    confirmed = True
-                    micro_reason = "Spike watch microstructure override"
-                else:
-                    return {"status": "INVALIDATED", "reason": f"1m trigger lacked microstructure confirmation: {micro_reason}"}
-            momentum_checker = getattr(self, "one_minute_momentum", None) or OneMinuteMomentumQuality(min_score=30)
-            momentum_quality = momentum_checker.evaluate(
-                direction=direction,
-                recent_1m_candles=recent_1m_candles,
-                volume_signal="STRONG" if volume_ok else "NORMAL",
-                oi_bias="BULLISH" if direction == "CE" else "BEARISH",
-                pressure_bias=(
-                    "NEUTRAL"
-                    if pending.get("pressure_conflict_level") not in {None, "NONE"}
-                    else ("BULLISH" if direction == "CE" else "BEARISH")
-                ),
-            )
-            if (
-                not momentum_quality["ok"]
-                and not (fast_track_ready or hybrid_mode or elite_watch_ready)
-            ):
-                return {"status": "INVALIDATED", "reason": momentum_quality["reason"]}
-            final_entry_score = calculate_option_buyer_entry_score(
-                base_entry_score=pending.get("entry_score"),
-                strategy_score=pending.get("score"),
-                momentum_score=momentum_quality.get("score"),
-                blockers=pending.get("blockers"),
-                cautions=pending.get("cautions"),
-                confidence=pending.get("confidence"),
-                signal_grade=pending.get("signal_grade"),
-            )
-            min_final_score = 64 if (fast_track_ready or hybrid_mode or elite_watch_ready) else 70
-            if final_entry_score < min_final_score:
-                return {
-                    "status": "INVALIDATED",
-                    "reason": f"Option-buyer entry score weak ({final_entry_score} < {min_final_score})",
-                }
-        if not trigger_hit or not body_ok or not follow_through_ok or not volume_ok:
-            return None
-
-        return {
-            "status": "TRIGGERED",
-            "price": latest["close"],
-            "time": latest["time"],
-            "reason": f"1m trigger confirmed after 5m watch | {momentum_quality['reason']} ({momentum_quality['score']})",
-            "selected_strike": selected_strike if trigger_hit else None,
-            "micro_reason": micro_reason if trigger_hit else None,
-            "momentum_quality": momentum_quality,
-            "option_buyer_entry_score": final_entry_score,
-            "option_buyer_action": option_buyer_action(final_entry_score),
-        }
+        return evaluate_pending_entry_watch(self, recent_1m_candles)
 
     def _maybe_fire_pending_entry_watch(self, latest_5m_candle):
-        if not self.pending_entry_watch:
-            return
-
-        recent_1m_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=6)
-        if len(recent_1m_candles) < 2:
-            return
-
-        latest_1m = recent_1m_candles[-1]
-        previous_1m = recent_1m_candles[-2] if len(recent_1m_candles) >= 2 else latest_1m
-        minute_key = latest_1m["time"]
-        if self.pending_entry_watch.get("last_checked_minute") == minute_key:
-            return
-        self.pending_entry_watch["last_checked_minute"] = minute_key
-
-        evaluation = self._evaluate_pending_entry_watch(recent_1m_candles)
-        if not evaluation:
-            self._safe_save_entry_decision_1m(
-                ts=minute_key,
-                pending=self.pending_entry_watch,
-                decision="WAIT",
-                latest_1m=latest_1m,
-                reason="Waiting for 1m trigger confirmation",
-            )
-            return
-
-        if evaluation["status"] in {"EXPIRED", "INVALIDATED"}:
-            self._safe_save_entry_decision_1m(
-                ts=minute_key,
-                pending=self.pending_entry_watch,
-                decision=evaluation["status"],
-                latest_1m=latest_1m,
-                evaluation=evaluation,
-                reason=evaluation.get("reason"),
-            )
-            self._clear_pending_entry_watch()
-            return
-
-        pending = self.pending_entry_watch
-        signal = pending["direction"]
-        trigger_price = pending["trigger_price"]
-        strike = evaluation.get("selected_strike")
-        option_contract = None
-        if self.option_data:
-            if strike is None:
-                strike, _ = self.strike_selector.select_strike_with_reason(
-                    price=evaluation["price"],
-                    signal=signal,
-                    volume_signal="NORMAL",
-                    strategy_score=pending["score"],
-                    pressure_metrics=None,
-                )
-            option_contract = self._get_option_contract_snapshot(strike, signal, before_ts=evaluation["time"])
-            option_contract = self._greek_enriched_option_contract(
-                option_contract,
-                signal,
-                evaluation["price"],
-                before_ts=evaluation["time"],
-            )
-
-        self._safe_save_entry_decision_1m(
-            ts=evaluation["time"],
-            pending=pending,
-            decision="TRIGGERED",
-            latest_1m=latest_1m,
-            evaluation=evaluation,
-            option_contract=option_contract,
-            strike=strike,
-            reason=f"{evaluation.get('reason')} | {evaluation.get('micro_reason') or 'micro confirmed'}",
-        )
-
-        option_price = (option_contract or {}).get("ltp")
-        stop_loss_option_price = None
-        first_target_option_price = None
-        if option_price is not None:
-            sl_pct = pending.get("option_stop_loss_pct")
-            t1_pct = pending.get("option_target_pct")
-            if sl_pct is not None:
-                stop_loss_option_price = round(float(option_price) * (1 - float(sl_pct) / 100.0), 2)
-            if t1_pct is not None:
-                first_target_option_price = round(float(option_price) * (1 + float(t1_pct) / 100.0), 2)
-
-        balanced_pro = {
-            "quality": pending.get("quality"),
-            "setup": pending.get("signal_type"),
-            "tradability": "ACTION",
-            "time_regime": pending.get("time_regime"),
-        }
-        self.strategy.last_entry_plan = {
-            "entry_above": trigger_price if signal == "CE" else None,
-            "entry_below": trigger_price if signal == "PE" else None,
-            "invalidate_price": pending.get("invalidate_price"),
-            "first_target_price": pending.get("first_target_price"),
-        }
-        entry_notification = {
-            "instrument": self.instrument,
-            "signal": signal,
-            "strike": strike,
-            "confidence": pending.get("confidence"),
-            "confidence_summary": evaluation.get("micro_reason") or pending.get("reason"),
-            "signal_type": pending.get("signal_type"),
-            "signal_grade": pending.get("signal_grade"),
-            "price": round(option_price, 2) if option_price is not None else round(evaluation["price"], 2),
-            "underlying_price": round(evaluation["price"], 2),
-            "trigger_price": trigger_price,
-            "invalidate_price": pending.get("invalidate_price"),
-            "first_target_price": pending.get("first_target_price"),
-            "stop_loss_option_price": stop_loss_option_price,
-            "first_target_option_price": first_target_option_price,
-            "option_stop_loss_pct": pending.get("option_stop_loss_pct"),
-            "option_target_pct": pending.get("option_target_pct"),
-            "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
-            "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
-            "entry_spread": option_contract.get("spread") if option_contract else None,
-            "context": pending.get("context"),
-            "risk_note": pending.get("risk_note"),
-            "greek_summary": format_greek_summary(option_contract),
-            "decision_label": f"CONFIRMED_{signal}_ENTRY",
-            "reason": f"{evaluation.get('reason')} | {evaluation.get('micro_reason') or 'micro confirmed'}",
-        }
-        self._run_async_notification(self.notifier.send_entry_trigger_notification, entry_notification)
-
-        signal_saved = self._safe_save_signal_issued(
-            ts=evaluation["time"],
-            signal=signal,
-            price=(option_contract or {}).get("ltp") if option_contract else evaluation["price"],
-            strike=strike,
-            reason=(
-                f"1m entry trigger after 5m watch | setup={pending.get('signal_type')} "
-                f"| watch_bucket={pending.get('watch_bucket')} | base_reason={pending.get('reason')}"
-            ),
-            balanced_pro=balanced_pro,
-            oi_mode="WATCH_TO_1M_TRIGGER",
-            telegram_sent=Config.ENABLE_ALERTS,
-            monitor_started=True,
-            entry_window_end=evaluation["time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES),
-            underlying_price=evaluation["price"],
-            option_contract=option_contract,
-            strike_reason="watch-trigger strike selection",
-            option_data_source=self.option_data_source,
-        )
-        if not signal_saved:
-            self._log("Signal issued save failed after entry notification dispatch")
+        return maybe_fire_pending_entry_watch(self, latest_5m_candle)
         self._start_trade_monitor(signal, latest_5m_candle, evaluation["price"], balanced_pro, strike)
         self.signals_generated += 1
         self._clear_pending_entry_watch()
 
     def _evaluate_trade_monitor(self, recent_1m_candles, recent_5m_candles):
-        """Generate momentum-focused option-buyer guidance using 1m and 5m structure."""
-        if not self.active_trade_monitor or not recent_1m_candles:
-            return None
-
-        signal = self.active_trade_monitor["signal"]
-        entry_price = self.active_trade_monitor["entry_price"]
-        strike = self.active_trade_monitor.get("strike")
-        latest_1m = recent_1m_candles[-1]
-        previous_1m = recent_1m_candles[-2] if len(recent_1m_candles) >= 2 else latest_1m
-        prior_window = recent_1m_candles[-6:-1] if len(recent_1m_candles) >= 6 else recent_1m_candles[:-1]
-        if not prior_window:
-            prior_window = recent_1m_candles
-        micro_high = max(candle["high"] for candle in prior_window)
-        micro_low = min(candle["low"] for candle in prior_window)
-        recent_closes = [candle["close"] for candle in recent_1m_candles[-3:]]
-        last_two_closes = [candle["close"] for candle in recent_1m_candles[-2:]]
-        last_close = latest_1m["close"]
-        option_snapshot = self._get_option_contract_snapshot(strike, signal, before_ts=latest_1m["time"])
-        option_snapshot = self._greek_enriched_option_contract(
-            option_snapshot,
-            signal,
-            last_close,
-            before_ts=latest_1m["time"],
-        )
-        option_price = option_snapshot.get("ltp") if option_snapshot and option_snapshot.get("ltp") is not None else last_close
-        vwap_value = self.vwap.get_vwap()
-        time_regime = self.strategy.last_time_regime
-        pnl_points = (
-            float(option_price) - float(entry_price)
-            if option_price is not None and entry_price is not None
-            else None
-        )
-        pnl_percent = self._option_pnl_percent(entry_price, option_price)
-        expansion_metrics = self._option_expansion_metrics(
-            entry_option_price=entry_price,
-            option_price=option_price,
-            entry_underlying_price=self.active_trade_monitor.get("entry_underlying_price"),
-            underlying_price=last_close,
-            entry_delta=self.active_trade_monitor.get("entry_delta"),
-        )
-        recent_5m_candles = recent_5m_candles or []
-        active_5m = recent_5m_candles[-1] if recent_5m_candles else None
-        prior_5m = recent_5m_candles[-2] if len(recent_5m_candles) >= 2 else active_5m
-        live_pressure_summary = None
-        try:
-            current_pressure_metrics = None
-            if getattr(self, "pressure", None) and getattr(self, "option_data", None):
-                try:
-                    current_pressure_metrics = self.pressure.analyze(
-                        self.option_data,
-                        underlying_price=last_close,
-                    )
-                except TypeError:
-                    current_pressure_metrics = self.pressure.analyze(self.option_data)
-            live_pressure_summary = self._build_pressure_summary(
-                pressure_metrics=current_pressure_metrics,
-                participation_metrics=None,
-                direction=signal,
-            )
-        except Exception:
-            live_pressure_summary = None
-
-        if option_price is not None:
-            max_fav = self.active_trade_monitor.get("max_favorable_option_ltp")
-            max_adv = self.active_trade_monitor.get("max_adverse_option_ltp")
-            self.active_trade_monitor["max_favorable_option_ltp"] = option_price if max_fav is None else max(max_fav, option_price)
-            self.active_trade_monitor["max_adverse_option_ltp"] = option_price if max_adv is None else min(max_adv, option_price)
-
-        if signal == "CE":
-            structure_break = last_close < micro_low
-            vwap_break = vwap_value is not None and last_close < vwap_value
-            momentum_strong = last_close >= micro_high or (len(recent_closes) >= 3 and recent_closes[-1] > recent_closes[-2] > recent_closes[-3])
-            momentum_fading = len(recent_closes) >= 3 and recent_closes[-1] < recent_closes[-2] and recent_closes[-2] <= recent_closes[-3]
-            five_min_break = prior_5m is not None and last_close < prior_5m["low"]
-            structure_text = f"1m intact | prev5m {'safe' if not five_min_break else 'under test'}"
-        else:
-            structure_break = last_close > micro_high
-            vwap_break = vwap_value is not None and last_close > vwap_value
-            momentum_strong = last_close <= micro_low or (len(recent_closes) >= 3 and recent_closes[-1] < recent_closes[-2] < recent_closes[-3])
-            momentum_fading = len(recent_closes) >= 3 and recent_closes[-1] > recent_closes[-2] and recent_closes[-2] >= recent_closes[-3]
-            five_min_break = prior_5m is not None and last_close > prior_5m["high"]
-            structure_text = f"1m intact | prev5m {'safe' if not five_min_break else 'under test'}"
-        confirmed_flip = self._infer_monitor_flip_signal(
-            current_signal=signal,
-            latest_1m=latest_1m,
-            previous_1m=previous_1m,
-            micro_high=micro_high,
-            micro_low=micro_low,
-            vwap_break=vwap_break,
-            structure_break=structure_break,
-        )
-        flip_score = (confirmed_flip or {}).get("flip_score")
-
-        minutes_active = max(1, int((latest_1m["time"] - self.active_trade_monitor["entry_time"]).total_seconds() // 60))
-        self.active_trade_monitor["minutes_active"] = minutes_active
-        stop_loss_pct = float(self.active_trade_monitor.get("stop_loss_pct") or getattr(self.config, "STOP_LOSS_PERCENT", Config.STOP_LOSS_PERCENT))
-        target_pct = float(self.active_trade_monitor.get("target_pct") or getattr(self.config, "TARGET_PERCENT", Config.TARGET_PERCENT))
-        trail_pct = float(self.active_trade_monitor.get("trail_pct") or getattr(self.config, "TRAIL_PERCENT", Config.TRAIL_PERCENT))
-        time_stop_warn_minutes = int(self.active_trade_monitor.get("time_stop_warn_minutes") or 3)
-        time_stop_exit_minutes = int(self.active_trade_monitor.get("time_stop_exit_minutes") or 5)
-        partial_trigger_pct = float(self.active_trade_monitor.get("partial_trigger_pct") or target_pct)
-        runner_trigger_pct = float(self.active_trade_monitor.get("runner_trigger_pct") or max(target_pct, partial_trigger_pct + 8.0))
-        runner_trail_bonus = float(self.active_trade_monitor.get("runner_trail_bonus") or 0.0)
-        allow_endgame_runner = bool(self.active_trade_monitor.get("allow_endgame_runner"))
-        time_extension_minutes = int(self.active_trade_monitor.get("time_extension_minutes") or 0)
-        partial_booked = bool(self.active_trade_monitor.get("partial_booked"))
-        profit_lock_armed = bool(self.active_trade_monitor.get("profit_lock_armed"))
-        expiry_fast_decay = bool(self.active_trade_monitor.get("expiry_fast_decay"))
-        peak_option_price = self.active_trade_monitor.get("max_favorable_option_ltp")
-        drawdown_from_peak_pct = self._drawdown_from_peak_percent(peak_option_price, option_price)
-        invalidate_underlying_price = self.active_trade_monitor.get("invalidate_underlying_price")
-        setup_bucket = self.active_trade_monitor.get("setup_bucket")
-        risk_note = self.active_trade_monitor.get("risk_note")
-        live_atr = self._estimate_live_atr(recent_5m_candles, fallback=self.active_trade_monitor.get("entry_atr"))
-        dynamic_trail_pct = self._dynamic_trail_percent(
-            base_trail_pct=trail_pct,
-            setup_bucket=setup_bucket,
-            live_atr=live_atr,
-            underlying_price=last_close,
-            time_regime=time_regime,
-        )
-        expansion_ratio = expansion_metrics.get("expansion_ratio")
-        premium_supportive = expansion_metrics.get("premium_supportive")
-        option_expanding = bool(
-            (pnl_percent is not None and pnl_percent >= max(4.0, target_pct * 0.35))
-            or premium_supportive
-        )
-        entry_pressure_bias = (self.active_trade_monitor.get("entry_pressure_bias") or "").upper()
-        live_pressure_bias = ((live_pressure_summary or {}).get("bias") or "").upper()
-        live_pressure_strength = ((live_pressure_summary or {}).get("strength") or "").upper()
-        live_pressure_edge = float(((live_pressure_summary or {}).get("edge") or 0.0))
-        entry_confidence = (self.active_trade_monitor.get("entry_confidence") or "").upper()
-        entry_score = float(self.active_trade_monitor.get("entry_score") or 0)
-        signal_grade = (self.active_trade_monitor.get("signal_grade") or "").upper()
-        signal_type = (self.active_trade_monitor.get("signal_type") or "").upper()
-        strong_breakout_runner = bool(
-            signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "AGGRESSIVE_CONTINUATION"}
-            and entry_confidence == "HIGH"
-            and signal_grade in {"A", "A+"}
-            and entry_score >= 80
-        )
-        opposite_pressure_active = (
-            (signal == "CE" and live_pressure_bias == "BEARISH")
-            or (signal == "PE" and live_pressure_bias == "BULLISH")
-        )
-        pressure_flip_exit = bool(
-            opposite_pressure_active
-            and (
-                live_pressure_strength == "STRONG"
-                or live_pressure_edge >= 14.0
-            )
-            and minutes_active >= 2
-            and (not option_expanding or structure_break or vwap_break)
-        )
-        if strong_breakout_runner:
-            pressure_flip_exit = bool(
-                opposite_pressure_active
-                and (live_pressure_strength == "STRONG" or live_pressure_edge >= 18.0)
-                and minutes_active >= 3
-                and (
-                    structure_break
-                    or five_min_break
-                    or (not option_expanding and momentum_fading and vwap_break)
-                )
-            )
-        pressure_flip_warning = bool(
-            opposite_pressure_active
-            and minutes_active >= 2
-            and live_pressure_edge >= 8.0
-            and not pressure_flip_exit
-        )
-        theta_risk_high = bool(expiry_fast_decay or time_regime in {"LATE_DAY", "ENDGAME"})
-        structure_improving = momentum_strong or (
-            signal == "CE" and latest_1m["close"] >= previous_1m["close"]
-        ) or (
-            signal == "PE" and latest_1m["close"] <= previous_1m["close"]
-        )
-        no_expansion = not option_expanding and not structure_improving
-        profit_lock_trigger_pct = float(
-            self.active_trade_monitor.get("profit_lock_trigger_pct")
-            or max(8.0, round(target_pct * 0.6, 2))
-        )
-        if theta_risk_high:
-            profit_lock_trigger_pct = max(6.0, round(profit_lock_trigger_pct - 1.0, 2))
-        profit_lock_should_arm = bool(pnl_percent is not None and pnl_percent >= profit_lock_trigger_pct)
-        if profit_lock_should_arm:
-            profit_lock_armed = True
-            self.active_trade_monitor["profit_lock_armed"] = True
-        psar_style_level = self.active_trade_monitor.get("psar_style_level")
-        if profit_lock_armed or momentum_strong:
-            psar_style_level = self._update_psar_style_level(
-                signal=signal,
-                existing_level=psar_style_level,
-                latest_1m=latest_1m,
-                previous_1m=previous_1m,
-                live_atr=live_atr,
-            )
-            self.active_trade_monitor["psar_style_level"] = psar_style_level
-        psar_break = bool(
-            psar_style_level is not None
-            and (
-                (signal == "CE" and latest_1m["close"] <= float(psar_style_level))
-                or (signal == "PE" and latest_1m["close"] >= float(psar_style_level))
-            )
-        )
-        momentum_and_pressure_supportive = bool(
-            momentum_strong
-            and not pressure_flip_warning
-            and not pressure_flip_exit
-            and not psar_break
-            and (
-                not live_pressure_bias
-                or live_pressure_bias == "NEUTRAL"
-                or (signal == "CE" and live_pressure_bias == "BULLISH")
-                or (signal == "PE" and live_pressure_bias == "BEARISH")
-            )
-        )
-        run_profile = self._classify_trade_run_profile(
-            pnl_percent=pnl_percent,
-            expansion_metrics=expansion_metrics,
-            minutes_active=minutes_active,
-            momentum_strong=momentum_strong,
-            pressure_flip_exit=pressure_flip_exit,
-            drawdown_from_peak_pct=drawdown_from_peak_pct,
-            setup_bucket=setup_bucket,
-            session_bucket=self.active_trade_monitor.get("session_bucket"),
-        )
-        runner_mode = run_profile == "RUNNER"
-        if runner_mode:
-            time_stop_exit_minutes += time_extension_minutes
-            dynamic_trail_pct = min(16.0, dynamic_trail_pct + runner_trail_bonus)
-        break_even_underlying_exit = bool(
-            profit_lock_armed
-            and invalidate_underlying_price is not None
-            and (
-                (signal == "CE" and latest_1m["close"] <= float(invalidate_underlying_price))
-                or (signal == "PE" and latest_1m["close"] >= float(invalidate_underlying_price))
-            )
-        )
-        trail_active_without_partial = bool(
-            profit_lock_armed
-            and not partial_booked
-            and drawdown_from_peak_pct is not None
-            and drawdown_from_peak_pct >= max(dynamic_trail_pct, 8.0)
-        )
-        slow_positive_theta_risk = bool(
-            theta_risk_high
-            and pnl_percent is not None
-            and pnl_percent > 0
-            and pnl_percent < max(target_pct, profit_lock_trigger_pct)
-            and minutes_active >= time_stop_warn_minutes
-            and (
-                no_expansion
-                or (
-                    not momentum_strong
-                    and not structure_improving
-                    and (drawdown_from_peak_pct is None or drawdown_from_peak_pct < max(dynamic_trail_pct, 8.0))
-                )
-            )
-        )
-        if strong_breakout_runner and pnl_percent is not None and pnl_percent > 0:
-            slow_positive_theta_risk = bool(
-                slow_positive_theta_risk
-                and minutes_active >= (time_stop_warn_minutes + 2)
-                and (
-                    drawdown_from_peak_pct is None
-                    or drawdown_from_peak_pct >= max(dynamic_trail_pct * 0.6, 5.0)
-                )
-            )
-
-        guidance = "HOLD_WITH_TRAIL"
-        decision_label = "HOLD_CONTEXT"
-        action_text = "Abhi hold karo. Structure abhi toot nahi raha."
-        reason = "Normal pullback is okay. Trend is acceptable while the recent 1-minute structure holds."
-
-        if pnl_percent is not None and pnl_percent <= -stop_loss_pct:
-            guidance = "EXIT_STOPLOSS"
-            decision_label = "HARD_STOP_EXIT"
-            action_text = "Abhi exit karo. Hard premium stop hit ho gaya."
-            reason = f"Option premium hit {pnl_percent:.2f}% P&L. Respect the hard {stop_loss_pct:.0f}% loss limit."
-        elif invalidate_underlying_price is not None and (
-            (signal == "CE" and latest_1m["low"] <= float(invalidate_underlying_price))
-            or (signal == "PE" and latest_1m["high"] >= float(invalidate_underlying_price))
-        ):
-            if break_even_underlying_exit and (pnl_percent is not None and pnl_percent > 0):
-                guidance = "EXIT_PROFIT_PROTECT"
-                decision_label = "TRAIL_EXIT"
-                action_text = "Profit protect karo aur exit lo. Winner ne follow-through lose kar diya."
-                reason = (
-                    f"Trade ne pehle +{profit_lock_trigger_pct:.0f}% zone touch kiya tha, isliye profit lock arm ho gaya. "
-                    "Ab underlying invalidation ke paas close aa gaya hai, to profit protect karke nikalna better hai."
-                )
-            else:
-                guidance = "EXIT_BIAS"
-                decision_label = "THESIS_FAILED_EXIT"
-                action_text = "Abhi exit karo. Original thesis invalid ho gayi."
-                if confirmed_flip:
-                    decision_label = confirmed_flip["label"]
-                    action_text = confirmed_flip["action_text"]
-                reason = (
-                    f"Underlying invalidation level {invalidate_underlying_price} got breached. "
-                    "Trade thesis is weakening before premium cap."
-                )
-        elif partial_booked and drawdown_from_peak_pct is not None and drawdown_from_peak_pct >= dynamic_trail_pct:
-            guidance = "EXIT_TRAIL"
-            decision_label = "TRAIL_EXIT"
-            action_text = "Runner exit karo. Trail hit ho gaya."
-            reason = (
-                f"Runner pulled back {drawdown_from_peak_pct:.2f}% from peak option price. "
-                f"Dynamic trail ({dynamic_trail_pct:.1f}%) hit ho gaya."
-            )
-        elif trail_active_without_partial:
-            guidance = "EXIT_TRAIL"
-            decision_label = "TRAIL_EXIT"
-            action_text = "Profit trail hit ho gaya. Winner ko protect karke exit lo."
-            reason = (
-                f"Peak se {drawdown_from_peak_pct:.2f}% pullback aaya after profit-lock activation. "
-                "Trailing exit ka purpose winner ko hold karna tha, not give it all back."
-            )
-        elif profit_lock_armed and psar_break and (pnl_percent is not None and pnl_percent > 0):
-            guidance = "EXIT_PROFIT_PROTECT"
-            decision_label = "TRAIL_EXIT"
-            action_text = "Profit protect exit lo. Ratcheting support toot gaya."
-            reason = (
-                f"PSAR-style trail level {psar_style_level} break ho gaya after profit-lock activation. "
-                "Trend-following exit ka purpose winner ko hold karna aur reversal par lock-in karna hai."
-            )
-        elif runner_mode and pnl_percent is not None and pnl_percent >= runner_trigger_pct and momentum_and_pressure_supportive:
-            guidance = "HOLD_STRONG"
-            decision_label = "LET_WINNER_RUN"
-            action_text = "Yeh runner lag raha hai. Trail ke saath hold karo, jaldi partial mat karo."
-            reason = (
-                f"Trade ne +{runner_trigger_pct:.0f}% runner zone touch kiya hai aur premium expansion supportive hai. "
-                "Is type ke breakout winner ko trail ke saath chalne dena better hai."
-            )
-        elif not partial_booked and pnl_percent is not None and pnl_percent >= target_pct and momentum_and_pressure_supportive:
-            guidance = "HOLD_STRONG"
-            decision_label = "HOLD_STRONG"
-            action_text = "Profit ko chalne do. Trail active hai, jaldi exit mat karo."
-            reason = (
-                f"Target zone (+{target_pct:.0f}%) hit ho chuka hai aur momentum abhi supportive hai. "
-                "Trailing-stop logic ke hisaab se winner ko run karne dena better hai."
-            )
-        elif not partial_booked and pnl_percent is not None and pnl_percent >= partial_trigger_pct and not runner_mode:
-            guidance = "BOOK_PARTIAL"
-            decision_label = "BOOK_PARTIAL_NOW"
-            action_text = "Abhi partial book karo. Runner ko trail par chhodo."
-            reason = (
-                f"Option premium reached {pnl_percent:.2f}% P&L. "
-                f"Partial booking near +{partial_trigger_pct:.0f}% objective option buyer ke liye safer hai."
-            )
-        elif slow_positive_theta_risk:
-            guidance = "EXIT_PROFIT_PROTECT"
-            decision_label = "TRAIL_EXIT"
-            action_text = "Small profit ko protect karo. Slow option move me theta risk badh raha hai."
-            reason = (
-                f"Trade profit me hai but {time_stop_warn_minutes} min ke andar move decisive nahi bana. "
-                "Option buyer ke liye aise slow winners jaldi fade ho sakte hain, isliye protect karna better hai."
-            )
-        elif minutes_active >= time_stop_exit_minutes and no_expansion and (pnl_percent is None or pnl_percent <= 0):
-            guidance = "EXIT_TIMESTOP"
-            decision_label = "TIME_STOP_EXIT"
-            action_text = "Abhi exit karo. Move expand nahi hua aur time nikal gaya."
-            reason = (
-                f"{time_stop_exit_minutes} min ke baad bhi move expand nahi hua. "
-                "Time stop exit better hai than waiting for theta bleed."
-            )
-        elif minutes_active >= time_stop_warn_minutes and no_expansion:
-            guidance = "TIME_DECAY_RISK"
-            decision_label = "HIGH_NOISE_SKIP"
-            action_text = "Fresh add mat karo. Setup abhi noisy hai aur premium expand nahi kar raha."
-            reason = (
-                f"{time_stop_warn_minutes} min ke andar meaningful expansion nahi aayi. "
-                "Aise slow option trades theta bleed me badal sakte hain."
-            )
-            if expansion_ratio is not None:
-                reason += f" Premium expansion ratio {expansion_ratio:.2f} raha."
-        elif pressure_flip_exit:
-            guidance = "EXIT_BIAS"
-            decision_label = "THESIS_FAILED_EXIT"
-            action_text = "Abhi exit karo. Live option pressure trade ke opposite flip ho gaya."
-            if confirmed_flip:
-                decision_label = confirmed_flip["label"]
-                action_text = confirmed_flip["action_text"]
-            pressure_text = (live_pressure_summary or {}).get("summary") or live_pressure_bias
-            reason = (
-                f"Entry ke baad pressure bias {entry_pressure_bias or 'UNKNOWN'} se flip hokar "
-                f"{live_pressure_bias or 'OPPOSITE'} ho gaya. {pressure_text}. "
-                "Jab price structure aur options participation saath na dein, thesis fail maana better hai."
-            )
-        elif structure_break and vwap_break:
-            guidance = "EXIT_BIAS"
-            decision_label = "THESIS_FAILED_EXIT"
-            action_text = "Abhi exit karo. Structure aur VWAP dono break ho gaye."
-            if confirmed_flip:
-                decision_label = confirmed_flip["label"]
-                action_text = confirmed_flip["action_text"]
-            reason = "Recent 1-minute structure broke with VWAP loss. This is more than a normal pullback."
-        elif five_min_break and minutes_active >= 3:
-            guidance = "EXIT_BIAS"
-            decision_label = "THESIS_FAILED_EXIT"
-            action_text = "Abhi cautious exit lo. 5m structure against ja raha hai."
-            reason = "Previous 5-minute structure broke against your trade. Momentum may be losing control."
-        elif momentum_fading and (pnl_points is not None and pnl_points > 0):
-            if profit_lock_armed:
-                guidance = "HOLD_WITH_TRAIL"
-                decision_label = "HOLD_CONTEXT"
-                action_text = "Profit me ho. Trail active rakho, random profit booking mat karo."
-                reason = (
-                    "Momentum thoda slow hua hai, lekin profit-lock arm ho chuka hai. "
-                    "Winner ko trail ke saath hold karna jaldi exit se better hai."
-                )
-            else:
-                guidance = "BOOK_PARTIAL"
-                decision_label = "BOOK_PARTIAL_NOW"
-                action_text = "Profit me ho. Partial book karna safer hai."
-                reason = "Profit is available and momentum is slowing. Partial booking can reduce pressure."
-        elif momentum_strong and (pnl_points is not None and pnl_points > 0):
-            guidance = "HOLD_STRONG"
-            decision_label = "HOLD_STRONG"
-            action_text = "Abhi hold karo. Momentum strong hai."
-            reason = "Fresh momentum is expanding. Do not react to a normal 1-minute pullback."
-        elif momentum_fading:
-            guidance = "MOMENTUM_PAUSE"
-            decision_label = "WAIT_CONFIRMATION"
-            action_text = "Abhi wait karo. Momentum pause hai, flip abhi confirm nahi hai."
-            reason = "Momentum paused, but this still looks like a normal pullback unless structure breaks."
-        elif pressure_flip_warning:
-            guidance = "THESIS_WEAKENING"
-            decision_label = "WAIT_CONFIRMATION"
-            action_text = "Trade weak ho raha hai. Exit ke liye prepared raho agar next candle support na kare."
-            pressure_text = (live_pressure_summary or {}).get("summary") or live_pressure_bias
-            reason = (
-                f"Live pressure ab trade ke opposite side ja raha hai: {pressure_text}. "
-                "Abhi hard exit nahi, lekin thesis weaken ho rahi hai."
-            )
-        elif profit_lock_armed and psar_break:
-            guidance = "THESIS_WEAKENING"
-            decision_label = "WAIT_CONFIRMATION"
-            action_text = "Profit trail ke paas ho. Agar next candle recover na kare to exit lo."
-            reason = (
-                f"PSAR-style trail level {psar_style_level} ke paas price aa gaya hai. "
-                "Winner ko hold karo, but give-back ko ignore mat karo."
-            )
-        elif len(last_two_closes) == 2 and ((signal == "CE" and last_two_closes[-1] <= last_two_closes[-2]) or (signal == "PE" and last_two_closes[-1] >= last_two_closes[-2])):
-            guidance = "NORMAL_PULLBACK"
-            decision_label = "HOLD_CONTEXT"
-            action_text = "Small pullback normal hai. Abhi panic exit mat karo."
-            reason = "A small opposite candle is normal. No real structure damage yet."
-
-        if (
-            time_regime == "ENDGAME"
-            and (pnl_points is not None and pnl_points > 0)
-            and guidance in {"HOLD_STRONG", "HOLD_WITH_TRAIL"}
-            and not (runner_mode and allow_endgame_runner and momentum_and_pressure_supportive)
-        ):
-            guidance = "BOOK_PARTIAL"
-            decision_label = "BOOK_PARTIAL_NOW"
-            action_text = "Late-day profit hai. Partial book karna safer hai."
-            reason = "Late-day move is in profit; partial booking is safer for an option buyer."
-
-        return {
-            "instrument": self.instrument,
-            "signal": signal,
-            "signal_type": self.active_trade_monitor.get("signal_type"),
-            "setup_bucket": setup_bucket,
-            "guidance": guidance,
-            "decision_label": decision_label,
-            "journal_note": self._build_journal_note(
-                decision_label,
-                action_text,
-                f"flip_score={(flip_score or {}).get('score')}" if flip_score else None,
-            ),
-            "action_text": action_text,
-            "reason": reason,
-            "structure": structure_text,
-            "price": last_close,
-            "option_price": option_price,
-            "entry_price": entry_price,
-            "entry_underlying_price": self.active_trade_monitor.get("entry_underlying_price"),
-            "option_bid": option_snapshot.get("top_bid_price") if option_snapshot else None,
-            "option_ask": option_snapshot.get("top_ask_price") if option_snapshot else None,
-            "option_spread": option_snapshot.get("spread") if option_snapshot else None,
-            "strike": strike,
-            "pnl_points": pnl_points,
-            "pnl_percent": pnl_percent,
-            "max_favorable_ltp": self.active_trade_monitor.get("max_favorable_option_ltp"),
-            "max_adverse_ltp": self.active_trade_monitor.get("max_adverse_option_ltp"),
-            "drawdown_from_peak_pct": drawdown_from_peak_pct,
-            "stop_loss_pct": stop_loss_pct,
-            "target_pct": target_pct,
-            "trail_pct": trail_pct,
-            "dynamic_trail_pct": dynamic_trail_pct,
-            "flip_score": (flip_score or {}).get("score"),
-            "flip_confidence": (flip_score or {}).get("confidence"),
-            "expansion_ratio": expansion_ratio,
-            "actual_option_move": expansion_metrics.get("actual_option_move"),
-            "expected_option_move": expansion_metrics.get("expected_option_move"),
-            "premium_supportive": premium_supportive,
-            "stop_loss_option_price": self.active_trade_monitor.get("stop_loss_option_price"),
-            "first_target_option_price": self.active_trade_monitor.get("first_target_option_price"),
-            "invalidate_underlying_price": invalidate_underlying_price,
-            "time_stop_warn_minutes": time_stop_warn_minutes,
-            "time_stop_exit_minutes": time_stop_exit_minutes,
-            "partial_booked": partial_booked,
-            "profit_lock_armed": profit_lock_armed,
-            "profit_lock_trigger_pct": profit_lock_trigger_pct,
-            "psar_style_level": psar_style_level,
-            "live_atr": live_atr,
-            "expiry_fast_decay": expiry_fast_decay,
-            "theta_risk_high": theta_risk_high,
-            "run_profile": run_profile,
-            "runner_mode": runner_mode,
-            "partial_trigger_pct": partial_trigger_pct,
-            "runner_trigger_pct": runner_trigger_pct,
-            "quality": self.active_trade_monitor["quality"],
-            "time_regime": time_regime,
-            "heikin_ashi": (self.strategy.last_heikin_ashi or {}).get("bias"),
-            "risk_note": risk_note,
-            "entry_pressure_bias": entry_pressure_bias,
-            "live_pressure_bias": live_pressure_bias,
-            "live_pressure_summary": (live_pressure_summary or {}).get("summary"),
-            "greek_summary": format_greek_summary(option_snapshot),
-        }
+        return evaluate_trade_monitor(self, recent_1m_candles, recent_5m_candles)
 
     def _maybe_send_trade_monitor_update(self, latest_5m_candle):
-        """Send Telegram/manual monitor update every minute after a live signal."""
-        if not self.active_trade_monitor:
-            return
-
-        recent_1m_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=20)
-        if not recent_1m_candles:
-            return
-
-        latest_1m = recent_1m_candles[-1]
-        minute_key = latest_1m["time"]
-        if self.active_trade_monitor["last_notified_minute"] == minute_key:
-            return
-
-        recent_5m_candles = self.db_writer.fetch_recent_candles_5m(self.instrument, limit=3)
-        monitor_data = self._evaluate_trade_monitor(recent_1m_candles, recent_5m_candles)
-        if not monitor_data:
-            return
-
-        self.active_trade_monitor["last_notified_minute"] = minute_key
-        self._safe_save_trade_monitor_event(minute_key, monitor_data)
-        self._safe_save_option_signal_outcome(minute_key, monitor_data)
-        if self._should_send_trade_monitor_alert(monitor_data, minute_key):
-            self.notifier.send_trade_monitor_update(monitor_data)
-            self.active_trade_monitor["last_sent_monitor_minute"] = minute_key
-            self.active_trade_monitor["last_sent_guidance"] = monitor_data.get("guidance")
-            self.active_trade_monitor["last_sent_decision_label"] = monitor_data.get("decision_label")
-            self.active_trade_monitor["last_sent_pnl_percent"] = monitor_data.get("pnl_percent")
-        if monitor_data["guidance"] == "BOOK_PARTIAL":
-            self.active_trade_monitor["partial_booked"] = True
-
-        exit_guidances = {"EXIT_BIAS", "EXIT_STOPLOSS", "EXIT_TRAIL", "EXIT_TIMESTOP", "EXIT_PROFIT_PROTECT"}
-        if monitor_data["guidance"] in exit_guidances or self.active_trade_monitor["minutes_active"] >= 20:
-            self._sync_ml_outcome_from_monitor()
-            self.active_trade_monitor = None
+        return maybe_send_trade_monitor_update(self, latest_5m_candle)
 
     @staticmethod
     def _monitor_alert_is_high_priority(guidance):
-        return guidance in {
-            "BOOK_PARTIAL",
-            "EXIT_BIAS",
-            "EXIT_STOPLOSS",
-            "EXIT_TRAIL",
-            "EXIT_TIMESTOP",
-            "EXIT_PROFIT_PROTECT",
-        }
+        return monitor_alert_is_high_priority(guidance)
 
     def _should_send_trade_monitor_alert(self, monitor_data, minute_key):
-        if not self.active_trade_monitor:
-            return False
-
-        guidance = monitor_data.get("guidance")
-        decision_label = monitor_data.get("decision_label")
-        last_guidance = self.active_trade_monitor.get("last_sent_guidance")
-        last_label = self.active_trade_monitor.get("last_sent_decision_label")
-        last_sent_minute = self.active_trade_monitor.get("last_sent_monitor_minute")
-        last_pnl_percent = self.active_trade_monitor.get("last_sent_pnl_percent")
-        pnl_percent = monitor_data.get("pnl_percent")
-
-        if last_sent_minute is None:
-            return True
-        if self._monitor_alert_is_high_priority(guidance):
-            return True
-        if guidance != last_guidance or decision_label != last_label:
-            return True
-
-        minutes_since_last_sent = max(
-            0,
-            int((minute_key - last_sent_minute).total_seconds() // 60),
-        )
-        if guidance in {"THESIS_WEAKENING", "NORMAL_PULLBACK", "HOLD_WITH_TRAIL"}:
-            return minutes_since_last_sent >= 3
-        if guidance == "HOLD_STRONG":
-            pnl_jump = (
-                abs(float(pnl_percent) - float(last_pnl_percent))
-                if pnl_percent is not None and last_pnl_percent is not None
-                else 0.0
-            )
-            return minutes_since_last_sent >= 3 or pnl_jump >= 4.0
-        return minutes_since_last_sent >= 2
+        return should_send_trade_monitor_alert(self, monitor_data, minute_key)
 
     def _classify_base_bias(self, price, vwap_value, oi_bias, oi_ladder_data):
         """Balanced Pro layer 1: derive directional bias."""
@@ -3161,6 +1985,10 @@ class SignalService:
             "quality": quality,
             "tradability": tradability,
             "time_regime": self.strategy.last_time_regime,
+            "opening_bias": getattr(self.strategy, "last_opening_bias", "UNKNOWN"),
+            "active_day_state": getattr(self.strategy, "last_active_day_state", "UNKNOWN"),
+            "day_state_direction": getattr(self.strategy, "last_day_state_direction", "NONE"),
+            "day_state_detail": getattr(self.strategy, "last_day_state_detail", ""),
             "context_score": self.strategy.last_context_score,
             "entry_score": self.strategy.last_entry_score,
             "decision_state": decision_state,
@@ -4210,6 +3038,10 @@ class SignalService:
                 balanced_pro["quality"] if balanced_pro else None,
                 balanced_pro["tradability"] if balanced_pro else None,
                 balanced_pro["time_regime"] if balanced_pro else None,
+                balanced_pro.get("opening_bias") if balanced_pro else None,
+                balanced_pro.get("active_day_state") if balanced_pro else None,
+                balanced_pro.get("day_state_direction") if balanced_pro else None,
+                balanced_pro.get("day_state_detail") if balanced_pro else None,
                 oi_mode,
                 list(self.strategy.last_blockers or []),
                 list(self.strategy.last_cautions or []),
@@ -4303,7 +3135,7 @@ class SignalService:
         return "FLAT"
 
     def _safe_save_option_signal_horizon_outcome(self, ts, monitor_data, minutes_since_signal):
-        if minutes_since_signal not in {1, 2, 3, 5}:
+        if minutes_since_signal not in {1, 2, 3, 5, 10, 15, 20}:
             return
         try:
             entry_price = monitor_data.get("entry_price")
@@ -4493,6 +3325,10 @@ class SignalService:
                 balanced_pro["setup"] if balanced_pro else None,
                 balanced_pro["tradability"] if balanced_pro else None,
                 balanced_pro["time_regime"] if balanced_pro else None,
+                balanced_pro.get("opening_bias") if balanced_pro else None,
+                balanced_pro.get("active_day_state") if balanced_pro else None,
+                balanced_pro.get("day_state_direction") if balanced_pro else None,
+                balanced_pro.get("day_state_detail") if balanced_pro else None,
                 oi_mode,
                 reason,
                 strike_reason,
@@ -4724,6 +3560,7 @@ class SignalService:
                 option_chain_data=self.option_data,
                 setup_type=setup,
                 time_regime=(balanced_pro or {}).get("time_regime"),
+                candle_time=self._current_candle_time,
             ) if self.option_data else None,
             selected_option_contract=None,
             balanced_pro=balanced_pro,
@@ -4870,7 +3707,7 @@ class SignalService:
 
         now_ts = time_module.time()
         state = self.watch_alert_state.get(watch_payload["key"])
-        if state and now_ts - state["time"] < 20 * 60:
+        if state and now_ts - state["time"] < 30 * 60:
             score_improved = (watch_payload.get("score") or 0) >= state.get("score", 0) + 5
             entry_score_improved = (watch_payload.get("entry_score") or 0) >= state.get("entry_score", 0) + 4
             blockers_reduced = len(watch_payload.get("blockers") or []) < state.get("blocker_count", 99)
@@ -4887,10 +3724,10 @@ class SignalService:
                     and key[0] == instrument_key
                     and key[1] in {"CE", "PE"}
                     and key[1] != direction
-                    and now_ts - old_state.get("time", 0) < 10 * 60
+                    and now_ts - old_state.get("time", 0) < 15 * 60
                 ):
-                    score_improved = (watch_payload.get("score") or 0) >= old_state.get("score", 0) + 8
-                    entry_score_improved = (watch_payload.get("entry_score") or 0) >= old_state.get("entry_score", 0) + 6
+                    score_improved = (watch_payload.get("score") or 0) >= old_state.get("score", 0) + 10
+                    entry_score_improved = (watch_payload.get("entry_score") or 0) >= old_state.get("entry_score", 0) + 8
                     if not (score_improved or entry_score_improved):
                         return
 
@@ -4936,6 +3773,8 @@ class SignalService:
             return watch_bucket == "WATCH_CONFIRMATION_PENDING"
 
         if watch_bucket == "WATCH_CONFIRMATION_PENDING":
+            if "participation_baseline_weak" in cautions:
+                return False
             return (
                 signal_grade in {"A", "A+"}
                 and score >= 78
@@ -4948,6 +3787,7 @@ class SignalService:
                 and score >= 82
                 and entry_score >= 76
                 and "participation_weak" not in cautions
+                and "participation_baseline_weak" not in cautions
             )
         return False
 
@@ -5318,6 +4158,7 @@ class SignalService:
                     option_chain_data=self.option_data,
                     setup_type=(balanced_pro or {}).get("setup"),
                     time_regime=(balanced_pro or {}).get("time_regime"),
+                    candle_time=candle_5m["time"],
                 )
             option_candidates = self._build_option_candidates(
                 underlying_price=price,
@@ -5361,6 +4202,7 @@ class SignalService:
                     option_chain_data=self.option_data,
                     setup_type=self.strategy.last_signal_type,
                     time_regime=(balanced_pro or {}).get("time_regime"),
+                    candle_time=candle_5m["time"],
                 )
                 selected_option_contract = self._get_option_contract_snapshot(selected_strike, signal, before_ts=candle_5m.get("close_time") or candle_5m["time"])
 

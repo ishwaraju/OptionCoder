@@ -853,3 +853,75 @@ def test_sensex_trend_day_context_helper_is_available_beyond_nifty():
     )
 
     assert ready is True
+
+
+def test_day_state_classifier_marks_bearish_open_then_bullish_reclaim_as_reversal():
+    strategy = BreakoutStrategy()
+    recent = [
+        {"time": datetime(2026, 5, 13, 9, 15), "open": 100, "high": 101, "low": 97, "close": 98},
+        {"time": datetime(2026, 5, 13, 9, 20), "open": 98, "high": 99, "low": 95, "close": 96},
+        {"time": datetime(2026, 5, 13, 9, 25), "open": 96, "high": 97, "low": 94, "close": 95},
+        {"time": datetime(2026, 5, 13, 9, 30), "open": 95, "high": 96, "low": 93, "close": 94},
+        {"time": datetime(2026, 5, 13, 9, 35), "open": 94, "high": 95, "low": 92, "close": 93},
+        {"time": datetime(2026, 5, 13, 9, 40), "open": 93, "high": 94, "low": 91, "close": 92},
+        {"time": datetime(2026, 5, 13, 9, 45), "open": 92, "high": 94, "low": 91, "close": 93},
+        {"time": datetime(2026, 5, 13, 9, 50), "open": 93, "high": 96, "low": 92, "close": 95},
+        {"time": datetime(2026, 5, 13, 9, 55), "open": 95, "high": 99, "low": 94, "close": 98},
+        {"time": datetime(2026, 5, 13, 10, 0), "open": 98, "high": 102, "low": 97, "close": 101},
+        {"time": datetime(2026, 5, 13, 10, 5), "open": 101, "high": 104, "low": 100, "close": 103},
+        {"time": datetime(2026, 5, 13, 10, 10), "open": 103, "high": 106, "low": 102, "close": 105},
+    ]
+
+    opening_bias, _ = strategy._derive_opening_bias(recent, vwap=99, atr=4)
+    day_state = strategy._derive_active_day_state(
+        recent_candles_5m=recent,
+        price=105,
+        vwap=99,
+        atr=4,
+        pressure_metrics={"pressure_bias": "BULLISH"},
+        opening_bias=opening_bias,
+        time_regime="MID_MORNING",
+    )
+
+    assert opening_bias == "OPEN_BEARISH"
+    assert day_state["state"] == "REVERSAL_UNDERWAY"
+    assert day_state["direction"] == "CE"
+
+
+def test_day_state_classifier_marks_clean_bear_trend_active():
+    strategy = BreakoutStrategy()
+    recent = [
+        {"time": datetime(2026, 5, 13, 11, 0), "open": 200, "high": 201, "low": 198, "close": 199},
+        {"time": datetime(2026, 5, 13, 11, 5), "open": 199, "high": 200, "low": 196, "close": 197},
+        {"time": datetime(2026, 5, 13, 11, 10), "open": 197, "high": 198, "low": 194, "close": 195},
+        {"time": datetime(2026, 5, 13, 11, 15), "open": 195, "high": 196, "low": 192, "close": 193},
+        {"time": datetime(2026, 5, 13, 11, 20), "open": 193, "high": 194, "low": 190, "close": 191},
+        {"time": datetime(2026, 5, 13, 11, 25), "open": 191, "high": 192, "low": 188, "close": 189},
+    ]
+    day_state = strategy._derive_active_day_state(
+        recent_candles_5m=recent,
+        price=189,
+        vwap=195,
+        atr=4,
+        pressure_metrics={"pressure_bias": "BEARISH"},
+        opening_bias="OPEN_BALANCED",
+        time_regime="MIDDAY",
+    )
+
+    assert day_state["state"] == "BEAR_TREND_ACTIVE"
+    assert day_state["direction"] == "PE"
+
+
+def test_day_state_adjustment_penalizes_opposite_direction():
+    strategy = BreakoutStrategy()
+    components = []
+    score, cautions = strategy._apply_day_state_adjustment(
+        score=78,
+        scored_direction="CE",
+        cautions=[],
+        components=components,
+        day_state={"state": "BEAR_TREND_ACTIVE", "direction": "PE", "detail": "rolling_bear_trend"},
+    )
+
+    assert score == 70.0
+    assert "day_state_opposes_direction" in cautions

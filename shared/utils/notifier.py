@@ -96,12 +96,15 @@ def _decision_label_text(label):
         "HARD_STOP_EXIT": "Hard Stop Exit",
         "TRAIL_EXIT": "Trail Exit",
         "BOOK_PARTIAL_NOW": "Book Partial",
+        "TRIM": "Trim",
         "LET_WINNER_RUN": "Let Winner Run",
         "TIME_STOP_EXIT": "Time Stop Exit",
         "HIGH_NOISE_SKIP": "High Noise Skip",
         "WAIT_CONFIRMATION": "Wait Confirmation",
         "HOLD_CONTEXT": "Hold Context",
         "HOLD_STRONG": "Hold Strong",
+        "EXIT_PROTECT": "Exit Protect",
+        "THESIS_BROKEN": "Thesis Broken",
     }
     if not label:
         return None
@@ -179,10 +182,14 @@ def _monitor_guidance_badge(guidance, decision_label=None):
         return "TRAIL ACTIVE"
     if guidance == "EXIT_PROFIT_PROTECT":
         return "PROFIT LOCK EXIT"
+    if guidance == "EXIT_PROTECT":
+        return "PROTECT EXIT"
     if guidance in {"EXIT_BIAS", "EXIT_STOPLOSS", "EXIT_TIMESTOP", "EXIT_TRAIL"}:
         return "EXIT NOW"
-    if guidance == "BOOK_PARTIAL":
+    if guidance in {"BOOK_PARTIAL", "TRIM"}:
         return "BOOK PARTIAL"
+    if guidance == "THESIS_BROKEN":
+        return "THESIS BROKEN"
     if guidance in {"THESIS_WEAKENING", "MOMENTUM_PAUSE", "TIME_DECAY_RISK"}:
         return "WATCH CLOSELY"
     if decision_label in {"THESIS_FAILED_EXIT", "HARD_STOP_EXIT", "TRAIL_EXIT", "TIME_STOP_EXIT"}:
@@ -198,10 +205,14 @@ def _monitor_action_line(guidance, action_text, reason=None):
         return "Profit protect ho raha hai. Position hold rakho, trail ko respect karo."
     if guidance == "EXIT_PROFIT_PROTECT":
         return "Profit bachao aur exit lo. Trade ka best phase shayad nikal chuka hai."
+    if guidance == "EXIT_PROTECT":
+        return "Jo bacha hua profit hai usko protect karke exit lo."
     if guidance in {"EXIT_BIAS", "EXIT_STOPLOSS", "EXIT_TIMESTOP", "EXIT_TRAIL"}:
         return action_text or "Abhi exit karo."
-    if guidance == "BOOK_PARTIAL":
+    if guidance in {"BOOK_PARTIAL", "TRIM"}:
         return "Kuch profit book karo, baaki ko trail par chalne do."
+    if guidance == "THESIS_BROKEN":
+        return action_text or "Trade ki internal quality toot rahi hai, exit lo."
     if guidance in {"THESIS_WEAKENING", "MOMENTUM_PAUSE", "TIME_DECAY_RISK"}:
         return action_text or "Agli candle closely dekho."
     return action_text or reason

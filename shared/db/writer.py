@@ -259,6 +259,10 @@ class DBWriter:
         )
         """
         structured_columns = (
+            "opening_bias",
+            "active_day_state",
+            "day_state_direction",
+            "day_state_detail",
             "blockers_json",
             "cautions_json",
             "candidate_signal_type",
@@ -290,13 +294,14 @@ class DBWriter:
                 volume_signal, oi_bias, oi_trend, build_up, pressure_bias,
                 ce_delta_total, pe_delta_total, pcr,
                 orb_high, orb_low, vwap, atr, strike,
-                base_bias, setup_type, signal_quality, tradability, time_regime, oi_mode,
+                base_bias, setup_type, signal_quality, tradability, time_regime,
+                opening_bias, active_day_state, day_state_direction, day_state_detail, oi_mode,
                 blockers_json, cautions_json, candidate_signal_type, candidate_signal_grade,
                 candidate_confidence, actionable_block_reason, watch_bucket,
                 pressure_conflict_level, confidence_summary, entry_above, entry_below,
                 invalidate_price, first_target_price
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (ts, instrument) DO UPDATE
             SET price = EXCLUDED.price,
                 signal = EXCLUDED.signal,
@@ -321,6 +326,10 @@ class DBWriter:
                 signal_quality = EXCLUDED.signal_quality,
                 tradability = EXCLUDED.tradability,
                 time_regime = EXCLUDED.time_regime,
+                opening_bias = EXCLUDED.opening_bias,
+                active_day_state = EXCLUDED.active_day_state,
+                day_state_direction = EXCLUDED.day_state_direction,
+                day_state_detail = EXCLUDED.day_state_detail,
                 oi_mode = EXCLUDED.oi_mode,
                 blockers_json = EXCLUDED.blockers_json,
                 cautions_json = EXCLUDED.cautions_json,
@@ -339,7 +348,11 @@ class DBWriter:
             self._execute(query, tuple(row))
             return
 
-        legacy_row = row[:26]
+        legacy_row = (
+            row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9],
+            row[10], row[11], row[12], row[13], row[14], row[15], row[16], row[17], row[18], row[19],
+            row[20], row[21], row[22], row[23], row[24], row[29],
+        )
         query = """
         INSERT INTO strategy_decisions_5m
         (
@@ -399,6 +412,10 @@ class DBWriter:
             "entry_delta",
             "strike_reason",
             "option_data_source",
+            "opening_bias",
+            "active_day_state",
+            "day_state_direction",
+            "day_state_detail",
         )
         if self._signals_issued_has_option_columns is None:
             self._signals_issued_has_option_columns = self._table_has_columns(
@@ -412,11 +429,12 @@ class DBWriter:
             (
                 ts, instrument, signal, price, underlying_price, strike, atm_strike, distance_from_atm,
                 option_entry_ltp, entry_bid, entry_ask, entry_spread, entry_iv, entry_delta,
-                strategy_score, signal_quality, setup_type, tradability, time_regime, oi_mode,
+                strategy_score, signal_quality, setup_type, tradability, time_regime,
+                opening_bias, active_day_state, day_state_direction, day_state_detail, oi_mode,
                 reason, strike_reason, option_data_source, confidence_summary, entry_above, entry_below,
                 invalidate_price, first_target_price, telegram_sent, monitor_started, entry_window_end
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (ts, instrument, signal, strike) DO UPDATE
             SET price = EXCLUDED.price,
                 underlying_price = EXCLUDED.underlying_price,
@@ -433,6 +451,10 @@ class DBWriter:
                 setup_type = EXCLUDED.setup_type,
                 tradability = EXCLUDED.tradability,
                 time_regime = EXCLUDED.time_regime,
+                opening_bias = EXCLUDED.opening_bias,
+                active_day_state = EXCLUDED.active_day_state,
+                day_state_direction = EXCLUDED.day_state_direction,
+                day_state_detail = EXCLUDED.day_state_detail,
                 oi_mode = EXCLUDED.oi_mode,
                 reason = EXCLUDED.reason,
                 strike_reason = EXCLUDED.strike_reason,
@@ -451,7 +473,7 @@ class DBWriter:
 
         legacy_row = (
             row[0], row[1], row[2], row[3], row[5], row[14], row[15], row[16], row[17], row[18],
-            row[19], row[20], row[23], row[24], row[25], row[26], row[27], row[28], row[29], row[30]
+            row[23], row[24], row[27], row[28], row[29], row[30], row[31], row[32], row[33], row[34]
         )
         query = """
         INSERT INTO signals_issued

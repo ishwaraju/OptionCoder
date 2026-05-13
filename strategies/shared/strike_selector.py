@@ -56,7 +56,7 @@ class StrikeSelector:
             return 0.54
         return 0.6
 
-    def _base_preferred_strike(self, price, signal, strategy_score, volume_signal, aligned_pressure, strongest_nearby, expiry_mode, premium_noise, setup_type, time_regime):
+    def _base_preferred_strike(self, price, signal, strategy_score, volume_signal, aligned_pressure, strongest_nearby, expiry_mode, premium_noise, setup_type, time_regime, candle_time=None):
         atm = self.get_atm_strike(price)
 
         if strategy_score >= 85 and volume_signal == "STRONG" and aligned_pressure and strongest_nearby:
@@ -68,8 +68,10 @@ class StrikeSelector:
         if expiry_mode or time_regime in {"LATE_DAY", "ENDGAME"} or setup_type in {"REVERSAL", "TRAP_REVERSAL"}:
             return self.get_itm_strike(price, signal), "ITM because expiry/late-day or reversal setups benefit from cleaner premium behavior"
 
-        current_time = self.time_utils.current_time()
-        if current_time.hour >= 13 or strategy_score < 60:
+        current_clock = candle_time.time() if hasattr(candle_time, "time") else candle_time
+        if current_clock is None:
+            current_clock = self.time_utils.current_time()
+        if current_clock.hour >= 13 or strategy_score < 60:
             return self.get_deeper_itm_strike(price, signal, steps=2), "Deeper ITM because session is late or conviction is weak"
 
         if volume_signal == "WEAK" or not aligned_pressure:
@@ -80,7 +82,7 @@ class StrikeSelector:
 
         return atm, "ATM because conviction is good and pressure context is acceptable"
 
-    def _score_option_candidate(self, row, preferred_strike, signal, strategy_score, expiry_mode, setup_type, time_regime, option_chain_data):
+    def _score_option_candidate(self, row, preferred_strike, signal, strategy_score, expiry_mode, setup_type, time_regime, option_chain_data, candle_time=None):
         strike_gap = max(self._instrument_strike_gap(), 1)
         target_delta = self._target_delta(strategy_score, expiry_mode, setup_type, time_regime)
         ltp = float(row.get("ltp") or 0.0)
@@ -141,7 +143,7 @@ class StrikeSelector:
         ]
         return candidate_score, " | ".join(details)
 
-    def _best_chain_candidate(self, option_chain_data, signal, preferred_strike, strategy_score, expiry_mode, setup_type, time_regime):
+    def _best_chain_candidate(self, option_chain_data, signal, preferred_strike, strategy_score, expiry_mode, setup_type, time_regime, candle_time=None):
         band_rows = (option_chain_data or {}).get("band_snapshots") or []
         if not band_rows:
             return None
@@ -165,6 +167,7 @@ class StrikeSelector:
                 setup_type=setup_type,
                 time_regime=time_regime,
                 option_chain_data=option_chain_data,
+                candle_time=candle_time,
             )
             ranked.append((score, details, row))
         ranked.sort(key=lambda item: item[0], reverse=True)
@@ -175,7 +178,7 @@ class StrikeSelector:
             "details": details,
         }
 
-    def select_strike(self, price, signal, volume_signal, strategy_score=0, pressure_metrics=None, cautions=None, option_chain_data=None, setup_type=None, time_regime=None):
+    def select_strike(self, price, signal, volume_signal, strategy_score=0, pressure_metrics=None, cautions=None, option_chain_data=None, setup_type=None, time_regime=None, candle_time=None):
         """
         Decide which strike to trade
         """
@@ -189,10 +192,11 @@ class StrikeSelector:
             option_chain_data=option_chain_data,
             setup_type=setup_type,
             time_regime=time_regime,
+            candle_time=candle_time,
         )
         return strike
 
-    def select_strike_with_reason(self, price, signal, volume_signal, strategy_score=0, pressure_metrics=None, cautions=None, option_chain_data=None, setup_type=None, time_regime=None):
+    def select_strike_with_reason(self, price, signal, volume_signal, strategy_score=0, pressure_metrics=None, cautions=None, option_chain_data=None, setup_type=None, time_regime=None, candle_time=None):
         """
         Decide which strike to trade and explain why that strike was chosen.
         """
@@ -249,6 +253,7 @@ class StrikeSelector:
             premium_noise=premium_noise,
             setup_type=setup_type,
             time_regime=time_regime,
+            candle_time=candle_time,
         )
 
         chain_pick = self._best_chain_candidate(
@@ -259,6 +264,7 @@ class StrikeSelector:
             expiry_mode=expiry_mode,
             setup_type=setup_type,
             time_regime=time_regime,
+            candle_time=candle_time,
         )
         if chain_pick and chain_pick["strike"] is not None:
             base_reason = f"{base_reason} | buyer-quality pick {chain_pick['details']}"

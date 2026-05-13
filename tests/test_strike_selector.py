@@ -1,4 +1,5 @@
 from strategies.shared.strike_selector import StrikeSelector
+from datetime import datetime
 
 
 def test_expiry_noise_prefers_deeper_itm():
@@ -81,3 +82,31 @@ def test_option_chain_quality_can_choose_better_delta_strike():
 
     assert strike == 22450
     assert "buyer-quality pick" in reason
+
+
+def test_candle_time_changes_late_session_strike_preference():
+    selector = StrikeSelector("NIFTY")
+
+    early_strike, _ = selector.select_strike_with_reason(
+        price=22485,
+        signal="CE",
+        volume_signal="STRONG",
+        strategy_score=78,
+        pressure_metrics={"pressure_bias": "BULLISH", "near_put_pressure_ratio": 1.2},
+        setup_type="BREAKOUT_CONFIRM",
+        time_regime="MID_MORNING",
+        candle_time=datetime(2026, 4, 16, 10, 20),
+    )
+    late_strike, _ = selector.select_strike_with_reason(
+        price=22485,
+        signal="CE",
+        volume_signal="STRONG",
+        strategy_score=78,
+        pressure_metrics={"pressure_bias": "BULLISH", "near_put_pressure_ratio": 1.2},
+        setup_type="BREAKOUT_CONFIRM",
+        time_regime="MID_MORNING",
+        candle_time=datetime(2026, 4, 16, 14, 20),
+    )
+
+    assert early_strike == 22500
+    assert late_strike == 22400

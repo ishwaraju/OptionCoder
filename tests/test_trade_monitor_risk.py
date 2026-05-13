@@ -577,3 +577,89 @@ def test_endgame_runner_holds_with_trail_when_breakout_is_still_expanding():
     assert monitor["decision_label"] == "LET_WINNER_RUN"
     assert monitor["runner_mode"] is True
     assert monitor["run_profile"] == "RUNNER"
+
+
+def test_trade_monitor_trims_when_option_structure_weakens_after_profit():
+    service = build_monitor_service()
+    service.option_data = {"mock": True}
+    service.active_trade_monitor["entry_participation_breadth"] = 6.0
+    service.active_trade_monitor["entry_participation_spread_pct"] = 0.8
+    service.active_trade_monitor["entry_participation_delta"] = 120.0
+    service._calculate_participation_metrics = lambda candle_time: {
+        "CE": {
+            "same_side_weighted_breadth": 2.0,
+            "atm_spread_pct": 1.4,
+            "same_side_weighted_delta": 24.0,
+            "opposite_side_weighted_delta": 32.0,
+        },
+        "PE": {},
+    }
+    service._get_option_contract_snapshot = lambda strike, signal, before_ts=None: {"ltp": 112.0}
+
+    recent_1m = [
+        {"time": datetime(2026, 4, 16, 10, 2), "open": 24002, "high": 24007, "low": 23999, "close": 24004, "volume": 980},
+        {"time": datetime(2026, 4, 16, 10, 3), "open": 24004, "high": 24009, "low": 24001, "close": 24006, "volume": 1020},
+        {"time": datetime(2026, 4, 16, 10, 4), "open": 24006, "high": 24010, "low": 24002, "close": 24007, "volume": 990},
+    ]
+    recent_5m = [
+        {"time": datetime(2026, 4, 16, 10, 0), "high": 24010, "low": 23970, "close": 24000},
+        {"time": datetime(2026, 4, 16, 10, 5), "high": 24012, "low": 24000, "close": 24007},
+    ]
+
+    monitor = service._evaluate_trade_monitor(recent_1m, recent_5m)
+
+    assert monitor["guidance"] == "TRIM"
+    assert monitor["breadth_collapse"] is True
+
+
+def test_trade_monitor_marks_thesis_broken_when_opposite_side_reexpands():
+    service = build_monitor_service()
+    service.option_data = {"mock": True}
+    service.active_trade_monitor["entry_participation_breadth"] = 6.0
+    service.active_trade_monitor["entry_participation_spread_pct"] = 0.8
+    service.active_trade_monitor["entry_participation_delta"] = 140.0
+    service.pressure = type(
+        "Pressure",
+        (),
+        {
+            "analyze": lambda self, option_data, underlying_price=None: {
+                "near_put_pressure_ratio": 0.7,
+                "near_call_pressure_ratio": 2.1,
+                "full_put_pressure_ratio": 0.8,
+                "full_call_pressure_ratio": 1.8,
+                "atm_pe_volume": 120,
+                "atm_ce_volume": 280,
+                "atm_pe_oi": 90,
+                "atm_ce_oi": 210,
+                "mid_pe_volume": 130,
+                "mid_ce_volume": 250,
+                "near_pe_oi": 90,
+                "near_ce_oi": 180,
+            }
+        },
+    )()
+    service._calculate_participation_metrics = lambda candle_time: {
+        "CE": {
+            "same_side_weighted_breadth": 2.0,
+            "atm_spread_pct": 1.6,
+            "same_side_weighted_delta": 18.0,
+            "opposite_side_weighted_delta": 42.0,
+        },
+        "PE": {},
+    }
+    service._get_option_contract_snapshot = lambda strike, signal, before_ts=None: {"ltp": 108.0}
+
+    recent_1m = [
+        {"time": datetime(2026, 4, 16, 10, 2), "open": 24008, "high": 24009, "low": 24000, "close": 24004, "volume": 1000},
+        {"time": datetime(2026, 4, 16, 10, 3), "open": 24004, "high": 24005, "low": 23998, "close": 24001, "volume": 1010},
+        {"time": datetime(2026, 4, 16, 10, 4), "open": 24001, "high": 24002, "low": 23996, "close": 23999, "volume": 1030},
+    ]
+    recent_5m = [
+        {"time": datetime(2026, 4, 16, 10, 0), "high": 24010, "low": 23970, "close": 24000},
+        {"time": datetime(2026, 4, 16, 10, 5), "high": 24005, "low": 23996, "close": 23999},
+    ]
+
+    monitor = service._evaluate_trade_monitor(recent_1m, recent_5m)
+
+    assert monitor["guidance"] == "THESIS_BROKEN"
+    assert monitor["opposite_premium_reexpansion"] is True

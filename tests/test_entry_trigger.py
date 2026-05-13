@@ -127,7 +127,7 @@ def test_1m_trigger_is_invalidated_when_momentum_quality_rejects_plain_watch():
 
     result = service._evaluate_pending_entry_watch(recent_1m)
 
-    assert result == {"status": "INVALIDATED", "reason": "1m momentum weak"}
+    assert result == {"status": "REARM", "reason": "1m momentum weak"}
 
 
 def test_1m_trigger_still_notifies_when_signal_save_fails_in_parallel_mode():

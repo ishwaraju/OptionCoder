@@ -195,10 +195,17 @@ class PressureAnalyzer:
             elif wall_alert in {"SUPPORT_BREAK_RISK", "SUPPORT_SHIFTING_HIGHER"}:
                 bearish_score += 4
 
+        ratio_bias_hint = "NEUTRAL"
         if smooth_near_put >= 1.15 and smooth_full_put >= 1.05:
-            bullish_score += 3
+            ratio_bias_hint = "PUT_HEAVY"
+            if bullish_score >= bearish_score and (underlying_delta or 0) >= 0 and (atm_pe_ltp_delta or 0) <= 0:
+                bullish_score += 1.5
+                flow_notes.append("put_ratio_tiebreak")
         elif smooth_near_call >= 1.15 and smooth_full_call >= 1.05:
-            bearish_score += 3
+            ratio_bias_hint = "CALL_HEAVY"
+            if bearish_score >= bullish_score and (underlying_delta or 0) <= 0 and (atm_ce_ltp_delta or 0) <= 0:
+                bearish_score += 1.5
+                flow_notes.append("call_ratio_tiebreak")
 
         flow_edge = round(abs(bullish_score - bearish_score), 2)
         self.flow_edge_history.append(flow_edge)
@@ -242,6 +249,7 @@ class PressureAnalyzer:
             "smooth_near_put_pressure_ratio": smooth_near_put,
             "smooth_full_call_pressure_ratio": smooth_full_call,
             "smooth_full_put_pressure_ratio": smooth_full_put,
+            "ratio_bias_hint": ratio_bias_hint,
             "near_ce_volume_delta": near_ce_volume_delta,
             "near_pe_volume_delta": near_pe_volume_delta,
             "mid_ce_volume_delta": mid_ce_volume_delta,

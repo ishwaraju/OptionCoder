@@ -25,7 +25,7 @@ def parse_args():
         "--horizon",
         type=int,
         default=DEFAULT_HORIZON,
-        choices=[1, 2, 3, 5],
+        choices=[1, 2, 3, 5, 10, 15, 20],
         help="Premium outcome horizon in minutes",
     )
     return parser.parse_args()
