@@ -60,16 +60,25 @@ def test_banknifty_allows_b_grade_breakout_after_11_am():
     assert service._is_option_buyer_actionable("PE", candle_time=datetime(2026, 4, 16, 11, 10)) is True
 
 
-def test_banknifty_blocks_b_grade_breakout_before_11_am():
+def test_banknifty_allows_b_grade_breakout_before_11_am_when_quality_is_clean():
     service = build_service("BREAKOUT", "B", "MEDIUM")
     service.instrument = "BANKNIFTY"
-    assert service._is_option_buyer_actionable("PE", candle_time=datetime(2026, 4, 16, 10, 25)) is False
+    assert service._is_option_buyer_actionable("PE", candle_time=datetime(2026, 4, 16, 10, 25)) is True
 
 
 def test_sensex_allows_a_grade_breakout_confirm():
     service = build_service("BREAKOUT_CONFIRM", "A", "MEDIUM")
     service.instrument = "SENSEX"
     assert service._is_option_buyer_actionable("PE", candle_time=datetime(2026, 4, 16, 11, 5)) is True
+
+
+def test_sensex_allows_clean_b_grade_continuation_even_when_global_continuation_flag_is_off():
+    service = build_service("CONTINUATION", "B", "MEDIUM")
+    service.instrument = "SENSEX"
+    service.strategy.last_score = 71
+    service.strategy.last_entry_score = 74
+    service.strategy.last_pressure_conflict_level = "NONE"
+    assert service._is_option_buyer_actionable("CE", candle_time=datetime(2026, 4, 16, 11, 40)) is True
 
 
 def test_sensex_blocks_b_grade_breakout():

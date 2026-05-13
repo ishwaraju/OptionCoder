@@ -96,6 +96,7 @@ def _decision_label_text(label):
         "HARD_STOP_EXIT": "Hard Stop Exit",
         "TRAIL_EXIT": "Trail Exit",
         "BOOK_PARTIAL_NOW": "Book Partial",
+        "LET_WINNER_RUN": "Let Winner Run",
         "TIME_STOP_EXIT": "Time Stop Exit",
         "HIGH_NOISE_SKIP": "High Noise Skip",
         "WAIT_CONFIRMATION": "Wait Confirmation",
@@ -708,6 +709,8 @@ class Notifier:
         psar_style_level = monitor_data.get("psar_style_level")
         live_pressure_summary = monitor_data.get("live_pressure_summary")
         greek_summary = monitor_data.get("greek_summary")
+        run_profile = monitor_data.get("run_profile")
+        runner_mode = monitor_data.get("runner_mode")
         lines = []
         header_parts = []
         if instrument:
@@ -741,6 +744,10 @@ class Notifier:
             lines.append(" | ".join(summary))
 
         state_bits = []
+        if run_profile:
+            state_bits.append(f"Mode {run_profile}")
+        if runner_mode:
+            state_bits.append("Runner ON")
         if profit_lock_armed:
             state_bits.append(
                 f"Profit lock ON{f' @ +{profit_lock_trigger_pct:.0f}%' if profit_lock_trigger_pct is not None else ''}"

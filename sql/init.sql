@@ -285,6 +285,8 @@ CREATE TABLE option_signal_outcomes_1m (
   minutes_since_signal INTEGER,
   guidance TEXT,
   reason TEXT,
+  run_profile TEXT,
+  runner_mode BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (signal_ts, observed_ts, instrument, signal, strike)
 );
@@ -363,6 +365,10 @@ CREATE TABLE trade_monitor_events_1m (
   structure_state TEXT,
   quality TEXT,
   time_regime TEXT,
+  run_profile TEXT,
+  runner_mode BOOLEAN NOT NULL DEFAULT FALSE,
+  dynamic_trail_pct NUMERIC(8,2),
+  profit_lock_armed BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (ts, instrument, entry_ts, signal)
 );

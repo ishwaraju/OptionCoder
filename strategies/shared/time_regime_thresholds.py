@@ -45,23 +45,24 @@ def build_time_regime_thresholds(instrument, time_regime, fallback_mode, market_
         thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 60 if fallback_mode else 58)
         thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 68)
     elif time_regime == "MIDDAY":
-        thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 63 if fallback_mode else 60)
+        thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 61 if fallback_mode else 58)
+        thresholds["confirm_min_score"] = max(thresholds["confirm_min_score"], 62)
+        thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 68)
+        thresholds["high_continuation_min_score"] = max(thresholds["high_continuation_min_score"], 76)
+        thresholds["allow_fallback_continuation"] = True
+    elif time_regime == "LATE_DAY":
+        thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 58 if fallback_mode else 56)
+        thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 60 if fallback_mode else 62)
+        thresholds["retest_min_score"] = max(thresholds["retest_min_score"], 58 if instrument == "BANKNIFTY" else 56)
+        thresholds["allow_fallback_continuation"] = True
+    elif time_regime == "ENDGAME":
+        thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 62)
         thresholds["confirm_min_score"] = max(thresholds["confirm_min_score"], 64)
         thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 72)
-        thresholds["high_continuation_min_score"] = max(thresholds["high_continuation_min_score"], 80)
-        thresholds["allow_fallback_continuation"] = False
-    elif time_regime == "LATE_DAY":
-        thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 60 if fallback_mode else 58)
-        thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 62 if fallback_mode else 65)
-        thresholds["retest_min_score"] = max(thresholds["retest_min_score"], 60 if instrument == "BANKNIFTY" else 58)
-    elif time_regime == "ENDGAME":
-        thresholds["breakout_min_score"] = max(thresholds["breakout_min_score"], 65)
-        thresholds["confirm_min_score"] = max(thresholds["confirm_min_score"], 66)
-        thresholds["continuation_min_score"] = max(thresholds["continuation_min_score"], 78)
-        thresholds["high_continuation_min_score"] = max(thresholds["high_continuation_min_score"], 82)
-        thresholds["retest_min_score"] = max(thresholds["retest_min_score"], 60)
-        thresholds["allow_continuation"] = False
-        thresholds["allow_fallback_continuation"] = False
+        thresholds["high_continuation_min_score"] = max(thresholds["high_continuation_min_score"], 76)
+        thresholds["retest_min_score"] = max(thresholds["retest_min_score"], 58)
+        thresholds["allow_continuation"] = True
+        thresholds["allow_fallback_continuation"] = True
 
     if market_regime in {"TRENDING", "EXPANDING", "OPENING_EXPANSION", "EXPIRY_DAY"}:
         if time_regime == "MIDDAY":
@@ -70,14 +71,14 @@ def build_time_regime_thresholds(instrument, time_regime, fallback_mode, market_
             thresholds["continuation_min_score"] = max(68, thresholds["continuation_min_score"] - 2)
             thresholds["high_continuation_min_score"] = max(76, thresholds["high_continuation_min_score"] - 2)
         elif time_regime == "LATE_DAY":
-            thresholds["breakout_min_score"] = max(56, thresholds["breakout_min_score"] - 2)
-            thresholds["continuation_min_score"] = max(62, thresholds["continuation_min_score"] - 2)
-            thresholds["retest_min_score"] = max(56, thresholds["retest_min_score"] - 1)
+            thresholds["breakout_min_score"] = max(54, thresholds["breakout_min_score"] - 3)
+            thresholds["continuation_min_score"] = max(60, thresholds["continuation_min_score"] - 3)
+            thresholds["retest_min_score"] = max(54, thresholds["retest_min_score"] - 2)
         elif time_regime == "ENDGAME":
-            thresholds["breakout_min_score"] = max(60, thresholds["breakout_min_score"] - 2)
-            thresholds["confirm_min_score"] = max(63, thresholds["confirm_min_score"] - 1)
-            thresholds["continuation_min_score"] = max(74, thresholds["continuation_min_score"] - 2)
-            thresholds["high_continuation_min_score"] = max(78, thresholds["high_continuation_min_score"] - 2)
+            thresholds["breakout_min_score"] = max(58, thresholds["breakout_min_score"] - 3)
+            thresholds["confirm_min_score"] = max(61, thresholds["confirm_min_score"] - 2)
+            thresholds["continuation_min_score"] = max(68, thresholds["continuation_min_score"] - 4)
+            thresholds["high_continuation_min_score"] = max(74, thresholds["high_continuation_min_score"] - 4)
 
     if Config.ADAPTIVE_THRESHOLDS_ENABLED:
         relax_score = max(0.0, float(Config.ADAPTIVE_THRESHOLD_RELAX_SCORE))

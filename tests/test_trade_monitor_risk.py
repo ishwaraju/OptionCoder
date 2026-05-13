@@ -58,6 +58,9 @@ def test_risk_profile_breakout_nifty_uses_twelve_percent_cap():
     assert profile["target_pct"] == 32.0
     assert profile["time_stop_warn_minutes"] == 3
     assert profile["time_stop_exit_minutes"] == 5
+    assert profile["partial_trigger_pct"] == 24.0
+    assert profile["runner_trigger_pct"] == 32.0
+    assert profile["allow_endgame_runner"] is True
 
 
 def test_risk_profile_breakout_sensex_uses_fifteen_percent_cap():
@@ -544,3 +547,33 @@ def test_trade_monitor_warns_when_pressure_flips_but_structure_not_broken_yet():
 
     assert monitor["guidance"] == "THESIS_WEAKENING"
     assert monitor["live_pressure_bias"] == "BEARISH"
+
+
+def test_endgame_runner_holds_with_trail_when_breakout_is_still_expanding():
+    service = build_monitor_service()
+    service.strategy.last_time_regime = "ENDGAME"
+    service.active_trade_monitor["time_regime"] = "ENDGAME"
+    service.active_trade_monitor["session_bucket"] = "NON_EXPIRY"
+    service.active_trade_monitor["allow_endgame_runner"] = True
+    service.active_trade_monitor["partial_trigger_pct"] = 24.0
+    service.active_trade_monitor["runner_trigger_pct"] = 32.0
+    service.active_trade_monitor["runner_trail_bonus"] = 2.0
+    service.active_trade_monitor["time_extension_minutes"] = 3
+    service._get_option_contract_snapshot = lambda strike, signal, before_ts=None: {"ltp": 136.0}
+
+    recent_1m = [
+        {"time": datetime(2026, 4, 16, 10, 4), "open": 24020, "high": 24036, "low": 24018, "close": 24032, "volume": 1100},
+        {"time": datetime(2026, 4, 16, 10, 5), "open": 24032, "high": 24048, "low": 24030, "close": 24045, "volume": 1250},
+        {"time": datetime(2026, 4, 16, 10, 6), "open": 24045, "high": 24061, "low": 24042, "close": 24058, "volume": 1380},
+    ]
+    recent_5m = [
+        {"time": datetime(2026, 4, 16, 10, 0), "high": 24020, "low": 23970, "close": 24000},
+        {"time": datetime(2026, 4, 16, 10, 5), "high": 24060, "low": 24018, "close": 24058},
+    ]
+
+    monitor = service._evaluate_trade_monitor(recent_1m, recent_5m)
+
+    assert monitor["guidance"] == "HOLD_STRONG"
+    assert monitor["decision_label"] == "LET_WINNER_RUN"
+    assert monitor["runner_mode"] is True
+    assert monitor["run_profile"] == "RUNNER"

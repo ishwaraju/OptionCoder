@@ -661,7 +661,7 @@ def test_sensex_pre_expiry_weak_volume_stays_watch_like_without_nifty_special_fl
     assert "pre_expiry_watch_friendly" not in result["cautions"]
 
 
-def test_sensex_blocks_new_signal_after_235_pm():
+def test_sensex_allows_clean_signal_after_235_pm_when_quality_is_good():
     strategy = BreakoutStrategy(instrument="SENSEX")
 
     signal, reason = strategy.generate_signal(
@@ -692,12 +692,11 @@ def test_sensex_blocks_new_signal_after_235_pm():
         candle_volume=1200000,
     )
 
-    assert signal is None
-    assert "late-day guard blocked trade" in reason.lower()
-    assert "sensex_no_fresh_option_buys_after_1435" in strategy.last_blockers
+    assert signal == "CE"
+    assert "sensex_no_fresh_option_buys_after_1435" not in strategy.last_blockers
 
 
-def test_sensex_requires_elite_quality_after_225_pm():
+def test_sensex_late_day_guard_no_longer_blocks_clean_quality_after_225_pm():
     strategy = BreakoutStrategy(instrument="SENSEX")
 
     signal, reason = strategy.generate_signal(
@@ -728,9 +727,8 @@ def test_sensex_requires_elite_quality_after_225_pm():
         candle_volume=1200000,
     )
 
-    assert signal is None
-    assert "late-day guard blocked trade" in reason.lower()
-    assert any(flag.startswith("sensex_late_day_requires_") for flag in strategy.last_blockers)
+    assert signal == "CE"
+    assert not any(flag.startswith("sensex_late_day_requires_") for flag in strategy.last_blockers)
 
 
 def test_low_adx_context_marks_caution_when_recent_candles_available():

@@ -12,6 +12,7 @@ import time as time_module
 import sys
 import os
 import argparse
+import threading
 from collections import deque
 from datetime import timedelta, time, datetime
 
@@ -76,6 +77,18 @@ class SignalService:
         if right_has_tz and not left_has_tz:
             return left_dt.replace(tzinfo=right_dt.tzinfo), right_dt
         return left_dt, right_dt
+
+    def _run_async_notification(self, callback, payload):
+        """Fire notification without blocking the signal path."""
+        def _runner():
+            try:
+                callback(payload)
+            except Exception as e:
+                self._log(f"Async notification error: {e}")
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        return thread
 
     def __init__(self, instrument=None):
         self.time_utils = TimeUtils()
@@ -325,6 +338,11 @@ class SignalService:
             "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
             "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
             "profit_lock_trigger_pct": risk_profile.get("profit_lock_trigger_pct"),
+            "partial_trigger_pct": risk_profile.get("partial_trigger_pct"),
+            "runner_trigger_pct": risk_profile.get("runner_trigger_pct"),
+            "runner_trail_bonus": risk_profile.get("runner_trail_bonus"),
+            "allow_endgame_runner": bool(risk_profile.get("allow_endgame_runner")),
+            "time_extension_minutes": risk_profile.get("time_extension_minutes"),
             "expiry_fast_decay": bool(risk_profile.get("expiry_fast_decay")),
             "stop_loss_option_price": stop_loss_price,
             "first_target_option_price": first_target_option_price,
@@ -570,6 +588,8 @@ class SignalService:
         if expiry_mode:
             profit_lock_trigger_pct = max(6.0, profit_lock_trigger_pct - 2.0)
 
+        runner_profile = self._runner_profile_for_setup(setup_bucket, session_bucket)
+
         return {
             "setup_bucket": setup_bucket,
             "hard_premium_stop_pct": hard_stop,
@@ -584,6 +604,11 @@ class SignalService:
             "session_bucket": session_bucket,
             "iv_bucket": iv_bucket,
             "market_iv_regime": market_iv_regime,
+            "partial_trigger_pct": round(runner_profile["partial_trigger_pct"], 2),
+            "runner_trigger_pct": round(runner_profile["runner_trigger_pct"], 2),
+            "runner_trail_bonus": round(runner_profile["runner_trail_bonus"], 2),
+            "allow_endgame_runner": bool(runner_profile["allow_endgame_runner"]),
+            "time_extension_minutes": int(runner_profile["time_extension_minutes"]),
         }
 
     @staticmethod
@@ -721,6 +746,57 @@ class SignalService:
         return round(hard_stop, 2), round(target_pct, 2), round(trail_pct, 2), int(time_warn), int(time_exit)
 
     @staticmethod
+    def _runner_profile_for_setup(setup_bucket, session_bucket):
+        setup_bucket = (setup_bucket or "BREAKOUT").upper()
+        session_bucket = (session_bucket or "NON_EXPIRY").upper()
+
+        profile = {
+            "partial_trigger_pct": 20.0,
+            "runner_trigger_pct": 28.0,
+            "runner_trail_bonus": 1.5,
+            "allow_endgame_runner": False,
+            "time_extension_minutes": 0,
+        }
+
+        if setup_bucket == "BREAKOUT":
+            profile.update(
+                {
+                    "partial_trigger_pct": 24.0,
+                    "runner_trigger_pct": 32.0,
+                    "runner_trail_bonus": 2.0,
+                    "allow_endgame_runner": True,
+                    "time_extension_minutes": 3,
+                }
+            )
+        elif setup_bucket == "CONTINUATION":
+            profile.update(
+                {
+                    "partial_trigger_pct": 22.0,
+                    "runner_trigger_pct": 30.0,
+                    "runner_trail_bonus": 2.5,
+                    "allow_endgame_runner": True,
+                    "time_extension_minutes": 2,
+                }
+            )
+        elif setup_bucket == "REVERSAL":
+            profile.update(
+                {
+                    "partial_trigger_pct": 18.0,
+                    "runner_trigger_pct": 26.0,
+                    "runner_trail_bonus": 1.0,
+                    "allow_endgame_runner": False,
+                    "time_extension_minutes": 0,
+                }
+            )
+
+        if session_bucket == "EXPIRY":
+            profile["partial_trigger_pct"] = max(14.0, profile["partial_trigger_pct"] - 4.0)
+            profile["runner_trigger_pct"] = max(20.0, profile["runner_trigger_pct"] - 4.0)
+            profile["runner_trail_bonus"] = max(0.5, profile["runner_trail_bonus"] - 0.5)
+
+        return profile
+
+    @staticmethod
     def _option_expansion_metrics(entry_option_price, option_price, entry_underlying_price, underlying_price, entry_delta=None):
         if entry_option_price in (None, 0) or option_price is None:
             return {
@@ -763,6 +839,48 @@ class SignalService:
                 "expansion_ratio": None,
                 "premium_supportive": False,
             }
+
+    @staticmethod
+    def _classify_trade_run_profile(
+        pnl_percent,
+        expansion_metrics,
+        minutes_active,
+        momentum_strong,
+        pressure_flip_exit,
+        drawdown_from_peak_pct,
+        setup_bucket,
+        session_bucket,
+    ):
+        pnl_percent = float(pnl_percent or 0.0)
+        expansion_metrics = expansion_metrics or {}
+        expansion_ratio = expansion_metrics.get("expansion_ratio")
+        premium_supportive = bool(expansion_metrics.get("premium_supportive"))
+        setup_bucket = (setup_bucket or "BREAKOUT").upper()
+        session_bucket = (session_bucket or "NON_EXPIRY").upper()
+
+        if pressure_flip_exit:
+            return "FAILED"
+
+        if (
+            pnl_percent >= (24.0 if session_bucket == "EXPIRY" else 28.0)
+            and premium_supportive
+            and momentum_strong
+            and (drawdown_from_peak_pct is None or drawdown_from_peak_pct <= 12.0)
+            and minutes_active >= 2
+            and setup_bucket in {"BREAKOUT", "CONTINUATION"}
+        ):
+            return "RUNNER"
+
+        if (
+            pnl_percent >= 12.0
+            and (premium_supportive or (expansion_ratio is not None and expansion_ratio >= 0.65))
+            and minutes_active >= 1
+        ):
+            return "SWING_PUSH"
+
+        if pnl_percent > 0:
+            return "SCALP"
+        return "STALLED"
 
     def _session_start_for(self, candle_time):
         return candle_time.replace(hour=9, minute=15, second=0, microsecond=0)
@@ -1072,8 +1190,8 @@ class SignalService:
         if (
             "expiry_day_mode" in cautions
             and time_regime in {"MIDDAY", "LATE_DAY", "ENDGAME"}
-            and score < 78
-            and not (clean_momentum_setup and score >= 82)
+            and score < 74
+            and not clean_momentum_setup
         ):
             return {
                 "label": "EXPIRY_PREMIUM_CHAOS",
@@ -1083,7 +1201,7 @@ class SignalService:
 
         if time_regime in {"LATE_DAY", "ENDGAME"} and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}:
             conflict = getattr(self.strategy, "last_pressure_conflict_level", "NONE")
-            if conflict not in {"NONE", ""} and not (clean_momentum_setup and score >= 82):
+            if conflict in {"MODERATE", "HIGH"} and not (clean_momentum_setup and score >= 78):
                 return {
                     "label": "LATE_DAY_WHIPSAW",
                     "reason": "Late-day reversal zone me pressure conflict present hai.",
@@ -1093,8 +1211,8 @@ class SignalService:
         if (
             time_regime == "MIDDAY"
             and market_regime in {"RANGING", "CHOPPY"}
-            and score < 82
-            and not (clean_momentum_setup and confidence == "HIGH")
+            and score < 76
+            and not (clean_momentum_setup and confidence in {"MEDIUM", "HIGH"})
         ):
             return {
                 "label": "MIDDAY_RANGE_SKIP",
@@ -1789,10 +1907,10 @@ class SignalService:
         if retest_wait and opposite_pressure:
             return True, "breakout watch is already in retest-wait mode"
 
-        if self.instrument == "SENSEX" and time_regime == "LATE_DAY" and (
-            opposite_pressure or pressure_conflict_level != "NONE"
+        if time_regime == "LATE_DAY" and (
+            opposite_pressure and weak_participation and pressure_conflict_level in {"MODERATE", "HIGH"}
         ):
-            return True, "late-day SENSEX breakout watch too conflicted"
+            return True, "late-day breakout watch too conflicted"
 
         if self.instrument in {"NIFTY", "BANKNIFTY"} and expiry_mode and opposite_pressure and weak_participation:
             if pre_expiry_watch_friendly and self.instrument == "NIFTY" and pressure_conflict_level == "MILD":
@@ -2197,35 +2315,6 @@ class SignalService:
             if t1_pct is not None:
                 first_target_option_price = round(float(option_price) * (1 + float(t1_pct) / 100.0), 2)
 
-        self.notifier.send_entry_trigger_notification(
-            {
-                "instrument": self.instrument,
-                "signal": signal,
-                "strike": strike,
-                "confidence": pending.get("confidence"),
-                "confidence_summary": evaluation.get("micro_reason") or pending.get("reason"),
-                "signal_type": pending.get("signal_type"),
-                "signal_grade": pending.get("signal_grade"),
-                "price": round(option_price, 2) if option_price is not None else round(evaluation["price"], 2),
-                "underlying_price": round(evaluation["price"], 2),
-                "trigger_price": trigger_price,
-                "invalidate_price": pending.get("invalidate_price"),
-                "first_target_price": pending.get("first_target_price"),
-                "stop_loss_option_price": stop_loss_option_price,
-                "first_target_option_price": first_target_option_price,
-                "option_stop_loss_pct": pending.get("option_stop_loss_pct"),
-                "option_target_pct": pending.get("option_target_pct"),
-                "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
-                "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
-                "entry_spread": option_contract.get("spread") if option_contract else None,
-                "context": pending.get("context"),
-                "risk_note": pending.get("risk_note"),
-                "greek_summary": format_greek_summary(option_contract),
-                "decision_label": f"CONFIRMED_{signal}_ENTRY",
-                "reason": f"{evaluation.get('reason')} | {evaluation.get('micro_reason') or 'micro confirmed'}",
-            }
-        )
-
         balanced_pro = {
             "quality": pending.get("quality"),
             "setup": pending.get("signal_type"),
@@ -2238,7 +2327,35 @@ class SignalService:
             "invalidate_price": pending.get("invalidate_price"),
             "first_target_price": pending.get("first_target_price"),
         }
-        self._safe_save_signal_issued(
+        entry_notification = {
+            "instrument": self.instrument,
+            "signal": signal,
+            "strike": strike,
+            "confidence": pending.get("confidence"),
+            "confidence_summary": evaluation.get("micro_reason") or pending.get("reason"),
+            "signal_type": pending.get("signal_type"),
+            "signal_grade": pending.get("signal_grade"),
+            "price": round(option_price, 2) if option_price is not None else round(evaluation["price"], 2),
+            "underlying_price": round(evaluation["price"], 2),
+            "trigger_price": trigger_price,
+            "invalidate_price": pending.get("invalidate_price"),
+            "first_target_price": pending.get("first_target_price"),
+            "stop_loss_option_price": stop_loss_option_price,
+            "first_target_option_price": first_target_option_price,
+            "option_stop_loss_pct": pending.get("option_stop_loss_pct"),
+            "option_target_pct": pending.get("option_target_pct"),
+            "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
+            "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
+            "entry_spread": option_contract.get("spread") if option_contract else None,
+            "context": pending.get("context"),
+            "risk_note": pending.get("risk_note"),
+            "greek_summary": format_greek_summary(option_contract),
+            "decision_label": f"CONFIRMED_{signal}_ENTRY",
+            "reason": f"{evaluation.get('reason')} | {evaluation.get('micro_reason') or 'micro confirmed'}",
+        }
+        self._run_async_notification(self.notifier.send_entry_trigger_notification, entry_notification)
+
+        signal_saved = self._safe_save_signal_issued(
             ts=evaluation["time"],
             signal=signal,
             price=(option_contract or {}).get("ltp") if option_contract else evaluation["price"],
@@ -2257,6 +2374,8 @@ class SignalService:
             strike_reason="watch-trigger strike selection",
             option_data_source=self.option_data_source,
         )
+        if not signal_saved:
+            self._log("Signal issued save failed after entry notification dispatch")
         self._start_trade_monitor(signal, latest_5m_candle, evaluation["price"], balanced_pro, strike)
         self.signals_generated += 1
         self._clear_pending_entry_watch()
@@ -2307,14 +2426,15 @@ class SignalService:
         prior_5m = recent_5m_candles[-2] if len(recent_5m_candles) >= 2 else active_5m
         live_pressure_summary = None
         try:
-            current_pressure_metrics = (
-                self.pressure.analyze(
-                    self.option_data,
-                    underlying_price=last_close,
-                )
-                if getattr(self, "pressure", None) and getattr(self, "option_data", None)
-                else None
-            )
+            current_pressure_metrics = None
+            if getattr(self, "pressure", None) and getattr(self, "option_data", None):
+                try:
+                    current_pressure_metrics = self.pressure.analyze(
+                        self.option_data,
+                        underlying_price=last_close,
+                    )
+                except TypeError:
+                    current_pressure_metrics = self.pressure.analyze(self.option_data)
             live_pressure_summary = self._build_pressure_summary(
                 pressure_metrics=current_pressure_metrics,
                 participation_metrics=None,
@@ -2361,6 +2481,11 @@ class SignalService:
         trail_pct = float(self.active_trade_monitor.get("trail_pct") or getattr(self.config, "TRAIL_PERCENT", Config.TRAIL_PERCENT))
         time_stop_warn_minutes = int(self.active_trade_monitor.get("time_stop_warn_minutes") or 3)
         time_stop_exit_minutes = int(self.active_trade_monitor.get("time_stop_exit_minutes") or 5)
+        partial_trigger_pct = float(self.active_trade_monitor.get("partial_trigger_pct") or target_pct)
+        runner_trigger_pct = float(self.active_trade_monitor.get("runner_trigger_pct") or max(target_pct, partial_trigger_pct + 8.0))
+        runner_trail_bonus = float(self.active_trade_monitor.get("runner_trail_bonus") or 0.0)
+        allow_endgame_runner = bool(self.active_trade_monitor.get("allow_endgame_runner"))
+        time_extension_minutes = int(self.active_trade_monitor.get("time_extension_minutes") or 0)
         partial_booked = bool(self.active_trade_monitor.get("partial_booked"))
         profit_lock_armed = bool(self.active_trade_monitor.get("profit_lock_armed"))
         expiry_fast_decay = bool(self.active_trade_monitor.get("expiry_fast_decay"))
@@ -2386,6 +2511,7 @@ class SignalService:
         entry_pressure_bias = (self.active_trade_monitor.get("entry_pressure_bias") or "").upper()
         live_pressure_bias = ((live_pressure_summary or {}).get("bias") or "").upper()
         live_pressure_strength = ((live_pressure_summary or {}).get("strength") or "").upper()
+        live_pressure_edge = float(((live_pressure_summary or {}).get("edge") or 0.0))
         entry_confidence = (self.active_trade_monitor.get("entry_confidence") or "").upper()
         entry_score = float(self.active_trade_monitor.get("entry_score") or 0)
         signal_grade = (self.active_trade_monitor.get("signal_grade") or "").upper()
@@ -2402,14 +2528,17 @@ class SignalService:
         )
         pressure_flip_exit = bool(
             opposite_pressure_active
-            and live_pressure_strength in {"STRONG", "MODERATE"}
+            and (
+                live_pressure_strength == "STRONG"
+                or live_pressure_edge >= 14.0
+            )
             and minutes_active >= 2
             and (not option_expanding or structure_break or vwap_break)
         )
         if strong_breakout_runner:
             pressure_flip_exit = bool(
                 opposite_pressure_active
-                and live_pressure_strength == "STRONG"
+                and (live_pressure_strength == "STRONG" or live_pressure_edge >= 18.0)
                 and minutes_active >= 3
                 and (
                     structure_break
@@ -2420,6 +2549,7 @@ class SignalService:
         pressure_flip_warning = bool(
             opposite_pressure_active
             and minutes_active >= 2
+            and live_pressure_edge >= 8.0
             and not pressure_flip_exit
         )
         theta_risk_high = bool(expiry_fast_decay or time_regime in {"LATE_DAY", "ENDGAME"})
@@ -2468,6 +2598,20 @@ class SignalService:
                 or (signal == "PE" and live_pressure_bias == "BEARISH")
             )
         )
+        run_profile = self._classify_trade_run_profile(
+            pnl_percent=pnl_percent,
+            expansion_metrics=expansion_metrics,
+            minutes_active=minutes_active,
+            momentum_strong=momentum_strong,
+            pressure_flip_exit=pressure_flip_exit,
+            drawdown_from_peak_pct=drawdown_from_peak_pct,
+            setup_bucket=setup_bucket,
+            session_bucket=self.active_trade_monitor.get("session_bucket"),
+        )
+        runner_mode = run_profile == "RUNNER"
+        if runner_mode:
+            time_stop_exit_minutes += time_extension_minutes
+            dynamic_trail_pct = min(16.0, dynamic_trail_pct + runner_trail_bonus)
         break_even_underlying_exit = bool(
             profit_lock_armed
             and invalidate_underlying_price is not None
@@ -2564,6 +2708,14 @@ class SignalService:
                 f"PSAR-style trail level {psar_style_level} break ho gaya after profit-lock activation. "
                 "Trend-following exit ka purpose winner ko hold karna aur reversal par lock-in karna hai."
             )
+        elif runner_mode and pnl_percent is not None and pnl_percent >= runner_trigger_pct and momentum_and_pressure_supportive:
+            guidance = "HOLD_STRONG"
+            decision_label = "LET_WINNER_RUN"
+            action_text = "Yeh runner lag raha hai. Trail ke saath hold karo, jaldi partial mat karo."
+            reason = (
+                f"Trade ne +{runner_trigger_pct:.0f}% runner zone touch kiya hai aur premium expansion supportive hai. "
+                "Is type ke breakout winner ko trail ke saath chalne dena better hai."
+            )
         elif not partial_booked and pnl_percent is not None and pnl_percent >= target_pct and momentum_and_pressure_supportive:
             guidance = "HOLD_STRONG"
             decision_label = "HOLD_STRONG"
@@ -2572,11 +2724,14 @@ class SignalService:
                 f"Target zone (+{target_pct:.0f}%) hit ho chuka hai aur momentum abhi supportive hai. "
                 "Trailing-stop logic ke hisaab se winner ko run karne dena better hai."
             )
-        elif not partial_booked and pnl_percent is not None and pnl_percent >= target_pct:
+        elif not partial_booked and pnl_percent is not None and pnl_percent >= partial_trigger_pct and not runner_mode:
             guidance = "BOOK_PARTIAL"
             decision_label = "BOOK_PARTIAL_NOW"
             action_text = "Abhi partial book karo. Runner ko trail par chhodo."
-            reason = f"Option premium reached {pnl_percent:.2f}% P&L. Book partial near the +{target_pct:.0f}% objective and trail the rest."
+            reason = (
+                f"Option premium reached {pnl_percent:.2f}% P&L. "
+                f"Partial booking near +{partial_trigger_pct:.0f}% objective option buyer ke liye safer hai."
+            )
         elif slow_positive_theta_risk:
             guidance = "EXIT_PROFIT_PROTECT"
             decision_label = "TRAIL_EXIT"
@@ -2676,7 +2831,12 @@ class SignalService:
             action_text = "Small pullback normal hai. Abhi panic exit mat karo."
             reason = "A small opposite candle is normal. No real structure damage yet."
 
-        if time_regime == "ENDGAME" and (pnl_points is not None and pnl_points > 0) and guidance in {"HOLD_STRONG", "HOLD_WITH_TRAIL"}:
+        if (
+            time_regime == "ENDGAME"
+            and (pnl_points is not None and pnl_points > 0)
+            and guidance in {"HOLD_STRONG", "HOLD_WITH_TRAIL"}
+            and not (runner_mode and allow_endgame_runner and momentum_and_pressure_supportive)
+        ):
             guidance = "BOOK_PARTIAL"
             decision_label = "BOOK_PARTIAL_NOW"
             action_text = "Late-day profit hai. Partial book karna safer hai."
@@ -2732,6 +2892,10 @@ class SignalService:
             "live_atr": live_atr,
             "expiry_fast_decay": expiry_fast_decay,
             "theta_risk_high": theta_risk_high,
+            "run_profile": run_profile,
+            "runner_mode": runner_mode,
+            "partial_trigger_pct": partial_trigger_pct,
+            "runner_trigger_pct": runner_trigger_pct,
             "quality": self.active_trade_monitor["quality"],
             "time_regime": time_regime,
             "heikin_ashi": (self.strategy.last_heikin_ashi or {}).get("bias"),
@@ -2904,6 +3068,17 @@ class SignalService:
             and score >= 82
             and getattr(self.strategy, "last_pressure_conflict_level", "NONE") in {"NONE", "MILD"}
         )
+        instrument_rule_allows = InstrumentActionableRules.should_allow_signal(
+            instrument=self.instrument,
+            signal_type=signal_type,
+            signal_grade=signal_grade,
+            confidence=confidence,
+            regime=regime,
+            candle_time=candle_time,
+            score=getattr(self.strategy, "last_score", score),
+            entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
+            pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
+        )
 
         if signal_type == "CONTINUATION" and not Config.ALLOW_CONTINUATION_ENTRY:
             breakout_memory = getattr(self.strategy, "breakout_memory", None) or {}
@@ -2913,24 +3088,20 @@ class SignalService:
                 and breakout_memory.get("session_day") == candle_time.date()
                 and int((candle_time - breakout_memory.get("time")).total_seconds() // 60) <= 45
             )
-            if not sweep_override and not (
+            continuation_override = (
+                instrument_rule_allows
+                and confidence in {"MEDIUM", "HIGH"}
+                and score >= 70
+                and getattr(self.strategy, "last_pressure_conflict_level", "NONE") in {"NONE", "MILD"}
+            )
+            if not sweep_override and not continuation_override and not (
                 recent_breakout and signal_grade in {"A", "A+"} and confidence == "HIGH" and score >= 78
             ):
                 return False
         if sweep_override and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "CONTINUATION", "RETEST", "BREAKOUT"}:
             return True
         if self.instrument == "SENSEX":
-            return InstrumentActionableRules.should_allow_signal(
-                instrument=self.instrument,
-                signal_type=signal_type,
-                signal_grade=signal_grade,
-                confidence=confidence,
-                regime=regime,
-                candle_time=candle_time,
-                score=getattr(self.strategy, "last_score", 0),
-                entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
-                pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
-            )
+            return instrument_rule_allows
         late_reversal_window = (
             candle_time is not None
             and candle_time.time() >= datetime.strptime("13:30", "%H:%M").time()
@@ -2946,19 +3117,9 @@ class SignalService:
             and not late_reversal_window
         ):
             return True
-        if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
+        if signal_type not in Config.OPTION_BUYER_ALERT_TYPES and not instrument_rule_allows:
             return False
-        if self.instrument in {"NIFTY", "BANKNIFTY"} and InstrumentActionableRules.should_allow_signal(
-            instrument=self.instrument,
-            signal_type=signal_type,
-            signal_grade=signal_grade,
-            confidence=confidence,
-            regime=regime,
-            candle_time=candle_time,
-            score=getattr(self.strategy, "last_score", score),
-            entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
-            pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
-        ):
+        if self.instrument in {"NIFTY", "BANKNIFTY"} and instrument_rule_allows:
             return True
         if signal_type == "BREAKOUT_CONFIRM" and signal_grade == "B" and confidence in {"MEDIUM", "HIGH"} and score >= 80:
             return True
@@ -4084,6 +4245,10 @@ class SignalService:
                 monitor_data.get("structure"),
                 monitor_data.get("quality"),
                 monitor_data.get("time_regime"),
+                monitor_data.get("run_profile"),
+                bool(monitor_data.get("runner_mode")),
+                float(monitor_data.get("dynamic_trail_pct")) if monitor_data.get("dynamic_trail_pct") is not None else None,
+                bool(monitor_data.get("profit_lock_armed")),
             )
             self.db_writer.insert_trade_monitor_event_1m(row)
         except Exception as e:
@@ -4114,6 +4279,8 @@ class SignalService:
                 minutes_since_signal,
                 monitor_data.get("guidance"),
                 monitor_data.get("reason"),
+                monitor_data.get("run_profile"),
+                bool(monitor_data.get("runner_mode")),
             )
             self.db_writer.insert_option_signal_outcome_1m(row)
             self._safe_save_option_signal_horizon_outcome(ts, monitor_data, minutes_since_signal)
@@ -4340,8 +4507,10 @@ class SignalService:
                 entry_window_end,
             )
             self.db_writer.insert_signal_issued(row)
+            return True
         except Exception as e:
             self._log(f"DB save error (signal issued): {e}")
+            return False
 
     def _safe_save_entry_decision_1m(
         self,
@@ -5434,53 +5603,53 @@ class SignalService:
             print(f"Score: {self.strategy.last_score} | Confidence: {self.strategy.last_confidence}")
             print(f"Strike: {selected_strike} | Reason: {reason}")
             print(f"Price: {option_signal_price} | Spot: {price} | Time: {candle_5m['time']}")
-            self.notifier.send_trade_notification(
-                {
-                    "instrument": self.instrument,
-                    "signal": signal,
-                    "strike": selected_strike,
-                    "confidence": self.strategy.last_confidence,
-                    "confidence_summary": self.strategy.last_confidence_summary,
-                    "signal_type": self.strategy.last_signal_type,
-                    "setup_bucket": risk_profile["setup_bucket"],
-                    "decision_label": self._entry_decision_label(signal),
-                    "action_text": f"{signal} confirmed hai. Entry sirf apne planned risk ke saath lo.",
-                    "journal_note": self._build_journal_note(
-                        self._entry_decision_label(signal),
-                        f"{signal} confirmed hai. Entry sirf apne planned risk ke saath lo.",
-                        strike_reason,
-                    ),
-                    "signal_grade": self.strategy.last_signal_grade,
-                    "price": round(option_signal_price, 2) if option_signal_price is not None else None,
-                    "spot_price": round(price, 2) if price is not None else None,
-                    "trigger_price": spot_trigger_price,
-                    "invalidate_price": spot_invalidate_price,
-                    "first_target_price": spot_target_price,
-                    "projected_premium_sl": projected_premium_sl,
-                    "projected_premium_t1": projected_premium_t1,
-                    "entry_bid": selected_option_contract.get("top_bid_price") if selected_option_contract else None,
-                    "entry_ask": selected_option_contract.get("top_ask_price") if selected_option_contract else None,
-                    "entry_spread": selected_option_contract.get("spread") if selected_option_contract else None,
-                    "time_regime": balanced_pro["time_regime"],
-                    "option_stop_loss_pct": risk_profile["hard_premium_stop_pct"],
-                    "option_target_pct": risk_profile["target_pct"],
-                    "option_trail_pct": risk_profile["trail_from_peak_pct"],
-                    "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
-                    "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
-                    "risk_note": risk_profile["risk_note"],
-                    "structure_suggestion": structure_suggestion,
-                    "rr_ratio": round(
-                        float(risk_profile["target_pct"]) /
-                        max(float(risk_profile["hard_premium_stop_pct"]), 1.0),
-                        2,
-                    ),
-                    "reason": enriched_reason,
-                    "pressure_read": (balanced_pro.get("pressure_summary") or {}).get("summary"),
-                    "oi_read": (oi_ladder_data or {}).get("oi_summary"),
-                    "greek_summary": format_greek_summary(selected_option_contract),
-                }
-            )
-            self._safe_save_signal_issued(
+            trade_notification = {
+                "instrument": self.instrument,
+                "signal": signal,
+                "strike": selected_strike,
+                "confidence": self.strategy.last_confidence,
+                "confidence_summary": self.strategy.last_confidence_summary,
+                "signal_type": self.strategy.last_signal_type,
+                "setup_bucket": risk_profile["setup_bucket"],
+                "decision_label": self._entry_decision_label(signal),
+                "action_text": f"{signal} confirmed hai. Entry sirf apne planned risk ke saath lo.",
+                "journal_note": self._build_journal_note(
+                    self._entry_decision_label(signal),
+                    f"{signal} confirmed hai. Entry sirf apne planned risk ke saath lo.",
+                    strike_reason,
+                ),
+                "signal_grade": self.strategy.last_signal_grade,
+                "price": round(option_signal_price, 2) if option_signal_price is not None else None,
+                "spot_price": round(price, 2) if price is not None else None,
+                "trigger_price": spot_trigger_price,
+                "invalidate_price": spot_invalidate_price,
+                "first_target_price": spot_target_price,
+                "projected_premium_sl": projected_premium_sl,
+                "projected_premium_t1": projected_premium_t1,
+                "entry_bid": selected_option_contract.get("top_bid_price") if selected_option_contract else None,
+                "entry_ask": selected_option_contract.get("top_ask_price") if selected_option_contract else None,
+                "entry_spread": selected_option_contract.get("spread") if selected_option_contract else None,
+                "time_regime": balanced_pro["time_regime"],
+                "option_stop_loss_pct": risk_profile["hard_premium_stop_pct"],
+                "option_target_pct": risk_profile["target_pct"],
+                "option_trail_pct": risk_profile["trail_from_peak_pct"],
+                "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
+                "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
+                "risk_note": risk_profile["risk_note"],
+                "structure_suggestion": structure_suggestion,
+                "rr_ratio": round(
+                    float(risk_profile["target_pct"]) /
+                    max(float(risk_profile["hard_premium_stop_pct"]), 1.0),
+                    2,
+                ),
+                "reason": enriched_reason,
+                "pressure_read": (balanced_pro.get("pressure_summary") or {}).get("summary"),
+                "oi_read": (oi_ladder_data or {}).get("oi_summary"),
+                "greek_summary": format_greek_summary(selected_option_contract),
+            }
+            self._run_async_notification(self.notifier.send_trade_notification, trade_notification)
+
+            signal_saved = self._safe_save_signal_issued(
                 ts=candle_5m["time"],
                 signal=signal,
                 price=option_signal_price,
@@ -5499,6 +5668,8 @@ class SignalService:
                 strike_reason=strike_reason,
                 option_data_source=self.option_data_source,
             )
+            if not signal_saved:
+                self._log("Signal issued save failed after trade notification dispatch")
             
             # Save ML features for training (async, don't block)
             if ml_features:

@@ -1316,19 +1316,16 @@ class BreakoutStrategy:
             and pressure_conflict_level in {"NONE", "MILD"}
         )
 
-        if current_now >= self.time_utils._parse_clock("14:35"):
-            return "sensex_no_fresh_option_buys_after_1435"
-
         if current_now >= self.time_utils._parse_clock("14:25"):
             if sweep_override:
                 return None
-            if volume_signal != "STRONG":
+            if volume_signal not in {"NORMAL", "STRONG"}:
                 return "sensex_late_day_requires_strong_volume"
-            if confidence != "HIGH":
+            if confidence not in {"MEDIUM", "HIGH"}:
                 return "sensex_late_day_requires_high_confidence"
-            if pressure_conflict_level != "NONE":
+            if pressure_conflict_level not in {"NONE", "MILD"}:
                 return "sensex_late_day_pressure_conflict"
-            if float(score or 0) < 88 or float(entry_score or 0) < 90:
+            if float(score or 0) < 80 or float(entry_score or 0) < 82:
                 return "sensex_late_day_requires_elite_score"
 
         return None

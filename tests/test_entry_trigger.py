@@ -71,7 +71,8 @@ def _service(recent_1m):
     service._confirm_signal_microstructure = lambda **kwargs: (True, "micro confirmed", None, None)
     service._get_option_contract_snapshot = lambda *args, **kwargs: {"ltp": 105.0, "top_bid_price": 104.5, "top_ask_price": 105.5, "spread": 1.0}
     service._greek_enriched_option_contract = lambda contract, *args, **kwargs: contract
-    service._safe_save_signal_issued = lambda *args, **kwargs: None
+    service._safe_save_signal_issued = lambda *args, **kwargs: True
+    service._run_async_notification = lambda callback, payload: callback(payload)
     service._start_trade_monitor = lambda *args, **kwargs: None
     service._log = lambda message: None
     return service
@@ -127,6 +128,27 @@ def test_1m_trigger_is_invalidated_when_momentum_quality_rejects_plain_watch():
     result = service._evaluate_pending_entry_watch(recent_1m)
 
     assert result == {"status": "INVALIDATED", "reason": "1m momentum weak"}
+
+
+def test_1m_trigger_still_notifies_when_signal_save_fails_in_parallel_mode():
+    recent_1m = [
+        {"time": datetime(2026, 5, 6, 14, 20), "open": 24204.0, "high": 24209.0, "low": 24202.0, "close": 24207.0, "volume": 1000},
+        {"time": datetime(2026, 5, 6, 14, 21), "open": 24207.0, "high": 24213.0, "low": 24205.0, "close": 24211.0, "volume": 1100},
+        {"time": datetime(2026, 5, 6, 14, 22), "open": 24211.0, "high": 24218.0, "low": 24208.0, "close": 24216.0, "volume": 1200},
+        {"time": datetime(2026, 5, 6, 14, 23), "open": 24221.0, "high": 24236.0, "low": 24220.0, "close": 24234.0, "volume": 1500},
+    ]
+    service = _service(recent_1m)
+    calls = []
+    service.notifier = type(
+        "NotifierStub",
+        (),
+        {"send_entry_trigger_notification": lambda self, payload: calls.append(payload)},
+    )()
+    service._safe_save_signal_issued = lambda *args, **kwargs: False
+
+    service._maybe_fire_pending_entry_watch(latest_5m_candle={"time": datetime(2026, 5, 6, 14, 20)})
+
+    assert len(calls) == 1
 
 
 def test_one_minute_momentum_quality_accepts_clean_directional_move():

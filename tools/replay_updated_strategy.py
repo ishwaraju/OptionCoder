@@ -405,9 +405,6 @@ def live_gate(signal, strategy, instrument, candle_time):
         getattr(strategy, "last_pressure_conflict_level", "NONE") or "NONE"
     ).upper()
 
-    if signal_type not in Config.OPTION_BUYER_ALERT_TYPES:
-        return False, "signal_type_blocked"
-
     allowed = InstrumentActionableRules.should_allow_signal(
         instrument=instrument,
         signal_type=signal_type,
@@ -419,11 +416,11 @@ def live_gate(signal, strategy, instrument, candle_time):
         entry_score=getattr(strategy, "last_entry_score", getattr(strategy, "last_score", 0)),
         pressure_conflict_level=pressure_conflict_level,
     )
-    if instrument in {"NIFTY", "BANKNIFTY"}:
+    if signal_type not in Config.OPTION_BUYER_ALERT_TYPES and not allowed:
+        return False, "signal_type_blocked"
+    if instrument in {"NIFTY", "BANKNIFTY", "SENSEX"}:
         if allowed:
             return True, "live_actionable"
-        return False, "instrument_actionable_rules"
-    if not allowed:
         return False, "instrument_actionable_rules"
 
     if signal_type == "BREAKOUT_CONFIRM" and signal_grade == "B" and confidence in {"MEDIUM", "HIGH"} and score >= 80:

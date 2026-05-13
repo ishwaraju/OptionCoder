@@ -19,6 +19,8 @@ class DBWriter:
         self._option_signal_horizon_outcome_table_exists = None
         self._entry_decision_table_exists = None
         self._option_market_state_table_exists = None
+        self._trade_monitor_event_has_runner_columns = None
+        self._option_signal_outcome_has_runner_columns = None
 
     def close(self):
         self.conn = None
@@ -525,6 +527,43 @@ class DBWriter:
         if not self._option_signal_outcome_table_exists:
             return
 
+        if self._option_signal_outcome_has_runner_columns is None:
+            self._option_signal_outcome_has_runner_columns = self._table_has_columns(
+                "option_signal_outcomes_1m",
+                ("run_profile", "runner_mode"),
+            )
+
+        if self._option_signal_outcome_has_runner_columns:
+            query = """
+            INSERT INTO option_signal_outcomes_1m
+            (
+                signal_ts, observed_ts, instrument, signal, strike,
+                underlying_entry_price, underlying_price, option_entry_ltp, option_ltp,
+                option_bid, option_ask, option_spread, pnl_points, max_favorable_ltp,
+                max_adverse_ltp, minutes_since_signal, guidance, reason,
+                run_profile, runner_mode
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (signal_ts, observed_ts, instrument, signal, strike) DO UPDATE
+            SET underlying_entry_price = EXCLUDED.underlying_entry_price,
+                underlying_price = EXCLUDED.underlying_price,
+                option_entry_ltp = EXCLUDED.option_entry_ltp,
+                option_ltp = EXCLUDED.option_ltp,
+                option_bid = EXCLUDED.option_bid,
+                option_ask = EXCLUDED.option_ask,
+                option_spread = EXCLUDED.option_spread,
+                pnl_points = EXCLUDED.pnl_points,
+                max_favorable_ltp = EXCLUDED.max_favorable_ltp,
+                max_adverse_ltp = EXCLUDED.max_adverse_ltp,
+                minutes_since_signal = EXCLUDED.minutes_since_signal,
+                guidance = EXCLUDED.guidance,
+                reason = EXCLUDED.reason,
+                run_profile = EXCLUDED.run_profile,
+                runner_mode = EXCLUDED.runner_mode;
+            """
+            self._execute(query, row)
+            return
+
         query = """
         INSERT INTO option_signal_outcomes_1m
         (
@@ -715,6 +754,37 @@ class DBWriter:
             pnl_points, guidance, reason, structure_state, quality, time_regime
         )
         """
+        if self._trade_monitor_event_has_runner_columns is None:
+            self._trade_monitor_event_has_runner_columns = self._table_has_columns(
+                "trade_monitor_events_1m",
+                ("run_profile", "runner_mode", "dynamic_trail_pct", "profit_lock_armed"),
+            )
+
+        if self._trade_monitor_event_has_runner_columns:
+            query = """
+            INSERT INTO trade_monitor_events_1m
+            (
+                ts, instrument, signal, entry_ts, entry_price, current_price,
+                pnl_points, guidance, reason, structure_state, quality, time_regime,
+                run_profile, runner_mode, dynamic_trail_pct, profit_lock_armed
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ts, instrument, entry_ts, signal) DO UPDATE
+            SET current_price = EXCLUDED.current_price,
+                pnl_points = EXCLUDED.pnl_points,
+                guidance = EXCLUDED.guidance,
+                reason = EXCLUDED.reason,
+                structure_state = EXCLUDED.structure_state,
+                quality = EXCLUDED.quality,
+                time_regime = EXCLUDED.time_regime,
+                run_profile = EXCLUDED.run_profile,
+                runner_mode = EXCLUDED.runner_mode,
+                dynamic_trail_pct = EXCLUDED.dynamic_trail_pct,
+                profit_lock_armed = EXCLUDED.profit_lock_armed;
+            """
+            self._execute(query, row)
+            return
+
         query = """
         INSERT INTO trade_monitor_events_1m
         (
