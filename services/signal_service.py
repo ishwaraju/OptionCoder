@@ -36,7 +36,7 @@ from shared.market.spread_filter import SpreadFilter
 from shared.market.oi_quote_confirmation import OIQuoteConfirmation
 from shared.market.option_spike_detector import OptionSpikeDetector
 from shared.indicators.multi_timeframe_trend import calculate_trend_from_candles
-from strategies.shared.breakout_strategy import BreakoutStrategy
+from strategies.shared.breakout_strategy import BreakoutSignalStrategy
 from strategies.shared.one_minute_momentum import OneMinuteMomentumQuality
 from strategies.shared.option_buyer_score import calculate_option_buyer_entry_score, option_buyer_action
 from strategies.shared.strike_selector import StrikeSelector
@@ -145,7 +145,7 @@ class SignalService:
         self.option_spike_detector = OptionSpikeDetector(self.profile.get("strike_step"))
         
         # Strategy
-        self.strategy = BreakoutStrategy(instrument=self.instrument)
+        self.strategy = BreakoutSignalStrategy(instrument=self.instrument)
         self.one_minute_momentum = OneMinuteMomentumQuality(min_score=30)
         self.strike_selector = StrikeSelector(self.instrument)
         
@@ -203,6 +203,7 @@ class SignalService:
         self.data_pause_active = False
         self.last_data_pause_reason = None
         self.last_data_health = None
+        self._suppress_live_actions = False
         
         # Runtime gap detection
         self.runtime_gap_detector = RuntimeGapDetector(
@@ -242,26 +243,35 @@ class SignalService:
     def _handle_runtime_gap_recovery(self, reason_label):
         """Handle recovery after confirmed system sleep or a large runtime gap."""
         self._log(f"🔄 Recovering after {reason_label}...")
-        
-        # Clear last processed timestamp to allow processing new candles
+
+        # Preserve last processed timestamp so we can backfill any missed 5m candles sequentially.
         if self.last_processed_5m_ts:
-            self._log(f"   Last processed candle: {self.last_processed_5m_ts}")
-            self.last_processed_5m_ts = None
-            self._log("   ✅ Cleared last_processed timestamp for fresh start")
-        
+            self._log(f"   Last processed candle preserved for backlog replay: {self.last_processed_5m_ts}")
+
         # Reset data pause state
         if self.data_pause_active:
             self.data_pause_active = False
             self.last_data_pause_reason = None
             self._log("   ✅ Reset data pause state")
-        
-        # Clear active trade monitor (trade may have expired)
+
+        self.last_monitor_check_minute = None
+
+        # Preserve active trade monitor if the entry is still recent enough to re-evaluate safely.
         if self.active_trade_monitor:
-            self._log("   ⚠️  Clearing active trade monitor (may have expired during sleep)")
-            self.active_trade_monitor = None
+            if self._active_trade_monitor_is_recoverable():
+                self.active_trade_monitor["last_notified_minute"] = None
+                self.active_trade_monitor["last_sent_monitor_minute"] = None
+                self._log("   ✅ Preserved active trade monitor for fresh post-gap evaluation")
+            else:
+                self._log("   ⚠️  Clearing active trade monitor (expired during runtime gap)")
+                self.active_trade_monitor = None
         if self.pending_entry_watch:
-            self._log("   ⚠️  Clearing pending entry watch (needs fresh 1m confirmation after sleep)")
-            self.pending_entry_watch = None
+            if self._pending_watch_is_recoverable(self.pending_entry_watch):
+                self.pending_entry_watch["last_checked_minute"] = None
+                self._log("   ✅ Preserved pending entry watch for fresh 1m re-check")
+            else:
+                self._log("   ⚠️  Clearing pending entry watch (expired during runtime gap)")
+                self.pending_entry_watch = None
         
         # Refresh indicator state from recent history
         try:
@@ -1043,12 +1053,21 @@ class SignalService:
         cautions = {str(item).lower() for item in (self.strategy.last_cautions or []) if item}
         time_regime = (balanced_pro.get("time_regime") or self.strategy.last_regime or "").upper()
         signal_type = (balanced_pro.get("setup") or self.strategy.last_signal_type or "").upper()
+        active_day_state = (balanced_pro.get("active_day_state") or "").upper()
+        day_state_direction = (balanced_pro.get("day_state_direction") or "").upper()
         score = float(self.strategy.last_entry_score or self.strategy.last_score or 0)
         confidence = (getattr(self.strategy, "last_confidence", "") or "").upper()
         spread_percent = self._spread_percent(selected_option_contract) if selected_option_contract else None
         data_health = getattr(self, "last_data_health", None) or {}
         feed_label = (data_health.get("label") or "").upper()
         market_regime = (self.strategy.last_regime or "").upper()
+        strong_day_state_alignment = (
+            signal in {"CE", "PE"}
+            and active_day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
+            and day_state_direction == signal
+            and confidence in {"MEDIUM", "HIGH"}
+            and score >= 78
+        )
         critical_noise_flags = {
             flag for flag in {
                 "participation_weak",
@@ -1073,7 +1092,7 @@ class SignalService:
             and not has_hard_conflict
         )
 
-        if feed_label == "RISKY" and score < 85:
+        if feed_label == "RISKY" and score < 85 and not strong_day_state_alignment:
             return {
                 "label": "FEED_RISKY_SKIP",
                 "reason": "Raw feed clean nahi lag raha aur setup elite score ka nahi hai.",
@@ -1123,7 +1142,7 @@ class SignalService:
             len(critical_noise_flags) >= 2
             or (has_hard_conflict and "adx_not_confirmed" in critical_noise_flags)
             or (has_hard_conflict and score < 84)
-        ) and not elite_breakout:
+        ) and not elite_breakout and not strong_day_state_alignment:
             return {
                 "label": "HIGH_NOISE_SKIP",
                 "reason": "Price aur option participation clean align nahi kar rahe.",
@@ -1508,6 +1527,58 @@ class SignalService:
             return False
         return True
 
+    def _pending_watch_is_recoverable(self, pending, current_time=None):
+        if not pending:
+            return False
+        created_at = pending.get("created_at")
+        if created_at is None:
+            return False
+        current_time = current_time or self.time_utils.now_ist()
+        created_at, current_time = self._coerce_comparable_datetimes(created_at, current_time)
+        age_minutes = max(0, int((current_time - created_at).total_seconds() // 60))
+        return age_minutes <= self._pending_watch_max_minutes(pending)
+
+    def _active_trade_monitor_is_recoverable(self, current_time=None):
+        monitor = self.active_trade_monitor
+        if not monitor:
+            return False
+        entry_time = monitor.get("entry_time")
+        if entry_time is None:
+            return False
+        current_time = current_time or self.time_utils.now_ist()
+        entry_time, current_time = self._coerce_comparable_datetimes(entry_time, current_time)
+        age_minutes = max(0, int((current_time - entry_time).total_seconds() // 60))
+        return age_minutes <= 25
+
+    def _collect_unprocessed_5m_candles(self, recent_candles, current_time):
+        if not recent_candles:
+            return []
+
+        if self.last_processed_5m_ts is None:
+            closed_candles = []
+            for candle in recent_candles:
+                latest_close_time = self._effective_candle_close_time(candle)
+                current_cmp, latest_close_time = self._coerce_comparable_datetimes(current_time, latest_close_time)
+                if current_cmp >= latest_close_time:
+                    closed_candles.append(candle)
+            return closed_candles[-3:]
+
+        pending_candles = []
+        processed_cutoff = self.last_processed_5m_ts
+        for candle in recent_candles:
+            candle_time = candle.get("time")
+            if candle_time is None:
+                continue
+            processed_cmp, candle_time = self._coerce_comparable_datetimes(processed_cutoff, candle_time)
+            if candle_time <= processed_cmp:
+                continue
+            effective_close_time = self._effective_candle_close_time({**candle, "time": candle_time})
+            current_cmp, effective_close_time = self._coerce_comparable_datetimes(current_time, effective_close_time)
+            if current_cmp >= effective_close_time:
+                pending_candles.append({**candle, "time": candle_time})
+
+        return pending_candles[-12:]
+
     @staticmethod
     def _one_minute_trigger_volume_ok(recent_1m_candles):
         if not recent_1m_candles:
@@ -1748,6 +1819,9 @@ class SignalService:
         blockers = set(pending.get("blockers") or [])
         pressure_conflict_level = (pending.get("pressure_conflict_level") or "NONE").upper()
         time_regime = (pending.get("time_regime") or "").upper()
+        active_day_state = (pending.get("active_day_state") or "").upper()
+        day_state_direction = (pending.get("day_state_direction") or "").upper()
+        watch_direction = (pending.get("direction") or "").upper()
 
         if setup != "BREAKOUT_CONFIRM":
             return False, None
@@ -1760,9 +1834,16 @@ class SignalService:
         retest_wait = "late_confirmation_wait_retest" in cautions
         expiry_mode = "expiry_day_mode" in cautions
         pre_expiry_watch_friendly = "pre_expiry_watch_friendly" in cautions
+        strong_day_state_alignment = (
+            active_day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
+            and watch_direction in {"CE", "PE"}
+            and day_state_direction == watch_direction
+            and float(pending.get("score") or 0) >= 74
+            and float(pending.get("entry_score") or 0) >= 64
+        )
 
         if opposite_pressure and weak_participation and pressure_conflict_level in {"MILD", "MODERATE", "HIGH"}:
-            if pre_expiry_watch_friendly and pressure_conflict_level == "MILD":
+            if (pre_expiry_watch_friendly or strong_day_state_alignment) and pressure_conflict_level == "MILD":
                 return False, None
             return True, "breakout watch has opposite pressure with weak participation"
 
@@ -1775,12 +1856,12 @@ class SignalService:
             return True, "late-day breakout watch too conflicted"
 
         if self.instrument in {"NIFTY", "BANKNIFTY"} and expiry_mode and opposite_pressure and weak_participation:
-            if pre_expiry_watch_friendly and self.instrument == "NIFTY" and pressure_conflict_level == "MILD":
+            if (pre_expiry_watch_friendly or strong_day_state_alignment) and pressure_conflict_level == "MILD":
                 return False, None
             return True, "expiry breakout watch has poor option confirmation"
 
         if "direction_present_but_filters_incomplete" in blockers and opposite_pressure and weak_participation:
-            if pre_expiry_watch_friendly and pressure_conflict_level == "MILD":
+            if (pre_expiry_watch_friendly or strong_day_state_alignment) and pressure_conflict_level == "MILD":
                 return False, None
             return True, "direction incomplete with opposite pressure and weak participation"
 
@@ -4489,38 +4570,44 @@ class SignalService:
                 "oi_read": (oi_ladder_data or {}).get("oi_summary"),
                 "greek_summary": format_greek_summary(selected_option_contract),
             }
-            self._run_async_notification(self.notifier.send_trade_notification, trade_notification)
+            if self._suppress_live_actions:
+                self._log(
+                    f"Backfill-only process for {self.instrument} {candle_5m['time']} | "
+                    f"Signal {signal} detected but live dispatch suppressed"
+                )
+            else:
+                self._run_async_notification(self.notifier.send_trade_notification, trade_notification)
 
-            signal_saved = self._safe_save_signal_issued(
-                ts=candle_5m["time"],
-                signal=signal,
-                price=option_signal_price,
-                strike=selected_strike,
-                reason=enriched_reason,
-                balanced_pro=balanced_pro,
-                oi_mode=oi_mode,
-                telegram_sent=Config.ENABLE_ALERTS,
-                monitor_started=True,
-                entry_window_end=(
-                    candle_5m["close_time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
-                    if candle_5m.get("close_time") else None
-                ),
-                underlying_price=price,
-                option_contract=selected_option_contract,
-                strike_reason=strike_reason,
-                option_data_source=self.option_data_source,
-            )
-            if not signal_saved:
-                self._log("Signal issued save failed after trade notification dispatch")
-            
-            # Save ML features for training (async, don't block)
-            if ml_features:
-                self._safe_save_ml_features(ml_features, ml_prob)
-            
-            self._clear_pending_entry_watch()
-            self._clear_pending_spike_watch()
-            self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
-            self.signals_generated += 1
+                signal_saved = self._safe_save_signal_issued(
+                    ts=candle_5m["time"],
+                    signal=signal,
+                    price=option_signal_price,
+                    strike=selected_strike,
+                    reason=enriched_reason,
+                    balanced_pro=balanced_pro,
+                    oi_mode=oi_mode,
+                    telegram_sent=Config.ENABLE_ALERTS,
+                    monitor_started=True,
+                    entry_window_end=(
+                        candle_5m["close_time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
+                        if candle_5m.get("close_time") else None
+                    ),
+                    underlying_price=price,
+                    option_contract=selected_option_contract,
+                    strike_reason=strike_reason,
+                    option_data_source=self.option_data_source,
+                )
+                if not signal_saved:
+                    self._log("Signal issued save failed after trade notification dispatch")
+
+                # Save ML features for training (async, don't block)
+                if ml_features:
+                    self._safe_save_ml_features(ml_features, ml_prob)
+
+                self._clear_pending_entry_watch()
+                self._clear_pending_spike_watch()
+                self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
+                self.signals_generated += 1
         else:
             watch_payload = self._build_manual_watch_payload(
                 candle_5m=candle_5m,
@@ -4533,8 +4620,14 @@ class SignalService:
                 support=support,
                 resistance=resistance,
             )
-            self._set_pending_entry_watch(watch_payload, balanced_pro, candle_5m)
-            self._maybe_send_watch_alert(watch_payload)
+            if self._suppress_live_actions:
+                self._log(
+                    f"Backfill-only process for {self.instrument} {candle_5m['time']} | "
+                    "Watch evaluation updated without live alert"
+                )
+            else:
+                self._set_pending_entry_watch(watch_payload, balanced_pro, candle_5m)
+                self._maybe_send_watch_alert(watch_payload)
             print(
                 f"[Signal Service] No signal | Bias: {balanced_pro['bias']} | "
                 f"Setup: {balanced_pro['setup']} | Quality: {balanced_pro['quality']} | "
@@ -4621,43 +4714,53 @@ class SignalService:
                     self.last_data_pause_reason = None
                     self.watchdog.touch({"phase": "resumed"})
 
-                # Get latest 5-minute candle from database
+                # Get recent 5-minute candles from database so we can backfill missed closed candles
                 self._log("DEBUG Fetching candles from DB...")
-                latest_candles = self.db_reader.fetch_recent_candles_5m(
+                recent_candles = self.db_reader.fetch_recent_candles_5m(
                     instrument=self.instrument,
-                    limit=1
+                    limit=24
                 )
-                self._log(f"DEBUG Fetched {len(latest_candles)} candles")
+                self._log(f"DEBUG Fetched {len(recent_candles)} candles")
                 
-                if not latest_candles:
+                if not recent_candles:
                     self._log("No candles found in database, waiting...")
                     time_module.sleep(30)
                     continue
-                
-                latest_candle = latest_candles[0]
+
                 current_time = self.time_utils.now_ist()
-                
-                # Check if this is a newly closed 5m candle (use close time, not start time)
-                candle_time = latest_candle["time"]
-                effective_close_time = self._effective_candle_close_time(latest_candle)
-                time_diff = current_time - effective_close_time
-                is_new = time_diff < timedelta(minutes=6) and candle_time != self.last_processed_5m_ts
-                
-                # DEBUG logging
-                if not is_new:
+                latest_candle = recent_candles[-1]
+                candles_to_process = self._collect_unprocessed_5m_candles(recent_candles, current_time)
+
+                if not candles_to_process:
+                    candle_time = latest_candle["time"]
+                    effective_close_time = self._effective_candle_close_time(latest_candle)
+                    current_cmp, effective_close_time = self._coerce_comparable_datetimes(current_time, effective_close_time)
+                    time_diff = current_cmp - effective_close_time
                     self._log(
                         f"DEBUG Candle Check | Time Diff: {time_diff} | Candle TS: {candle_time} | "
                         f"Effective Close: {effective_close_time} | Last Processed: {self.last_processed_5m_ts} | "
-                        f"Will Process: {is_new}"
+                        "Will Process: False"
                     )
-                
-                if is_new:
-                    # Process the candle
-                    self._log(f"Processing new 5m candle | Time: {candle_time} | Price: {latest_candle['close']}")
-                    self._current_candle_time = candle_time
+
+                if candles_to_process:
+                    if len(candles_to_process) > 1:
+                        self._log(
+                            f"Replaying {len(candles_to_process)} missed 5m candles for {self.instrument} "
+                            f"from {candles_to_process[0]['time']} to {candles_to_process[-1]['time']}"
+                        )
                     self._refresh_option_data_if_due()
-                    self._process_5m_candle(latest_candle)
-                    self.last_processed_5m_ts = candle_time
+                    for idx, candle_5m in enumerate(candles_to_process):
+                        candle_time = candle_5m["time"]
+                        self._suppress_live_actions = idx < (len(candles_to_process) - 1)
+                        self._log(
+                            f"Processing 5m candle | Time: {candle_time} | Price: {candle_5m['close']} | "
+                            f"Mode: {'BACKFILL' if self._suppress_live_actions else 'LIVE'}"
+                        )
+                        self._current_candle_time = candle_time
+                        self._process_5m_candle(candle_5m)
+                        self.last_processed_5m_ts = candle_time
+                    self._suppress_live_actions = False
+                    latest_candle = candles_to_process[-1]
 
                 current_minute = current_time.replace(second=0, microsecond=0)
                 if current_minute != self.last_monitor_check_minute:

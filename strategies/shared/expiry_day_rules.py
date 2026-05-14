@@ -71,6 +71,8 @@ class ExpiryDayRules:
             current_signal,
             blockers,
             cautions,
+            entry_score=None,
+            day_state=None,
     ):
         expiry_date = self._parse_expiry(expiry_value)
         session_context = ExpirySessionContext(
@@ -103,16 +105,32 @@ class ExpiryDayRules:
             (current_signal == "CE" and pressure_bias == "BEARISH")
             or (current_signal == "PE" and pressure_bias == "BULLISH")
         )
+        day_state = day_state or {}
+        active_day_state = (day_state.get("state") or "").upper()
+        day_state_direction = (day_state.get("direction") or "").upper()
+        aligned_day_state = (
+            active_day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
+            and current_signal in {"CE", "PE"}
+            and current_signal == day_state_direction
+        )
+        entry_score = float(entry_score or score or 0)
         high_conviction_expiry_trend = (
             current_signal in {"CE", "PE"}
             and score >= self._profile_int("high_conviction_expiry_score", 76)
+            and entry_score >= self._profile_int("high_conviction_expiry_entry_score", 72)
             and confidence in {"MEDIUM", "HIGH"}
             and volume_signal in {"NORMAL", "STRONG"}
             and not opposite_pressure
         )
+        if aligned_day_state and confidence in {"MEDIUM", "HIGH"} and volume_signal in {"NORMAL", "STRONG"}:
+            high_conviction_expiry_trend = high_conviction_expiry_trend or (
+                float(score or 0) >= max(self._profile_int("soft_expiry_score", 72), 72)
+                and entry_score >= max(self._profile_int("soft_expiry_entry_score", 68), 68)
+            )
         soft_expiry_trend = (
             current_signal in {"CE", "PE"}
             and score >= self._profile_int("soft_expiry_score", 72)
+            and entry_score >= self._profile_int("soft_expiry_entry_score", 64)
             and confidence in {"MEDIUM", "HIGH"}
             and volume_signal != "WEAK"
         )
@@ -218,8 +236,11 @@ class ExpiryDayRules:
             allow_trade = False
 
         if vwap is not None and abs(price - vwap) > self._expiry_vwap_distance_limit():
-            blockers.append("expiry_too_far_from_vwap")
-            allow_trade = False
+            if high_conviction_expiry_trend:
+                cautions.append("expiry_too_far_from_vwap")
+            else:
+                blockers.append("expiry_too_far_from_vwap")
+                allow_trade = False
 
         opposite_pressure_floor = self._profile_int("expiry_opposite_pressure_score_floor", 78)
         if current_signal == "CE" and pressure_bias == "BEARISH" and not high_conviction_expiry_trend and score < opposite_pressure_floor:

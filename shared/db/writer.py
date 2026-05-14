@@ -285,8 +285,8 @@ class DBWriter:
 
         if self._strategy_decision_has_structured_columns:
             row = list(row)
-            row[26] = json.dumps(row[26] or [])
-            row[27] = json.dumps(row[27] or [])
+            row[30] = json.dumps(row[30] or [])
+            row[31] = json.dumps(row[31] or [])
             query = """
             INSERT INTO strategy_decisions_5m
             (
@@ -606,11 +606,11 @@ class DBWriter:
             pnl_points = EXCLUDED.pnl_points,
             max_favorable_ltp = EXCLUDED.max_favorable_ltp,
             max_adverse_ltp = EXCLUDED.max_adverse_ltp,
-            minutes_since_signal = EXCLUDED.minutes_since_signal,
-            guidance = EXCLUDED.guidance,
-            reason = EXCLUDED.reason;
+                minutes_since_signal = EXCLUDED.minutes_since_signal,
+                guidance = EXCLUDED.guidance,
+                reason = EXCLUDED.reason;
         """
-        self._execute(query, row)
+        self._execute(query, row[:18])
 
     def insert_option_signal_horizon_outcome(self, row):
         if self._option_signal_horizon_outcome_table_exists is None:
@@ -823,7 +823,7 @@ class DBWriter:
             quality = EXCLUDED.quality,
             time_regime = EXCLUDED.time_regime;
         """
-        self._execute(query, row)
+        self._execute(query, row[:12])
 
     def fetch_recent_candles_5m(self, instrument, limit=24):
         query = """

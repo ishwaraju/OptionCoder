@@ -94,7 +94,16 @@ def evaluate_trade_monitor(service, recent_1m_candles, recent_5m_candles):
     )
     flip_score = (confirmed_flip or {}).get("flip_score")
 
-    minutes_active = max(1, int((latest_1m["time"] - service.active_trade_monitor["entry_time"]).total_seconds() // 60))
+    entry_time = service.active_trade_monitor["entry_time"]
+    latest_time = latest_1m["time"]
+    entry_time, latest_time = service._coerce_comparable_datetimes(entry_time, latest_time)
+    latest_1m = {**latest_1m, "time": latest_time}
+    if previous_1m is latest_1m:
+        previous_1m = latest_1m
+    elif previous_1m.get("time") is not None:
+        _, previous_time = service._coerce_comparable_datetimes(entry_time, previous_1m["time"])
+        previous_1m = {**previous_1m, "time": previous_time}
+    minutes_active = max(1, int((latest_1m["time"] - entry_time).total_seconds() // 60))
     service.active_trade_monitor["minutes_active"] = minutes_active
     stop_loss_pct = float(service.active_trade_monitor.get("stop_loss_pct") or getattr(service.config, "STOP_LOSS_PERCENT", Config.STOP_LOSS_PERCENT))
     target_pct = float(service.active_trade_monitor.get("target_pct") or getattr(service.config, "TARGET_PERCENT", Config.TARGET_PERCENT))

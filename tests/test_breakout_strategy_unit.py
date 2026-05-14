@@ -1,4 +1,4 @@
-from strategies.shared.breakout_strategy import BreakoutStrategy
+from strategies.shared.breakout_strategy import BreakoutSignalStrategy, BreakoutStrategy
 from datetime import datetime
 from config import Config
 from strategies.shared.expiry_context import ExpirySessionContext
@@ -9,6 +9,38 @@ def test_allows_high_conviction_bullish_continuation_even_if_far_from_vwap():
     strategy = BreakoutStrategy()
 
     signal, reason = strategy.generate_signal(
+        price=23900,
+        orb_high=23820,
+        orb_low=23740,
+        vwap=23800,
+        atr=40,
+        volume_signal="STRONG",
+        oi_bias="BULLISH",
+        oi_trend="BULLISH",
+        build_up="LONG_BUILDUP",
+        support=23750,
+        resistance=23980,
+        can_trade=True,
+        buffer=10,
+        pressure_metrics={
+            "pressure_bias": "BULLISH",
+            "atm_ce_concentration": 0.10,
+            "atm_pe_concentration": 0.30,
+        },
+        candle_high=23905,
+        candle_low=23882,
+        candle_close=23895,
+        candle_open=23884,
+    )
+
+    assert signal == "CE"
+    assert "breakout" in reason.lower() or "continuation" in reason.lower()
+
+
+def test_breakout_signal_strategy_alias_and_preferred_method_work():
+    strategy = BreakoutSignalStrategy()
+
+    signal, reason = strategy.generate_trade_signal(
         price=23900,
         orb_high=23820,
         orb_low=23740,
@@ -555,6 +587,7 @@ def test_sensex_expiry_allows_high_conviction_midday_trend_trade():
         result = rules.evaluate(
             expiry_value="2026-04-16",
             score=80,
+            entry_score=80,
             confidence="MEDIUM",
             price=78420,
             vwap=78310,
@@ -571,6 +604,31 @@ def test_sensex_expiry_allows_high_conviction_midday_trend_trade():
         assert "expiry_too_far_from_vwap" not in result["blockers"]
     finally:
         Config.SYMBOL = original_symbol
+
+
+def test_expiry_rules_soften_vwap_distance_when_day_state_is_aligned():
+    rules = ExpiryDayRules(type("TU", (), {})(), instrument="SENSEX")
+    rules.time_utils.now_ist = lambda: datetime(2026, 5, 14, 12, 0)
+    rules.time_utils.current_time = lambda: datetime(2026, 5, 14, 12, 0).time()
+
+    result = rules.evaluate(
+        expiry_value="2026-05-14",
+        score=83,
+        entry_score=86,
+        confidence="MEDIUM",
+        price=75150,
+        vwap=74950,
+        volume_signal="STRONG",
+        pressure_metrics={"pressure_bias": "BULLISH"},
+        current_signal="CE",
+        blockers=[],
+        cautions=[],
+        day_state={"state": "REVERSAL_UNDERWAY", "direction": "CE"},
+    )
+
+    assert result["allow_trade"] is True
+    assert "expiry_too_far_from_vwap" not in result["blockers"]
+    assert "expiry_too_far_from_vwap" in result["cautions"]
 
 
 def test_nifty_pre_expiry_allows_medium_confidence_setup_with_weak_volume_watch():

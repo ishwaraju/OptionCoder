@@ -34,6 +34,12 @@ def should_send_trade_monitor_alert(service, monitor_data, minute_key):
     if guidance != last_guidance or decision_label != last_label:
         return True
 
+    if minute_key is not None and last_sent_minute is not None:
+        minute_key, last_sent_minute = service._coerce_comparable_datetimes(
+            minute_key,
+            last_sent_minute,
+        )
+
     minutes_since_last_sent = max(
         0,
         int((minute_key - last_sent_minute).total_seconds() // 60),

@@ -64,6 +64,8 @@ def set_pending_entry_watch(service, watch_payload, balanced_pro, candle_5m):
             or (balanced_pro or {}).get("pressure_conflict_level")
         ),
         "time_regime": (balanced_pro or {}).get("time_regime"),
+        "active_day_state": (balanced_pro or {}).get("active_day_state"),
+        "day_state_direction": (balanced_pro or {}).get("day_state_direction"),
     }
     conflicts_too_high, _ = service._pending_watch_conflicts_too_high(temp_pending)
     if conflicts_too_high:
@@ -111,6 +113,8 @@ def set_pending_entry_watch(service, watch_payload, balanced_pro, candle_5m):
             getattr(service.strategy, "last_pressure_conflict_level", None)
             or (balanced_pro or {}).get("pressure_conflict_level")
         ),
+        "active_day_state": (balanced_pro or {}).get("active_day_state"),
+        "day_state_direction": (balanced_pro or {}).get("day_state_direction"),
         "retrigger_count": 0,
         "retrigger_reason": None,
     }

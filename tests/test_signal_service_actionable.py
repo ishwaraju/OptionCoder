@@ -170,6 +170,74 @@ def test_banknifty_option_sweep_override_allows_clean_reversal():
     assert service._is_option_buyer_actionable("CE", candle_time=datetime(2026, 4, 16, 14, 25)) is True
 
 
+def test_collect_unprocessed_5m_candles_replays_backlog_after_gap():
+    service = SignalService.__new__(SignalService)
+    service.last_processed_5m_ts = datetime(2026, 5, 14, 11, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+    recent_candles = [
+        {"time": datetime(2026, 5, 14, 11, 15, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 100},
+        {"time": datetime(2026, 5, 14, 11, 20, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 101},
+        {"time": datetime(2026, 5, 14, 11, 25, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 102},
+        {"time": datetime(2026, 5, 14, 11, 30, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 103},
+    ]
+
+    candles = service._collect_unprocessed_5m_candles(
+        recent_candles,
+        datetime(2026, 5, 14, 11, 36, tzinfo=ZoneInfo("Asia/Kolkata")),
+    )
+
+    assert [candle["time"].minute for candle in candles] == [20, 25, 30]
+
+
+def test_collect_unprocessed_5m_candles_warms_recent_context_on_fresh_restart():
+    service = SignalService.__new__(SignalService)
+    service.last_processed_5m_ts = None
+
+    recent_candles = [
+        {"time": datetime(2026, 5, 14, 11, 10, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 100},
+        {"time": datetime(2026, 5, 14, 11, 15, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 101},
+        {"time": datetime(2026, 5, 14, 11, 20, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 102},
+        {"time": datetime(2026, 5, 14, 11, 25, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 103},
+        {"time": datetime(2026, 5, 14, 11, 30, tzinfo=ZoneInfo("Asia/Kolkata")), "close_time": None, "close": 104},
+    ]
+
+    candles = service._collect_unprocessed_5m_candles(
+        recent_candles,
+        datetime(2026, 5, 14, 11, 36, tzinfo=ZoneInfo("Asia/Kolkata")),
+    )
+
+    assert [candle["time"].minute for candle in candles] == [20, 25, 30]
+
+
+def test_handle_runtime_gap_recovery_preserves_recent_pending_watch():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.time_utils = type(
+        "TimeUtilsStub",
+        (),
+        {"now_ist": staticmethod(lambda: datetime(2026, 5, 14, 11, 36, tzinfo=ZoneInfo("Asia/Kolkata")))},
+    )()
+    service._log = lambda *_args, **_kwargs: None
+    service._restore_indicator_state = lambda: None
+    service.last_processed_5m_ts = datetime(2026, 5, 14, 11, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
+    service.data_pause_active = False
+    service.last_data_pause_reason = None
+    service.last_monitor_check_minute = datetime(2026, 5, 14, 11, 35, tzinfo=ZoneInfo("Asia/Kolkata"))
+    service.active_trade_monitor = None
+    service.pending_entry_watch = {
+        "created_at": datetime(2026, 5, 14, 11, 24, tzinfo=ZoneInfo("Asia/Kolkata")),
+        "direction": "CE",
+        "signal_type": "BREAKOUT_CONFIRM",
+        "last_checked_minute": datetime(2026, 5, 14, 11, 24, tzinfo=ZoneInfo("Asia/Kolkata")),
+    }
+
+    service._handle_runtime_gap_recovery("system sleep/wake")
+
+    assert service.last_processed_5m_ts == datetime(2026, 5, 14, 11, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
+    assert service.pending_entry_watch is not None
+    assert service.pending_entry_watch["last_checked_minute"] is None
+
+
 def test_microstructure_allows_strict_option_sweep_override_when_oi_data_missing():
     service = SignalService.__new__(SignalService)
     service.option_data = {"band_snapshots": [{"strike": 24200}]}
