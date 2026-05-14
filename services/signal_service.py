@@ -48,30 +48,23 @@ from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.option_data_cache import OptionDataCache
 from shared.utils.option_greeks import enrich_contract_greeks, format_greek_summary, project_option_price
-from services.signal_pending_watch_utils import (
-    candle_body_ratio as pending_watch_candle_body_ratio,
-    candle_close_strength as pending_watch_candle_close_strength,
-    pending_watch_elite_ready as pending_watch_elite_ready_helper,
-    pending_watch_max_minutes as pending_watch_max_minutes_helper,
-    pending_watch_retrigger_eligible as pending_watch_retrigger_eligible_helper,
+from services.signal_pending_watch import (
+    PendingEntryWatchEvaluator,
+    PendingEntryWatchStateManager,
+    PendingEntryWatchTriggerEngine,
+    PendingEntryWatchUtils,
 )
-from services.signal_pending_watch_eval import evaluate_pending_entry_watch
-from services.signal_pending_watch_state import set_pending_entry_watch
-from services.signal_pending_watch_trigger import maybe_fire_pending_entry_watch
-from services.signal_trade_monitor_dispatch import (
-    maybe_send_trade_monitor_update,
-    monitor_alert_is_high_priority,
-    should_send_trade_monitor_alert,
+from services.signal_service_support import (
+    OptionSignalGuard,
+    PendingEntryWatchPolicy,
+    RuntimeGapManager,
+    TradeMonitorSupport,
 )
-from services.signal_trade_monitor_eval import evaluate_trade_monitor
-from services.signal_trade_monitor_state import start_trade_monitor
-from services.signal_trade_monitor_utils import (
-    drawdown_from_peak_percent as trade_monitor_drawdown_from_peak_percent,
-    dynamic_trail_percent as trade_monitor_dynamic_trail_percent,
-    estimate_live_atr as trade_monitor_estimate_live_atr,
-    option_pnl_percent as trade_monitor_option_pnl_percent,
-    spread_widening_percent as trade_monitor_spread_widening_percent,
-    update_psar_style_level as trade_monitor_update_psar_style_level,
+from services.trade_monitor import (
+    TradeMonitorDispatcher,
+    TradeMonitorEvaluator,
+    TradeMonitorStateManager,
+    TradeMonitorUtils,
 )
 
 # ML Signal Enhancement (FREE - scikit-learn)
@@ -241,112 +234,39 @@ class SignalService:
         print(f"[{ts}] [Signal Service] {message}")
 
     def _handle_runtime_gap_recovery(self, reason_label):
-        """Handle recovery after confirmed system sleep or a large runtime gap."""
-        self._log(f"🔄 Recovering after {reason_label}...")
-
-        # Preserve last processed timestamp so we can backfill any missed 5m candles sequentially.
-        if self.last_processed_5m_ts:
-            self._log(f"   Last processed candle preserved for backlog replay: {self.last_processed_5m_ts}")
-
-        # Reset data pause state
-        if self.data_pause_active:
-            self.data_pause_active = False
-            self.last_data_pause_reason = None
-            self._log("   ✅ Reset data pause state")
-
-        self.last_monitor_check_minute = None
-
-        # Preserve active trade monitor if the entry is still recent enough to re-evaluate safely.
-        if self.active_trade_monitor:
-            if self._active_trade_monitor_is_recoverable():
-                self.active_trade_monitor["last_notified_minute"] = None
-                self.active_trade_monitor["last_sent_monitor_minute"] = None
-                self._log("   ✅ Preserved active trade monitor for fresh post-gap evaluation")
-            else:
-                self._log("   ⚠️  Clearing active trade monitor (expired during runtime gap)")
-                self.active_trade_monitor = None
-        if self.pending_entry_watch:
-            if self._pending_watch_is_recoverable(self.pending_entry_watch):
-                self.pending_entry_watch["last_checked_minute"] = None
-                self._log("   ✅ Preserved pending entry watch for fresh 1m re-check")
-            else:
-                self._log("   ⚠️  Clearing pending entry watch (expired during runtime gap)")
-                self.pending_entry_watch = None
-        
-        # Refresh indicator state from recent history
-        try:
-            self._restore_indicator_state()
-            self._log("   ✅ Restored indicator state from history")
-        except Exception as e:
-            self._log(f"   ⚠️  Could not restore indicators: {e}")
-        
-        self._log("🔄 Recovery complete. Resuming normal operation...")
+        return RuntimeGapManager.handle_runtime_gap_recovery(self, reason_label)
 
     def _handle_runtime_gap(self, gap_event):
-        kind = gap_event["kind"]
-        wall_gap = gap_event["wall_gap"]
-        active_gap = gap_event["active_gap"]
-        suspended_gap = gap_event["suspended_gap"]
-
-        if kind == "system_sleep":
-            self._log(
-                "⚠️  SYSTEM SLEEP/WAKE DETECTED! "
-                f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
-                f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
-                "Recovering..."
-            )
-            self._handle_runtime_gap_recovery("system sleep/wake")
-            return
-
-        self._log(
-            "⚠️  PROCESSING/FEED GAP DETECTED! "
-            f"Wall gap: {wall_gap:.1f}s ({wall_gap/60:.1f} min) | "
-            f"active runtime: {active_gap:.1f}s | suspended: {suspended_gap:.1f}s. "
-            "This is not a confirmed system sleep. Recovering..."
-        )
-        self._handle_runtime_gap_recovery("processing/feed gap")
+        return RuntimeGapManager.handle_runtime_gap(self, gap_event)
 
     def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
-        return start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike)
+        return TradeMonitorStateManager.start_trade_monitor(
+            self,
+            signal,
+            candle_5m,
+            price,
+            balanced_pro,
+            selected_strike,
+        )
 
     @staticmethod
     def _option_pnl_percent(entry_price, option_price):
-        return trade_monitor_option_pnl_percent(entry_price, option_price)
+        return TradeMonitorUtils.option_pnl_percent(entry_price, option_price)
 
     @staticmethod
     def _drawdown_from_peak_percent(peak_price, option_price):
-        return trade_monitor_drawdown_from_peak_percent(peak_price, option_price)
+        return TradeMonitorUtils.drawdown_from_peak_percent(peak_price, option_price)
 
     @staticmethod
     def _spread_widening_percent(entry_spread, current_spread):
-        return trade_monitor_spread_widening_percent(entry_spread, current_spread)
+        return TradeMonitorUtils.spread_widening_percent(entry_spread, current_spread)
 
     def _option_three_bar_momentum(self, recent_1m_candles, strike, signal):
-        if not recent_1m_candles or strike is None or signal not in {"CE", "PE"}:
-            return None
-        sampled = recent_1m_candles[-3:]
-        prices = []
-        for candle in sampled:
-            snap = self._get_option_contract_snapshot(strike, signal, before_ts=candle.get("time"))
-            if snap and snap.get("ltp") is not None:
-                prices.append(float(snap.get("ltp")))
-        if len(prices) < 3:
-            return None
-        if signal == "CE":
-            if prices[2] > prices[1] > prices[0]:
-                return "EXPANDING"
-            if prices[2] < prices[1] < prices[0]:
-                return "FAILING"
-        else:
-            if prices[2] > prices[1] > prices[0]:
-                return "EXPANDING"
-            if prices[2] < prices[1] < prices[0]:
-                return "FAILING"
-        return "STALLING"
+        return TradeMonitorSupport.option_three_bar_momentum(self, recent_1m_candles, strike, signal)
 
     @staticmethod
     def _estimate_live_atr(recent_5m_candles, fallback=None):
-        return trade_monitor_estimate_live_atr(recent_5m_candles, fallback)
+        return TradeMonitorUtils.estimate_live_atr(recent_5m_candles, fallback)
 
     def _get_atm_reference_option_contract(self, signal, before_ts=None):
         atm_strike = (self.option_data or {}).get("atm")
@@ -359,11 +279,23 @@ class SignalService:
 
     @staticmethod
     def _dynamic_trail_percent(base_trail_pct, setup_bucket, live_atr, underlying_price, time_regime=None):
-        return trade_monitor_dynamic_trail_percent(base_trail_pct, setup_bucket, live_atr, underlying_price, time_regime)
+        return TradeMonitorUtils.dynamic_trail_percent(
+            base_trail_pct,
+            setup_bucket,
+            live_atr,
+            underlying_price,
+            time_regime,
+        )
 
     @staticmethod
     def _update_psar_style_level(signal, existing_level, latest_1m, previous_1m, live_atr=None):
-        return trade_monitor_update_psar_style_level(signal, existing_level, latest_1m, previous_1m, live_atr)
+        return TradeMonitorUtils.update_psar_style_level(
+            signal,
+            existing_level,
+            latest_1m,
+            previous_1m,
+            live_atr,
+        )
 
     @staticmethod
     def _entry_decision_label(signal):
@@ -387,139 +319,25 @@ class SignalService:
         return "CONFIRMED_FLIP"
 
     def _infer_monitor_flip_signal(self, current_signal, latest_1m, previous_1m, micro_high, micro_low, vwap_break, structure_break):
-        current_signal = (current_signal or "").upper()
-        latest_close = latest_1m.get("close")
-        previous_close = previous_1m.get("close")
-        if latest_close is None or previous_close is None or not vwap_break:
-            return None
-        flip_side = "PE" if current_signal == "CE" else "CE"
-        flip_score = self._compute_flip_score(
-            direction=flip_side,
-            structure_break=structure_break,
-            vwap_break=vwap_break,
-            latest_1m=latest_1m,
-            previous_1m=previous_1m,
+        return TradeMonitorSupport.infer_monitor_flip_signal(
+            self,
+            current_signal,
+            latest_1m,
+            previous_1m,
+            micro_high,
+            micro_low,
+            vwap_break,
+            structure_break,
         )
-
-        if current_signal == "CE":
-            if latest_close <= micro_low and latest_close < previous_close:
-                return {
-                    "label": self._flip_confirmed_label("PE") if flip_score["score"] >= 65 else "THESIS_FAILED_EXIT",
-                    "action_text": "CE thesis fail ho gayi. PE side ab confirmed lag rahi hai.",
-                    "flip_score": flip_score,
-                }
-        elif current_signal == "PE":
-            if latest_close >= micro_high and latest_close > previous_close:
-                return {
-                    "label": self._flip_confirmed_label("CE") if flip_score["score"] >= 65 else "THESIS_FAILED_EXIT",
-                    "action_text": "PE thesis fail ho gayi. CE side ab confirmed lag rahi hai.",
-                    "flip_score": flip_score,
-                }
-        return None
 
     def _resolve_trade_risk_profile(self, setup_type=None, quality=None, confidence=None, cautions=None):
-        setup = (setup_type or "GENERAL").upper()
-        quality = (quality or "").upper()
-        confidence = (confidence or "").upper()
-        cautions = {str(item).lower() for item in (cautions or []) if item}
-        breakout_bucket = {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "OPENING_DRIVE"}
-        reversal_bucket = {"REVERSAL", "TRAP_REVERSAL"}
-        continuation_bucket = {"CONTINUATION", "AGGRESSIVE_CONTINUATION"}
-
-        if setup in reversal_bucket:
-            setup_bucket = "REVERSAL"
-        elif setup in breakout_bucket:
-            setup_bucket = "BREAKOUT"
-        elif setup in continuation_bucket:
-            setup_bucket = "CONTINUATION"
-        else:
-            setup_bucket = "BREAKOUT"
-
-        session_bucket = self._resolve_session_bucket(cautions)
-        iv_bucket = self._resolve_iv_bucket(
-            selected_option_contract=getattr(self, "_current_risk_option_contract", None),
-            reference_option_contract=getattr(self, "_current_risk_reference_contract", None),
-        )
-        market_iv_regime = self._resolve_market_iv_regime(
-            reference_option_contract=getattr(self, "_current_risk_reference_contract", None),
-            option_type=((getattr(self, "_current_risk_option_contract", None) or {}).get("option_type")),
-            before_ts=((getattr(self, "_current_risk_reference_contract", None) or {}).get("ts")),
-        )
-        matrix = self.RISK_PROFILE_MATRIX.get(self.instrument, self.RISK_PROFILE_MATRIX["NIFTY"])
-        profile = (
-            matrix.get(session_bucket, matrix["NON_EXPIRY"]).get(setup_bucket)
-            or matrix["NON_EXPIRY"]["BREAKOUT"]
-        ).get(iv_bucket)
-        if not profile:
-            profile = matrix["NON_EXPIRY"]["BREAKOUT"]["NORMAL"]
-
-        hard_stop = float(profile["sl"])
-        target_pct = float(profile["target"])
-        trail_pct = float(profile["trail"])
-        expiry_mode = session_bucket == "EXPIRY"
-        expiry_fast_decay = "expiry_fast_decay" in cautions or expiry_mode
-
-        time_warn, time_exit = self._resolve_time_stop_minutes(
-            session_bucket=session_bucket,
-            setup_bucket=setup_bucket,
+        return TradeMonitorSupport.resolve_trade_risk_profile(
+            self,
+            setup_type=setup_type,
             quality=quality,
             confidence=confidence,
-            iv_bucket=iv_bucket,
+            cautions=cautions,
         )
-        risk_note = (
-            f"{self.instrument} {session_bucket.lower()} {setup_bucket.lower()} profile with "
-            f"{iv_bucket.lower()} strike IV and {market_iv_regime.lower()} market IV regime. "
-            "Underlying invalidation stays primary; premium % is the hard cap."
-        )
-
-        if quality == "C" or confidence == "LOW":
-            time_exit = min(time_exit, 4)
-
-        if expiry_fast_decay:
-            trail_pct = min(trail_pct, 8.0)
-
-        hard_stop, target_pct, trail_pct, time_warn, time_exit = self._apply_market_iv_regime_adjustments(
-            hard_stop=hard_stop,
-            target_pct=target_pct,
-            trail_pct=trail_pct,
-            time_warn=time_warn,
-            time_exit=time_exit,
-            market_iv_regime=market_iv_regime,
-            session_bucket=session_bucket,
-        )
-
-        profit_lock_trigger_pct = max(8.0, round(target_pct * 0.6, 2))
-        if setup_bucket == "BREAKOUT":
-            profit_lock_trigger_pct = min(profit_lock_trigger_pct, 12.0 if self.instrument == "NIFTY" else 14.0)
-        elif setup_bucket == "CONTINUATION":
-            profit_lock_trigger_pct = min(max(profit_lock_trigger_pct, 10.0), 14.0)
-        elif setup_bucket == "REVERSAL":
-            profit_lock_trigger_pct = min(max(profit_lock_trigger_pct, 10.0), 15.0)
-        if expiry_mode:
-            profit_lock_trigger_pct = max(6.0, profit_lock_trigger_pct - 2.0)
-
-        runner_profile = self._runner_profile_for_setup(setup_bucket, session_bucket)
-
-        return {
-            "setup_bucket": setup_bucket,
-            "hard_premium_stop_pct": hard_stop,
-            "target_pct": target_pct,
-            "trail_from_peak_pct": trail_pct,
-            "profit_lock_trigger_pct": round(profit_lock_trigger_pct, 2),
-            "time_stop_warn_minutes": time_warn,
-            "time_stop_exit_minutes": time_exit,
-            "risk_note": risk_note,
-            "primary_stop_source": "UNDERLYING_INVALIDATION",
-            "expiry_fast_decay": bool(expiry_fast_decay),
-            "session_bucket": session_bucket,
-            "iv_bucket": iv_bucket,
-            "market_iv_regime": market_iv_regime,
-            "partial_trigger_pct": round(runner_profile["partial_trigger_pct"], 2),
-            "runner_trigger_pct": round(runner_profile["runner_trigger_pct"], 2),
-            "runner_trail_bonus": round(runner_profile["runner_trail_bonus"], 2),
-            "allow_endgame_runner": bool(runner_profile["allow_endgame_runner"]),
-            "time_extension_minutes": int(runner_profile["time_extension_minutes"]),
-        }
 
     @staticmethod
     def _resolve_session_bucket(cautions):
@@ -708,47 +526,13 @@ class SignalService:
 
     @staticmethod
     def _option_expansion_metrics(entry_option_price, option_price, entry_underlying_price, underlying_price, entry_delta=None):
-        if entry_option_price in (None, 0) or option_price is None:
-            return {
-                "underlying_move": None,
-                "actual_option_move": None,
-                "expected_option_move": None,
-                "expansion_ratio": None,
-                "premium_supportive": False,
-            }
-        try:
-            actual_option_move = float(option_price) - float(entry_option_price)
-            underlying_move = (
-                abs(float(underlying_price) - float(entry_underlying_price))
-                if underlying_price is not None and entry_underlying_price is not None
-                else None
-            )
-            delta_abs = abs(float(entry_delta or 0))
-            if underlying_move is None:
-                expected_option_move = None
-            else:
-                expected_option_move = max(delta_abs * underlying_move, 0.0)
-            if expected_option_move in (None, 0):
-                expansion_ratio = None
-                premium_supportive = actual_option_move >= (float(entry_option_price) * 0.04)
-            else:
-                expansion_ratio = round(actual_option_move / expected_option_move, 2)
-                premium_supportive = expansion_ratio >= 0.75
-            return {
-                "underlying_move": round(underlying_move, 2) if underlying_move is not None else None,
-                "actual_option_move": round(actual_option_move, 2),
-                "expected_option_move": round(expected_option_move, 2) if expected_option_move is not None else None,
-                "expansion_ratio": expansion_ratio,
-                "premium_supportive": premium_supportive,
-            }
-        except Exception:
-            return {
-                "underlying_move": None,
-                "actual_option_move": None,
-                "expected_option_move": None,
-                "expansion_ratio": None,
-                "premium_supportive": False,
-            }
+        return TradeMonitorSupport.option_expansion_metrics(
+            entry_option_price,
+            option_price,
+            entry_underlying_price,
+            underlying_price,
+            entry_delta,
+        )
 
     @staticmethod
     def _classify_trade_run_profile(
@@ -761,520 +545,62 @@ class SignalService:
         setup_bucket,
         session_bucket,
     ):
-        pnl_percent = float(pnl_percent or 0.0)
-        expansion_metrics = expansion_metrics or {}
-        expansion_ratio = expansion_metrics.get("expansion_ratio")
-        premium_supportive = bool(expansion_metrics.get("premium_supportive"))
-        setup_bucket = (setup_bucket or "BREAKOUT").upper()
-        session_bucket = (session_bucket or "NON_EXPIRY").upper()
-
-        if pressure_flip_exit:
-            return "FAILED"
-
-        if (
-            pnl_percent >= (24.0 if session_bucket == "EXPIRY" else 28.0)
-            and premium_supportive
-            and momentum_strong
-            and (drawdown_from_peak_pct is None or drawdown_from_peak_pct <= 12.0)
-            and minutes_active >= 2
-            and setup_bucket in {"BREAKOUT", "CONTINUATION"}
-        ):
-            return "RUNNER"
-
-        if (
-            pnl_percent >= 12.0
-            and (premium_supportive or (expansion_ratio is not None and expansion_ratio >= 0.65))
-            and minutes_active >= 1
-        ):
-            return "SWING_PUSH"
-
-        if pnl_percent > 0:
-            return "SCALP"
-        return "STALLED"
+        return TradeMonitorSupport.classify_trade_run_profile(
+            pnl_percent,
+            expansion_metrics,
+            minutes_active,
+            momentum_strong,
+            pressure_flip_exit,
+            drawdown_from_peak_pct,
+            setup_bucket,
+            session_bucket,
+        )
 
     def _session_start_for(self, candle_time):
         return candle_time.replace(hour=9, minute=15, second=0, microsecond=0)
 
     def _assess_raw_feed_health(self, candle_time):
-        session_start = self._session_start_for(candle_time)
-        candle_health = self.db_reader.fetch_intraday_candle_health(
-            self.instrument,
-            session_start=session_start,
-            end_time=candle_time,
-            timeframe="5m",
-        )
-        oi_health = self.db_reader.fetch_intraday_oi_health(
-            self.instrument,
-            session_start=session_start,
-            end_time=candle_time,
-        )
-        label = "GOOD"
-        reasons = []
-        if candle_health["coverage_pct"] < 84 or oi_health["coverage_pct"] < 78:
-            label = "REJECT"
-            reasons.append("coverage_too_low")
-        elif candle_health["coverage_pct"] < 92 or oi_health["coverage_pct"] < 90:
-            label = "RISKY"
-            reasons.append("coverage_soft")
-
-        if candle_health["max_gap_seconds"] >= 901 or oi_health["max_gap_seconds"] >= 721:
-            label = "REJECT"
-            reasons.append("large_gap_detected")
-        elif candle_health["max_gap_seconds"] >= 601 or oi_health["max_gap_seconds"] >= 361:
-            if label != "REJECT":
-                label = "RISKY"
-            reasons.append("gap_risk")
-
-        if oi_health["non_good_rows"] > 0:
-            if label == "GOOD":
-                label = "RISKY"
-            reasons.append("oi_quality_flagged")
-
-        summary = (
-            f"feed={label} | candle_cov={candle_health['coverage_pct']}% ({candle_health['count']}/{candle_health['expected_count']}) "
-            f"| oi_cov={oi_health['coverage_pct']}% ({oi_health['distinct_minutes']}/{oi_health['expected_minutes']}) "
-            f"| candle_gap={candle_health['max_gap_seconds']}s | oi_gap={oi_health['max_gap_seconds']}s"
-        )
-        result = {
-            "label": label,
-            "summary": summary,
-            "reasons": reasons,
-            "candle_health": candle_health,
-            "oi_health": oi_health,
-        }
-        self.last_data_health = result
-        return result
+        return OptionSignalGuard.assess_raw_feed_health(self, candle_time)
 
     @staticmethod
     def _derive_option_volume_signal(option_data):
-        """Use option-band participation when index/futures candle volume is unavailable."""
-        if not option_data:
-            return None
-
-        band_rows = option_data.get("band_snapshots") or []
-        ce_band_volume = float(option_data.get("ce_volume_band") or 0)
-        pe_band_volume = float(option_data.get("pe_volume_band") or 0)
-
-        if band_rows and (ce_band_volume <= 0 or pe_band_volume <= 0):
-            ce_band_volume = sum(float(row.get("volume") or 0) for row in band_rows if row.get("option_type") == "CE")
-            pe_band_volume = sum(float(row.get("volume") or 0) for row in band_rows if row.get("option_type") == "PE")
-
-        total_volume = ce_band_volume + pe_band_volume
-        if total_volume <= 0:
-            return None
-
-        smaller_side = max(min(ce_band_volume, pe_band_volume), 1.0)
-        dominant_ratio = max(ce_band_volume, pe_band_volume) / smaller_side
-        atm_total = float(option_data.get("ce_volume") or 0) + float(option_data.get("pe_volume") or 0)
-
-        if dominant_ratio >= 1.35 or atm_total >= total_volume * 0.18:
-            return "STRONG"
-        return "NORMAL"
+        return OptionSignalGuard.derive_option_volume_signal(option_data)
 
     def _evaluate_oi_wall_guard(self, signal, price, oi_ladder_data=None, pressure_metrics=None):
-        signal = (signal or "").upper()
-        if signal not in {"CE", "PE"} or price is None:
-            return None
-
-        support = float((oi_ladder_data or {}).get("support") or 0) or None
-        resistance = float((oi_ladder_data or {}).get("resistance") or 0) or None
-        support_state = (oi_ladder_data or {}).get("support_wall_state")
-        resistance_state = (oi_ladder_data or {}).get("resistance_wall_state")
-        support_strength = float((oi_ladder_data or {}).get("support_strength") or 0)
-        resistance_strength = float((oi_ladder_data or {}).get("resistance_strength") or 0)
-        strike_gap = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
-        near_buffer = max(strike_gap * 0.35, 12)
-        pressure_bias = (pressure_metrics or {}).get("pressure_bias")
-        call_wall_ratio = float((pressure_metrics or {}).get("call_wall_strength_ratio") or 0)
-        put_wall_ratio = float((pressure_metrics or {}).get("put_wall_strength_ratio") or 0)
-        sweep_override = self._should_soften_option_sweep_filters(signal)
-
-        if signal == "CE" and resistance is not None and price >= (resistance - near_buffer):
-            if resistance_state not in {"WEAKENING"} and pressure_bias != "BULLISH":
-                return {
-                    "label": "CALL_WALL_OVERHEAD",
-                    "reason": f"Price strong CE wall {int(resistance)} ke niche hai; clean break support nahi dikh raha.",
-                    "wall_level": resistance,
-                }
-            if resistance_strength >= max(support_strength, 1.0) * 1.15 and call_wall_ratio >= max(put_wall_ratio, 1.0):
-                if sweep_override:
-                    return None
-                return {
-                    "label": "CALL_WALL_HEAVY",
-                    "reason": f"Call wall {int(resistance)} abhi heavy hai; CE breakout premium choke ho sakta hai.",
-                    "wall_level": resistance,
-                }
-
-        if signal == "PE" and support is not None and price <= (support + near_buffer):
-            if support_state not in {"WEAKENING"} and pressure_bias != "BEARISH":
-                return {
-                    "label": "PUT_WALL_SUPPORTING",
-                    "reason": f"Price strong PE wall {int(support)} ke paas hai; downside clean open nahi lag raha.",
-                    "wall_level": support,
-                }
-            if support_strength >= max(resistance_strength, 1.0) * 1.15 and put_wall_ratio >= max(call_wall_ratio, 1.0):
-                if sweep_override:
-                    return None
-                return {
-                    "label": "PUT_WALL_HEAVY",
-                    "reason": f"Put wall {int(support)} abhi heavy hai; PE breakdown premium sustain nahi ho sakta.",
-                    "wall_level": support,
-                }
-        return None
+        return OptionSignalGuard.evaluate_oi_wall_guard(self, signal, price, oi_ladder_data, pressure_metrics)
 
     def _should_soften_option_sweep_filters(self, signal):
-        signal = (signal or "").upper()
-        sweep_ctx = getattr(self, "option_sweep_context", None) or {}
-        signal_type = (getattr(self.strategy, "last_signal_type", None) or "NONE").upper()
-        score = float(
-            getattr(self.strategy, "last_entry_score", 0)
-            or getattr(self.strategy, "last_score", 0)
-            or 0
-        )
-        return (
-            signal in {"CE", "PE"}
-            and sweep_ctx.get("direction") == signal
-            and sweep_ctx.get("quality") == "STRONG"
-            and sweep_ctx.get("micro_confirmed")
-            and sweep_ctx.get("persistence_pairs", 0) >= 3
-            and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "CONTINUATION", "AGGRESSIVE_CONTINUATION", "RETEST", "OPENING_DRIVE"}
-            and score >= 88
-            and getattr(self.strategy, "last_pressure_conflict_level", "NONE") in {"NONE", "MILD"}
-        )
+        return OptionSignalGuard.should_soften_option_sweep_filters(self, signal)
 
     def _evaluate_premium_quality_guard(self, signal, selected_option_contract, candle_time):
-        signal = (signal or "").upper()
-        if signal not in {"CE", "PE"} or not selected_option_contract:
-            return None
-
-        ltp = float(selected_option_contract.get("ltp") or 0)
-        spread_pct = self._spread_percent(selected_option_contract)
-        volume_now = int(selected_option_contract.get("volume") or 0)
-        iv_now = float(selected_option_contract.get("iv") or 0)
-        if ltp <= 0:
-            return {"label": "PREMIUM_MISSING", "reason": "Selected option ka live premium missing hai."}
-        if spread_pct is not None and spread_pct >= 5.5:
-            return {"label": "PREMIUM_SPREAD_WIDE", "reason": f"Selected option spread {spread_pct:.2f}% hai."}
-
-        previous_snapshot = self.db_reader.fetch_option_contract_snapshot(
-            instrument=self.instrument,
-            strike=selected_option_contract.get("strike"),
-            option_type=signal,
-            before_ts=candle_time - timedelta(minutes=2),
-        )
-        previous_ltp = float(previous_snapshot.get("ltp") or 0) if previous_snapshot else 0.0
-        previous_volume = int(previous_snapshot.get("volume") or 0) if previous_snapshot else 0
-        premium_momentum_pct = None
-        if previous_ltp > 0:
-            premium_momentum_pct = round(((ltp - previous_ltp) / previous_ltp) * 100.0, 2)
-
-        atm_row = self._get_option_contract_snapshot((self.option_data or {}).get("atm"), signal, before_ts=candle_time)
-        atm_iv = float(atm_row.get("iv") or 0) if atm_row else 0.0
-        iv_markup_pct = None
-        if atm_iv > 0 and iv_now > 0:
-            iv_markup_pct = round(((iv_now - atm_iv) / atm_iv) * 100.0, 2)
-
-        if premium_momentum_pct is not None and premium_momentum_pct <= -2.0 and self.strategy.last_score < 88:
-            return {
-                "label": "PREMIUM_NOT_EXPANDING",
-                "reason": f"Selected premium abhi expand nahi kar raha ({premium_momentum_pct:.2f}%).",
-                "premium_momentum_pct": premium_momentum_pct,
-            }
-        if premium_momentum_pct is not None and premium_momentum_pct < 1.0 and volume_now <= previous_volume and self.strategy.last_regime in {"RANGING", "CHOPPY"}:
-            if self._should_soften_option_sweep_filters(signal) and (spread_pct is None or spread_pct < 4.5):
-                return {
-                    "label": "PREMIUM_OK",
-                    "reason": "Broad option sweep me premium sleepy check soften kiya gaya.",
-                    "premium_momentum_pct": premium_momentum_pct,
-                    "iv_markup_pct": iv_markup_pct,
-                    "spread_pct": spread_pct,
-                }
-            return {
-                "label": "PREMIUM_SLEEPY",
-                "reason": "Premium response weak hai aur volume bhi expand nahi hua.",
-                "premium_momentum_pct": premium_momentum_pct,
-            }
-        if iv_markup_pct is not None and iv_markup_pct >= 18 and spread_pct is not None and spread_pct >= 4.0:
-            return {
-                "label": "IV_RICH_PREMIUM",
-                "reason": f"Premium IV-rich hai ({iv_markup_pct:.1f}% ATM se upar) aur spread bhi wide hai.",
-                "premium_momentum_pct": premium_momentum_pct,
-            }
-        return {
-            "label": "PREMIUM_OK",
-            "reason": "Premium expansion acceptable hai.",
-            "premium_momentum_pct": premium_momentum_pct,
-            "iv_markup_pct": iv_markup_pct,
-            "spread_pct": spread_pct,
-        }
+        return OptionSignalGuard.evaluate_premium_quality_guard(self, signal, selected_option_contract, candle_time)
 
     def _compute_flip_score(self, direction, structure_break, vwap_break, latest_1m=None, previous_1m=None):
-        direction = (direction or "").upper()
-        latest_1m = latest_1m or {}
-        previous_1m = previous_1m or {}
-        score = 0.0
-        reasons = []
-        if structure_break:
-            score += 30.0
-            reasons.append("structure_break")
-        if vwap_break:
-            score += 20.0
-            reasons.append("vwap_break")
-        latest_close = latest_1m.get("close")
-        previous_close = previous_1m.get("close")
-        if latest_close is not None and previous_close is not None:
-            if direction == "CE" and latest_close > previous_close:
-                score += 15.0
-                reasons.append("higher_close")
-            elif direction == "PE" and latest_close < previous_close:
-                score += 15.0
-                reasons.append("lower_close")
-
-        participation = getattr(self.strategy, "last_participation_metrics", None) or {}
-        directional = participation.get(direction) or {}
-        if directional.get("same_side_dominates"):
-            score += 12.0
-            reasons.append("same_side_delta")
-        if directional.get("oi_supportive"):
-            score += 8.0
-            reasons.append("oi_support")
-        if directional.get("spread_ok"):
-            score += 8.0
-            reasons.append("spread_ok")
-
-        return {
-            "score": round(min(score, 100.0), 2),
-            "confidence": "HIGH" if score >= 70 else "MEDIUM" if score >= 55 else "LOW",
-            "reasons": reasons,
-        }
+        return OptionSignalGuard.compute_flip_score(self, direction, structure_break, vwap_break, latest_1m, previous_1m)
 
     def _classify_no_trade_zone(self, balanced_pro, signal=None, selected_option_contract=None):
-        balanced_pro = balanced_pro or {}
-        cautions = {str(item).lower() for item in (self.strategy.last_cautions or []) if item}
-        time_regime = (balanced_pro.get("time_regime") or self.strategy.last_regime or "").upper()
-        signal_type = (balanced_pro.get("setup") or self.strategy.last_signal_type or "").upper()
-        active_day_state = (balanced_pro.get("active_day_state") or "").upper()
-        day_state_direction = (balanced_pro.get("day_state_direction") or "").upper()
-        score = float(self.strategy.last_entry_score or self.strategy.last_score or 0)
-        confidence = (getattr(self.strategy, "last_confidence", "") or "").upper()
-        spread_percent = self._spread_percent(selected_option_contract) if selected_option_contract else None
-        data_health = getattr(self, "last_data_health", None) or {}
-        feed_label = (data_health.get("label") or "").upper()
-        market_regime = (self.strategy.last_regime or "").upper()
-        strong_day_state_alignment = (
-            signal in {"CE", "PE"}
-            and active_day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
-            and day_state_direction == signal
-            and confidence in {"MEDIUM", "HIGH"}
-            and score >= 78
-        )
-        critical_noise_flags = {
-            flag for flag in {
-                "participation_weak",
-                "opposite_pressure",
-                "pressure_conflict",
-                "higher_tf_not_aligned",
-                "adx_not_confirmed",
-            }
-            if flag in cautions
-        }
-        hard_conflict_flags = {"participation_weak", "opposite_pressure", "pressure_conflict", "higher_tf_not_aligned"}
-        has_hard_conflict = bool(critical_noise_flags.intersection(hard_conflict_flags))
-        elite_breakout = (
-            signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "OPENING_DRIVE"}
-            and confidence == "HIGH"
-            and score >= 88
-        )
-        clean_momentum_setup = (
-            signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION", "OPENING_DRIVE"}
-            and confidence in {"MEDIUM", "HIGH"}
-            and score >= 80
-            and not has_hard_conflict
-        )
-
-        if feed_label == "RISKY" and score < 85 and not strong_day_state_alignment:
-            return {
-                "label": "FEED_RISKY_SKIP",
-                "reason": "Raw feed clean nahi lag raha aur setup elite score ka nahi hai.",
-                "action_text": "Is setup ko skip karo. Feed quality pehle clean honi chahiye.",
-            }
-
-        if spread_percent is not None and spread_percent >= 5.5:
-            return {
-                "label": "WIDE_SPREAD_SKIP",
-                "reason": f"Selected option spread {spread_percent:.2f}% hai, execution risky hai.",
-                "action_text": "Is setup ko skip karo. Spread bahut wide hai.",
-            }
-
-        if (
-            "expiry_day_mode" in cautions
-            and time_regime in {"MIDDAY", "LATE_DAY", "ENDGAME"}
-            and score < 74
-            and not clean_momentum_setup
-        ):
-            return {
-                "label": "EXPIRY_PREMIUM_CHAOS",
-                "reason": "Expiry session me premium noise aur fast decay high hai.",
-                "action_text": "Fresh entry avoid karo. Expiry premium abhi noisy hai.",
-            }
-
-        if time_regime in {"LATE_DAY", "ENDGAME"} and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "TRAP_REVERSAL"}:
-            conflict = getattr(self.strategy, "last_pressure_conflict_level", "NONE")
-            if conflict in {"MODERATE", "HIGH"} and not (clean_momentum_setup and score >= 78):
-                return {
-                    "label": "LATE_DAY_WHIPSAW",
-                    "reason": "Late-day reversal zone me pressure conflict present hai.",
-                    "action_text": "Skip ya wait karo. Late-day whipsaw risk high hai.",
-                }
-
-        if (
-            time_regime == "MIDDAY"
-            and market_regime in {"RANGING", "CHOPPY"}
-            and score < 76
-            and not (clean_momentum_setup and confidence in {"MEDIUM", "HIGH"})
-        ):
-            return {
-                "label": "MIDDAY_RANGE_SKIP",
-                "reason": "Midday ranging/choppy regime me premium clean explode karna mushkil hota hai.",
-                "action_text": "Watch-only raho. Midday me cleaner expansion ka wait karo.",
-            }
-        if (
-            len(critical_noise_flags) >= 2
-            or (has_hard_conflict and "adx_not_confirmed" in critical_noise_flags)
-            or (has_hard_conflict and score < 84)
-        ) and not elite_breakout and not strong_day_state_alignment:
-            return {
-                "label": "HIGH_NOISE_SKIP",
-                "reason": "Price aur option participation clean align nahi kar rahe.",
-                "action_text": "Fresh add mat karo. Setup abhi high-noise zone me hai.",
-            }
-        return None
+        return OptionSignalGuard.classify_no_trade_zone(self, balanced_pro, signal, selected_option_contract)
 
     @staticmethod
     def _build_journal_note(decision_label, action_text, extra=None):
-        bits = [bit for bit in [decision_label, action_text, extra] if bit]
-        return " | ".join(bits) if bits else None
+        return TradeMonitorSupport.build_journal_note(decision_label, action_text, extra)
 
     def _optimized_spread_short_strike(self, signal, long_strike, balanced_pro=None, risk_profile=None):
-        signal = (signal or "").upper()
-        if signal not in {"CE", "PE"} or long_strike is None:
-            return None, None
-
-        balanced_pro = balanced_pro or {}
-        risk_profile = risk_profile or {}
-        strike_step = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
-        cautions = {str(item).lower() for item in (self.strategy.last_cautions or []) if item}
-        expiry_mode = "expiry_day_mode" in cautions or "expiry_fast_decay" in cautions
-        late_session = (balanced_pro.get("time_regime") or "").upper() in {"LATE_DAY", "ENDGAME"}
-        target_pct = float(risk_profile.get("target_pct") or 0)
-
-        first_target_price = None
-        try:
-            first_target_price = float((self.strategy.last_entry_plan or {}).get("first_target_price"))
-        except Exception:
-            first_target_price = None
-
-        reference_price = None
-        try:
-            reference_price = float((self.strategy.last_entry_plan or {}).get("entry_above") or (self.strategy.last_entry_plan or {}).get("entry_below"))
-        except Exception:
-            reference_price = None
-
-        if first_target_price is not None and reference_price is not None:
-            target_move_points = abs(first_target_price - reference_price)
-        else:
-            target_move_points = strike_step * (1 if target_pct <= 20 else 2 if target_pct <= 30 else 3)
-
-        width_steps = max(1, min(3, round(target_move_points / max(strike_step, 1))))
-        if expiry_mode or late_session:
-            width_steps = max(1, min(width_steps, 2))
-        if target_pct <= 20:
-            width_steps = 1
-        elif target_pct >= 30 and not expiry_mode:
-            width_steps = max(width_steps, 2)
-
-        short_strike = int(long_strike) + (strike_step * width_steps) if signal == "CE" else int(long_strike) - (strike_step * width_steps)
-        return int(short_strike), width_steps
+        return OptionSignalGuard.optimized_spread_short_strike(self, signal, long_strike, balanced_pro, risk_profile)
 
     def _build_option_structure_suggestion(self, signal, selected_strike, selected_option_contract, balanced_pro=None, risk_profile=None):
-        signal = (signal or "").upper()
-        if signal not in {"CE", "PE"} or selected_strike is None:
-            return None
-
-        balanced_pro = balanced_pro or {}
-        risk_profile = risk_profile or {}
-        cautions = {str(item).lower() for item in (self.strategy.last_cautions or []) if item}
-        strike_step = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
-        spread_percent = self._spread_percent(selected_option_contract) if selected_option_contract else None
-        iv_rich = False
-        if selected_option_contract and self.option_data and self.option_data.get("atm") is not None:
-            atm_row = self._get_option_contract_snapshot(self.option_data.get("atm"), signal)
-            if atm_row and atm_row.get("iv") and selected_option_contract.get("iv"):
-                atm_iv = float(atm_row.get("iv") or 0)
-                selected_iv = float(selected_option_contract.get("iv") or 0)
-                iv_rich = atm_iv > 0 and selected_iv > (atm_iv * 1.12)
-
-        expiry_mode = "expiry_day_mode" in cautions or "expiry_fast_decay" in cautions
-        late_session = (balanced_pro.get("time_regime") or "").upper() in {"LATE_DAY", "ENDGAME"}
-        moderate_target = float(risk_profile.get("target_pct") or 0) <= 25.0
-        wide_defined_move = float(risk_profile.get("target_pct") or 0) >= 30.0
-        noisy_premium = (
-            expiry_mode
-            or late_session
-            or iv_rich
-            or (spread_percent is not None and spread_percent >= 3.5)
-            or "participation_spread_wide" in cautions
+        return OptionSignalGuard.build_option_structure_suggestion(
+            self,
+            signal,
+            selected_strike,
+            selected_option_contract,
+            balanced_pro,
+            risk_profile,
         )
-        if not (noisy_premium or moderate_target or wide_defined_move):
-            return None
-
-        short_strike, width_steps = self._optimized_spread_short_strike(
-            signal=signal,
-            long_strike=selected_strike,
-            balanced_pro=balanced_pro,
-            risk_profile=risk_profile,
-        )
-        if short_strike is None:
-            return None
-        structure_type = "BULL_CALL_SPREAD" if signal == "CE" else "BEAR_PUT_SPREAD"
-        rationale = []
-        if expiry_mode:
-            rationale.append("expiry theta high hai")
-        if late_session:
-            rationale.append("late-day premium unstable ho sakta hai")
-        if spread_percent is not None and spread_percent >= 3.5:
-            rationale.append("spread wide hai")
-        if iv_rich:
-            rationale.append("premium IV-rich lag raha hai")
-        if moderate_target:
-            rationale.append("move expectation moderate hai")
-        if wide_defined_move:
-            rationale.append("planned move bada hai, defined upside bucket useful ho sakta hai")
-        rationale.append(f"spread width {width_steps} strike-step rakha gaya")
-        rationale_text = ", ".join(rationale) if rationale else "defined-risk structure zyada suitable lag raha hai"
-        action_text = (
-            f"Plain {signal} buy ke bajay {structure_type.replace('_', ' ')} socho: "
-            f"buy {selected_strike}, sell {short_strike}. {rationale_text}."
-        )
-        return {
-            "type": structure_type,
-            "long_strike": int(selected_strike),
-            "short_strike": int(short_strike),
-            "width_steps": int(width_steps),
-            "action_text": action_text,
-            "rationale": rationale_text,
-        }
 
     @staticmethod
     def _spread_percent(option_row):
-        ltp = option_row.get("ltp") if option_row else None
-        spread = option_row.get("spread") if option_row else None
-        if not ltp or spread is None:
-            return None
-        try:
-            return round((float(spread) / float(ltp)) * 100, 4)
-        except Exception:
-            return None
+        return OptionSignalGuard.spread_percent(option_row)
 
     def _get_option_contract_snapshot(self, strike, option_type, before_ts=None):
         if strike is None or option_type not in {"CE", "PE"}:
@@ -1409,97 +735,16 @@ class SignalService:
         return True, oi_reason, metrics, None
 
     def _score_option_candidate(self, row, direction, preferred_strike, underlying_price):
-        ltp = float(row.get("ltp") or 0)
-        spread = float(row.get("spread") or 0)
-        spread_percent = self._spread_percent(row) or 999.0
-        bid_qty = int(row.get("top_bid_quantity") or 0)
-        ask_qty = int(row.get("top_ask_quantity") or 0)
-        volume = int(row.get("volume") or 0)
-        oi = int(row.get("oi") or 0)
-        delta_abs = abs(float(row.get("delta") or 0))
-        theta_abs = abs(float(row.get("theta") or 0))
-        distance = abs(int(row.get("strike") or 0) - int(preferred_strike or row.get("strike") or 0))
-        strike_gap = self.profile["strike_step"] or Config.STRIKE_STEP.get(self.instrument, 50)
-
-        target_delta = 0.5 if self.strategy.last_score >= 75 else 0.62
-        spread_score = max(0.0, 30.0 - min(spread_percent, 10.0) * 4.0)
-        depth_score = min(15.0, min(bid_qty, ask_qty) / 20.0)
-        volume_score = min(18.0, volume / 300.0)
-        oi_score = min(10.0, oi / 20000.0)
-        delta_score = max(0.0, 15.0 * (1.0 - min(abs(delta_abs - target_delta) / 0.45, 1.0)))
-        proximity_score = max(0.0, 12.0 - (distance / max(strike_gap, 1)) * 4.0)
-
-        target_price = (self.strategy.last_entry_plan or {}).get("first_target_price")
-        target_move = abs(float(target_price) - float(underlying_price)) if target_price is not None and underlying_price is not None else float(strike_gap)
-        expected_move = delta_abs * target_move
-        theta_penalty = theta_abs * 0.25
-        expected_edge = round(expected_move - spread - theta_penalty, 2)
-        edge_score = max(0.0, min(20.0, expected_edge))
-
-        atm_row = None
-        atm = (self.option_data or {}).get("atm")
-        if atm is not None:
-            atm_row = self._get_option_contract_snapshot(atm, direction)
-        iv_penalty = 0.0
-        if atm_row and atm_row.get("iv") and row.get("iv"):
-            atm_iv = float(atm_row["iv"])
-            if atm_iv > 0:
-                iv_markup = (float(row["iv"]) - atm_iv) / atm_iv
-                if iv_markup > 0.12:
-                    iv_penalty = min(8.0, iv_markup * 20.0)
-
-        candidate_score = round(
-            spread_score + depth_score + volume_score + oi_score + delta_score + proximity_score + edge_score - iv_penalty,
-            2,
-        )
-        reason_parts = [
-            f"spread={spread:.2f} ({spread_percent:.2f}%)",
-            f"delta={delta_abs:.2f}",
-            f"vol={volume}",
-            f"oi={oi}",
-            f"edge={expected_edge:.2f}",
-        ]
-        if iv_penalty > 0:
-            reason_parts.append("iv_rich")
-
-        return {
-            **dict(row),
-            "candidate_direction": direction,
-            "candidate_score": candidate_score,
-            "expected_edge": expected_edge,
-            "spread_percent": spread_percent,
-            "reason": " | ".join(reason_parts),
-        }
+        return OptionSignalGuard.score_option_candidate(self, row, direction, preferred_strike, underlying_price)
 
     def _build_option_candidates(self, underlying_price, preferred_strikes=None, signal_direction=None, balanced_pro=None):
-        if not self.option_data:
-            return []
-
-        preferred_strikes = preferred_strikes or {}
-        band_rows = self.option_data.get("band_snapshots") or []
-        candidates = []
-        for direction in ("CE", "PE"):
-            if signal_direction and direction != signal_direction:
-                continue
-            preferred_strike = preferred_strikes.get(direction)
-            direction_rows = [
-                row for row in band_rows
-                if row.get("option_type") == direction and abs(int(row.get("distance_from_atm") or 99)) <= 3
-            ]
-            scored = [
-                self._score_option_candidate(row, direction, preferred_strike, underlying_price)
-                for row in direction_rows
-            ]
-            scored.sort(key=lambda item: (item["candidate_score"], -abs(int(item.get("distance_from_atm") or 0))), reverse=True)
-            top_rows = scored[:3]
-            for rank, item in enumerate(top_rows, start=1):
-                candidates.append({
-                    **item,
-                    "candidate_rank": rank,
-                    "underlying_bias": (balanced_pro or {}).get("bias"),
-                    "setup_type": (balanced_pro or {}).get("setup"),
-                })
-        return candidates
+        return OptionSignalGuard.build_option_candidates(
+            self,
+            underlying_price,
+            preferred_strikes,
+            signal_direction,
+            balanced_pro,
+        )
 
     def _clear_pending_entry_watch(self):
         self.pending_entry_watch = None
@@ -1508,389 +753,97 @@ class SignalService:
         self.pending_spike_watch = None
 
     def _preserve_existing_pending_watch(self, candle_5m):
-        pending = self.pending_entry_watch
-        if not pending or not candle_5m:
-            return False
-
-        created_at = pending.get("created_at")
-        current_time = candle_5m.get("time")
-        if created_at is None or current_time is None:
-            return False
-
-        created_at, current_time = self._coerce_comparable_datetimes(created_at, current_time)
-
-        age_minutes = int((current_time - created_at).total_seconds() // 60)
-        if age_minutes < 0:
-            return False
-        if age_minutes > self._pending_watch_max_minutes(pending):
-            self._clear_pending_entry_watch()
-            return False
-        return True
+        return PendingEntryWatchPolicy.preserve_existing_pending_watch(self, candle_5m)
 
     def _pending_watch_is_recoverable(self, pending, current_time=None):
-        if not pending:
-            return False
-        created_at = pending.get("created_at")
-        if created_at is None:
-            return False
-        current_time = current_time or self.time_utils.now_ist()
-        created_at, current_time = self._coerce_comparable_datetimes(created_at, current_time)
-        age_minutes = max(0, int((current_time - created_at).total_seconds() // 60))
-        return age_minutes <= self._pending_watch_max_minutes(pending)
+        return PendingEntryWatchPolicy.pending_watch_is_recoverable(self, pending, current_time)
 
     def _active_trade_monitor_is_recoverable(self, current_time=None):
-        monitor = self.active_trade_monitor
-        if not monitor:
-            return False
-        entry_time = monitor.get("entry_time")
-        if entry_time is None:
-            return False
-        current_time = current_time or self.time_utils.now_ist()
-        entry_time, current_time = self._coerce_comparable_datetimes(entry_time, current_time)
-        age_minutes = max(0, int((current_time - entry_time).total_seconds() // 60))
-        return age_minutes <= 25
+        return PendingEntryWatchPolicy.active_trade_monitor_is_recoverable(self, current_time)
 
     def _collect_unprocessed_5m_candles(self, recent_candles, current_time):
-        if not recent_candles:
-            return []
-
-        if self.last_processed_5m_ts is None:
-            closed_candles = []
-            for candle in recent_candles:
-                latest_close_time = self._effective_candle_close_time(candle)
-                current_cmp, latest_close_time = self._coerce_comparable_datetimes(current_time, latest_close_time)
-                if current_cmp >= latest_close_time:
-                    closed_candles.append(candle)
-            return closed_candles[-3:]
-
-        pending_candles = []
-        processed_cutoff = self.last_processed_5m_ts
-        for candle in recent_candles:
-            candle_time = candle.get("time")
-            if candle_time is None:
-                continue
-            processed_cmp, candle_time = self._coerce_comparable_datetimes(processed_cutoff, candle_time)
-            if candle_time <= processed_cmp:
-                continue
-            effective_close_time = self._effective_candle_close_time({**candle, "time": candle_time})
-            current_cmp, effective_close_time = self._coerce_comparable_datetimes(current_time, effective_close_time)
-            if current_cmp >= effective_close_time:
-                pending_candles.append({**candle, "time": candle_time})
-
-        return pending_candles[-12:]
+        return PendingEntryWatchPolicy.collect_unprocessed_5m_candles(self, recent_candles, current_time)
 
     @staticmethod
     def _one_minute_trigger_volume_ok(recent_1m_candles):
-        if not recent_1m_candles:
-            return False
-
-        latest = recent_1m_candles[-1]
-        latest_volume = latest.get("volume") or 0
-        if latest_volume <= 0:
-            return False
-
-        prior = recent_1m_candles[-4:-1]
-        if not prior:
-            return True
-
-        prior_volumes = [candle.get("volume") or 0 for candle in prior]
-        avg_prior_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0
-        previous_volume = prior_volumes[-1] if prior_volumes else 0
-        minimum_needed = max(avg_prior_volume, previous_volume * 0.9)
-        return latest_volume >= minimum_needed
+        return PendingEntryWatchPolicy.one_minute_trigger_volume_ok(recent_1m_candles)
 
     @staticmethod
     def _pending_watch_risk_reward_ok(pending):
-        trigger_price = pending.get("trigger_price")
-        invalidate_price = pending.get("invalidate_price")
-        first_target = pending.get("first_target_price")
-        if trigger_price is None or invalidate_price is None or first_target is None:
-            return True
-
-        risk = abs(float(trigger_price) - float(invalidate_price))
-        reward = abs(float(first_target) - float(trigger_price))
-        if risk <= 0:
-            return False
-        return reward >= (risk * 0.9)
+        return PendingEntryWatchPolicy.pending_watch_risk_reward_ok(pending)
 
     def _rebalance_pending_watch_plan(self, pending, candle_5m):
-        if not pending:
-            return pending
-
-        setup = (pending.get("signal_type") or "NONE").upper()
-        direction = pending.get("direction")
-        trigger_price = pending.get("trigger_price")
-        invalidate_price = pending.get("invalidate_price")
-        first_target = pending.get("first_target_price")
-        if (
-            setup not in {"BREAKOUT_CONFIRM", "RETEST"}
-            or direction not in {"CE", "PE"}
-            or trigger_price is None
-            or candle_5m is None
-        ):
-            return pending
-
-        if self._pending_watch_risk_reward_ok(pending):
-            return pending
-
-        atr_value = candle_5m.get("atr") or self.atr.get_atr()
-        if atr_value is None:
-            return pending
-
-        atr_value = float(atr_value)
-        risk_cap = max(
-            atr_value * 0.6,
-            10.0 if self.instrument == "NIFTY" else 18.0 if self.instrument == "BANKNIFTY" else 14.0,
-        )
-        trigger_price = float(trigger_price)
-        current_invalidate = float(invalidate_price) if invalidate_price is not None else None
-        current_target = float(first_target) if first_target is not None else None
-
-        if direction == "CE":
-            capped_invalidate = round(trigger_price - risk_cap, 2)
-            if current_invalidate is not None and current_invalidate > capped_invalidate:
-                capped_invalidate = current_invalidate
-            pending["invalidate_price"] = capped_invalidate
-            min_target = round(trigger_price + (abs(trigger_price - capped_invalidate) * 0.95), 2)
-            pending["first_target_price"] = max(current_target or min_target, min_target)
-        else:
-            capped_invalidate = round(trigger_price + risk_cap, 2)
-            if current_invalidate is not None and current_invalidate < capped_invalidate:
-                capped_invalidate = current_invalidate
-            pending["invalidate_price"] = capped_invalidate
-            min_target = round(trigger_price - (abs(capped_invalidate - trigger_price) * 0.95), 2)
-            pending["first_target_price"] = min(current_target or min_target, min_target)
-
-        return pending
+        return PendingEntryWatchPolicy.rebalance_pending_watch_plan(self, pending, candle_5m)
 
     @staticmethod
     def _pending_watch_not_too_late(pending, latest_price):
-        trigger_price = pending.get("trigger_price")
-        first_target = pending.get("first_target_price")
-        direction = pending.get("direction")
-        if trigger_price is None or first_target is None or latest_price is None or direction not in {"CE", "PE"}:
-            return True
-
-        total_path = abs(float(first_target) - float(trigger_price))
-        if total_path <= 0:
-            return True
-
-        covered = (
-            float(latest_price) - float(trigger_price)
-            if direction == "CE"
-            else float(trigger_price) - float(latest_price)
-        )
-        return covered <= (total_path * 0.55)
+        return PendingEntryWatchPolicy.pending_watch_not_too_late(pending, latest_price)
 
     def _pending_watch_max_minutes(self, pending):
-        return pending_watch_max_minutes_helper(self.instrument, pending)
+        return PendingEntryWatchUtils.pending_watch_max_minutes(self.instrument, pending)
 
     @staticmethod
     def _pending_watch_retrigger_eligible(pending, latest, previous):
-        return pending_watch_retrigger_eligible_helper(pending, latest, previous)
+        return PendingEntryWatchUtils.pending_watch_retrigger_eligible(pending, latest, previous)
 
     def _rearm_pending_entry_watch(self, latest, reason):
-        if not self.pending_entry_watch:
-            return
-        self.pending_entry_watch["created_at"] = latest.get("time")
-        self.pending_entry_watch["last_checked_minute"] = None
-        self.pending_entry_watch["retrigger_count"] = int(self.pending_entry_watch.get("retrigger_count") or 0) + 1
-        self.pending_entry_watch["retrigger_reason"] = reason
+        return PendingEntryWatchPolicy.rearm_pending_entry_watch(self, latest, reason)
 
     @staticmethod
     def _pending_watch_elite_ready(pending):
-        return pending_watch_elite_ready_helper(pending)
+        return PendingEntryWatchUtils.pending_watch_elite_ready(pending)
 
     @staticmethod
     def _candle_close_strength(candle, direction):
-        return pending_watch_candle_close_strength(candle, direction)
+        return PendingEntryWatchUtils.candle_close_strength(candle, direction)
 
     @staticmethod
     def _candle_body_ratio(candle):
-        return pending_watch_candle_body_ratio(candle)
+        return PendingEntryWatchUtils.candle_body_ratio(candle)
 
     def _pending_watch_quality_ok(self, pending, latest, previous):
-        direction = pending.get("direction")
-        if direction not in {"CE", "PE"}:
-            return True, None
-
-        close_strength = self._candle_close_strength(latest, direction)
-        body_ratio = self._candle_body_ratio(latest)
-        hybrid_mode = pending.get("hybrid_mode", False)
-        fast_track_ready = pending.get("fast_track_ready", False)
-        strong_watch_setup = pending.get("strong_watch_setup", False)
-        minutes_since_watch = pending.get("minutes_since_watch", 0)
-        trigger_price = pending.get("trigger_price")
-        invalidate_price = pending.get("invalidate_price")
-        spike_origin = pending.get("spike_origin", False)
-        spike_quality = ((pending.get("spike_context") or {}).get("quality") or "").upper()
-
-        min_close_strength = 0.52
-        min_body_ratio = 0.18
-
-        if self.instrument == "BANKNIFTY":
-            min_close_strength = 0.6
-            min_body_ratio = 0.24
-        elif self.instrument == "SENSEX":
-            min_close_strength = 0.58
-            min_body_ratio = 0.22
-        elif self.instrument == "NIFTY":
-            min_close_strength = 0.55
-            min_body_ratio = 0.2
-
-        if hybrid_mode and strong_watch_setup:
-            min_close_strength -= 0.04
-            min_body_ratio -= 0.03
-        if fast_track_ready:
-            min_close_strength -= 0.03
-        if spike_origin and spike_quality == "STRONG":
-            min_close_strength -= 0.05
-            min_body_ratio -= 0.04
-
-        spike_breadth_override = (
-            spike_origin
-            and (pending.get("spike_context") or {}).get("price_breadth", 0) >= 6
-            and (pending.get("spike_context") or {}).get("volume_breadth", 0) >= 6
-            and minutes_since_watch <= 2
-        )
-
-        if close_strength < min_close_strength:
-            if spike_breadth_override and close_strength >= max(min_close_strength - 0.08, 0.45):
-                close_strength = min_close_strength
-            else:
-                return False, "1m trigger close weak"
-        if body_ratio < min_body_ratio:
-            if spike_breadth_override and body_ratio >= max(min_body_ratio - 0.08, 0.10):
-                body_ratio = min_body_ratio
-            else:
-                return False, "1m trigger body weak"
-
-        if self.instrument == "NIFTY" and invalidate_price is not None and trigger_price is not None:
-            total_risk = abs(float(trigger_price) - float(invalidate_price))
-            if total_risk > 0:
-                current_buffer = (
-                    float(latest["close"]) - float(invalidate_price)
-                    if direction == "CE"
-                    else float(invalidate_price) - float(latest["close"])
-                )
-                if current_buffer < (total_risk * 0.28):
-                    return False, "1m trigger too close to invalidation"
-
-        if self.instrument in {"BANKNIFTY", "SENSEX"} and minutes_since_watch >= 8:
-            if close_strength < (min_close_strength + 0.06):
-                return False, "late 1m trigger close not strong enough"
-
-        prev_close = previous.get("close")
-        prev_open = previous.get("open")
-        if prev_close is not None and prev_open is not None:
-            if direction == "CE" and float(prev_close) < float(prev_open) and close_strength < 0.62 and self.instrument == "NIFTY":
-                return False, "1m trigger against fresh opposite candle"
-            if direction == "PE" and float(prev_close) > float(prev_open) and close_strength < 0.62 and self.instrument == "NIFTY":
-                return False, "1m trigger against fresh opposite candle"
-
-        return True, None
+        return PendingEntryWatchPolicy.pending_watch_quality_ok(self, pending, latest, previous)
 
     @staticmethod
     def _pending_watch_spike_micro_override_ready(pending, latest):
-        spike_context = pending.get("spike_context") or {}
-        if not pending.get("spike_origin"):
-            return False
-        if (spike_context.get("quality") or "").upper() != "STRONG":
-            return False
-        if (pending.get("direction") or "").upper() not in {"CE", "PE"}:
-            return False
-        latest_close = float(latest.get("close") or 0.0)
-        latest_open = float(latest.get("open") or 0.0)
-        trigger_price = pending.get("trigger_price")
-        if trigger_price is None:
-            return False
-        if pending.get("direction") == "CE":
-            return latest_close >= float(trigger_price) and latest_close >= latest_open
-        return latest_close <= float(trigger_price) and latest_close <= latest_open
+        return PendingEntryWatchPolicy.pending_watch_spike_micro_override_ready(pending, latest)
 
     @staticmethod
     def _pending_watch_has_caution(pending, caution):
-        cautions = pending.get("cautions") or []
-        return caution in cautions
+        return PendingEntryWatchPolicy.pending_watch_has_caution(pending, caution)
 
     def _pending_watch_conflicts_too_high(self, pending):
-        setup = (pending.get("signal_type") or "NONE").upper()
-        cautions = set(pending.get("cautions") or [])
-        blockers = set(pending.get("blockers") or [])
-        pressure_conflict_level = (pending.get("pressure_conflict_level") or "NONE").upper()
-        time_regime = (pending.get("time_regime") or "").upper()
-        active_day_state = (pending.get("active_day_state") or "").upper()
-        day_state_direction = (pending.get("day_state_direction") or "").upper()
-        watch_direction = (pending.get("direction") or "").upper()
-
-        if setup != "BREAKOUT_CONFIRM":
-            return False, None
-
-        opposite_pressure = "opposite_pressure" in cautions
-        weak_participation = (
-            "participation_weak" in cautions
-            or "participation_delta_missing" in cautions
-        )
-        retest_wait = "late_confirmation_wait_retest" in cautions
-        expiry_mode = "expiry_day_mode" in cautions
-        pre_expiry_watch_friendly = "pre_expiry_watch_friendly" in cautions
-        strong_day_state_alignment = (
-            active_day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
-            and watch_direction in {"CE", "PE"}
-            and day_state_direction == watch_direction
-            and float(pending.get("score") or 0) >= 74
-            and float(pending.get("entry_score") or 0) >= 64
-        )
-
-        if opposite_pressure and weak_participation and pressure_conflict_level in {"MILD", "MODERATE", "HIGH"}:
-            if (pre_expiry_watch_friendly or strong_day_state_alignment) and pressure_conflict_level == "MILD":
-                return False, None
-            return True, "breakout watch has opposite pressure with weak participation"
-
-        if retest_wait and opposite_pressure:
-            return True, "breakout watch is already in retest-wait mode"
-
-        if time_regime == "LATE_DAY" and (
-            opposite_pressure and weak_participation and pressure_conflict_level in {"MODERATE", "HIGH"}
-        ):
-            return True, "late-day breakout watch too conflicted"
-
-        if self.instrument in {"NIFTY", "BANKNIFTY"} and expiry_mode and opposite_pressure and weak_participation:
-            if (pre_expiry_watch_friendly or strong_day_state_alignment) and pressure_conflict_level == "MILD":
-                return False, None
-            return True, "expiry breakout watch has poor option confirmation"
-
-        if "direction_present_but_filters_incomplete" in blockers and opposite_pressure and weak_participation:
-            if (pre_expiry_watch_friendly or strong_day_state_alignment) and pressure_conflict_level == "MILD":
-                return False, None
-            return True, "direction incomplete with opposite pressure and weak participation"
-
-        return False, None
+        return PendingEntryWatchPolicy.pending_watch_conflicts_too_high(self, pending)
 
     def _set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m):
-        return set_pending_entry_watch(self, watch_payload, balanced_pro, candle_5m)
+        return PendingEntryWatchStateManager.set_pending_entry_watch(
+            self,
+            watch_payload,
+            balanced_pro,
+            candle_5m,
+        )
 
     def _evaluate_pending_entry_watch(self, recent_1m_candles):
-        return evaluate_pending_entry_watch(self, recent_1m_candles)
+        return PendingEntryWatchEvaluator.evaluate_pending_entry_watch(self, recent_1m_candles)
 
     def _maybe_fire_pending_entry_watch(self, latest_5m_candle):
-        return maybe_fire_pending_entry_watch(self, latest_5m_candle)
+        return PendingEntryWatchTriggerEngine.maybe_fire_pending_entry_watch(self, latest_5m_candle)
         self._start_trade_monitor(signal, latest_5m_candle, evaluation["price"], balanced_pro, strike)
         self.signals_generated += 1
         self._clear_pending_entry_watch()
 
     def _evaluate_trade_monitor(self, recent_1m_candles, recent_5m_candles):
-        return evaluate_trade_monitor(self, recent_1m_candles, recent_5m_candles)
+        return TradeMonitorEvaluator.evaluate_trade_monitor(self, recent_1m_candles, recent_5m_candles)
 
     def _maybe_send_trade_monitor_update(self, latest_5m_candle):
-        return maybe_send_trade_monitor_update(self, latest_5m_candle)
+        return TradeMonitorDispatcher.maybe_send_trade_monitor_update(self, latest_5m_candle)
 
     @staticmethod
     def _monitor_alert_is_high_priority(guidance):
-        return monitor_alert_is_high_priority(guidance)
+        return TradeMonitorDispatcher.monitor_alert_is_high_priority(guidance)
 
     def _should_send_trade_monitor_alert(self, monitor_data, minute_key):
-        return should_send_trade_monitor_alert(self, monitor_data, minute_key)
+        return TradeMonitorDispatcher.should_send_trade_monitor_alert(self, monitor_data, minute_key)
 
     def _classify_base_bias(self, price, vwap_value, oi_bias, oi_ladder_data):
         """Balanced Pro layer 1: derive directional bias."""
