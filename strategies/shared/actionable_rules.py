@@ -40,6 +40,7 @@ class InstrumentActionableRules:
                 regime=regime,
                 candle_time=candle_time,
                 score=score,
+                entry_score=entry_score,
                 pressure_conflict_level=pressure_conflict_level,
             )
         if instrument == "SENSEX":
@@ -72,21 +73,17 @@ class InstrumentActionableRules:
         late_day_breakdown_ok = (
             signal_type == "BREAKOUT_CONFIRM"
             and regime in {"LATE_DAY_BREAKDOWN", "LATE_DAY_BREAKOUT"}
-            and effective_score >= 70
-            and signal_grade in {"WATCH", "B", "A", "A+"}
+            and effective_score >= 82
+            and entry_score >= 80
+            and signal_grade in {"B", "A", "A+"}
+            and candle_time is not None
+            and (candle_time.hour, candle_time.minute) < (14, 50)
         )
         if late_day_breakdown_ok:
             return True
 
         if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
-            return (
-                signal_grade in {"A", "A+"}
-                and confidence == "HIGH"
-                and pressure_conflict_level == "NONE"
-                and score >= 88
-                and entry_score >= 84
-                and not late_reversal_window
-            )
+            return False
 
         if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
             return False
@@ -110,16 +107,21 @@ class InstrumentActionableRules:
         regime,
         candle_time,
         score,
+        entry_score,
         pressure_conflict_level,
     ):
         score = float(score or 0)
-        effective_score = score
+        entry_score = float(entry_score or 0)
+        effective_score = max(score, entry_score)
         late_day_breakout_ok = (
             signal_type == "BREAKOUT_CONFIRM"
             and regime in {"LATE_DAY_BREAKDOWN", "LATE_DAY_BREAKOUT"}
-            and signal_grade in {"WATCH", "B", "A", "A+"}
+            and signal_grade in {"B", "A", "A+"}
             and pressure_conflict_level in {"NONE", "MILD"}
-            and effective_score >= 66
+            and effective_score >= 82
+            and entry_score >= 80
+            and candle_time is not None
+            and (candle_time.hour, candle_time.minute) < (14, 50)
         )
         if late_day_breakout_ok:
             return True
@@ -132,12 +134,27 @@ class InstrumentActionableRules:
         if signal_grade in {"A", "A+"}:
             if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
                 return effective_score >= 88 and confidence == "HIGH"
-            return signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"} and effective_score >= 78
+            return (
+                signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}
+                and effective_score >= 78
+                and entry_score >= 76
+            )
+        if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
+            return (
+                signal_grade == "B"
+                and confidence in {"MEDIUM", "HIGH"}
+                and regime in {"TRENDING", "EXPANDING", "CHOPPY"}
+                and pressure_conflict_level == "NONE"
+                and effective_score >= 90
+                and entry_score >= 88
+                and candle_time is not None
+                and (candle_time.hour, candle_time.minute) < (14, 25)
+            )
         if signal_grade != "B":
             return False
         if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}:
             return False
-        return effective_score >= 80
+        return effective_score >= 80 and entry_score >= 78
 
     @classmethod
     def _allow_sensex(
@@ -153,18 +170,24 @@ class InstrumentActionableRules:
     ):
         minute_of_day = candle_time.hour * 60 + candle_time.minute if candle_time is not None else None
         late_session = minute_of_day is not None and minute_of_day >= (13 * 60)
+        ultra_late_session = minute_of_day is not None and minute_of_day >= (14 * 60 + 25)
         effective_score = max(float(score or 0), float(entry_score or 0))
         late_day_breakout_ok = (
             signal_type == "BREAKOUT_CONFIRM"
             and regime in {"LATE_DAY_BREAKDOWN", "LATE_DAY_BREAKOUT"}
-            and signal_grade in {"WATCH", "B", "A", "A+"}
+            and signal_grade in {"B", "A", "A+"}
             and pressure_conflict_level in {"NONE", "MILD"}
-            and effective_score >= 66
+            and effective_score >= 82
+            and float(entry_score or 0) >= 80
+            and candle_time is not None
+            and (candle_time.hour, candle_time.minute) < (14, 50)
         )
         if late_day_breakout_ok:
             return True
 
         if signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "OPENING_DRIVE", "RETEST", "CONTINUATION", "REVERSAL", "TRAP_REVERSAL"}:
+            return False
+        if ultra_late_session and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION", "OPENING_DRIVE"}:
             return False
         if confidence not in {"MEDIUM", "HIGH"}:
             return False
@@ -180,6 +203,18 @@ class InstrumentActionableRules:
                     and float(entry_score or 0) >= (90 if late_session else 86)
                 )
             return effective_score >= (80 if late_session else 76)
+
+        if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
+            return (
+                signal_grade == "B"
+                and confidence in {"MEDIUM", "HIGH"}
+                and regime in {"TRENDING", "EXPANDING"}
+                and pressure_conflict_level == "NONE"
+                and effective_score >= 90
+                and float(entry_score or 0) >= 92
+                and candle_time is not None
+                and (candle_time.hour, candle_time.minute) < (14, 25)
+            )
 
         if (
             signal_grade == "B"

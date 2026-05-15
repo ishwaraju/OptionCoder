@@ -7,6 +7,303 @@ from config import Config
 
 class OptionSignalGuard:
     @staticmethod
+    def classify_entry_phase(service, signal, signal_type, candle_time, price=None, trigger_price=None):
+        signal = (signal or "").upper()
+        signal_type = (signal_type or "").upper()
+        cautions = set(getattr(service.strategy, "last_cautions", []) or [])
+        if signal_type == "RETEST":
+            return "RETEST_SIGNAL"
+
+        last = getattr(service.strategy, "last_emitted_signal", None) or {}
+        if (
+            signal in {"CE", "PE"}
+            and candle_time is not None
+            and last
+            and last.get("direction") == signal
+            and last.get("session_day") == candle_time.date()
+        ):
+            try:
+                minutes_apart = int((candle_time - last.get("time")).total_seconds() // 60)
+            except Exception:
+                minutes_apart = None
+            if minutes_apart is not None and minutes_apart <= 30:
+                return "REENTRY_SIGNAL"
+
+        late_session = candle_time is not None and (candle_time.hour, candle_time.minute) >= (14, 25)
+        late_risk_flags = {"far_from_vwap", "late_day_breakdown_watch", "theta_fast_exit_required"}
+        late_bias = late_session or (
+            candle_time is not None
+            and (candle_time.hour, candle_time.minute) >= (13, 45)
+            and bool(cautions.intersection(late_risk_flags))
+        )
+        if late_bias:
+            return "LATE_CHASE_SIGNAL"
+
+        if (
+            signal in {"CE", "PE"}
+            and trigger_price is not None
+            and price is not None
+            and service._entry_too_extended(signal, price, trigger_price, getattr(service.atr, "atr", None), service.atr.get_buffer())
+        ):
+            return "LATE_CHASE_SIGNAL"
+
+        return "FIRST_SIGNAL_IN_MOVE"
+
+    @staticmethod
+    def assess_high_expectancy(
+        service,
+        signal,
+        candle_time,
+        balanced_pro=None,
+        selected_option_contract=None,
+        premium_guard=None,
+        risk_profile=None,
+        price=None,
+    ):
+        signal = (signal or "").upper()
+        signal_type = (getattr(service.strategy, "last_signal_type", None) or "NONE").upper()
+        score = float(getattr(service.strategy, "last_score", 0) or 0)
+        entry_score = float(getattr(service.strategy, "last_entry_score", score) or score)
+        confidence = (getattr(service.strategy, "last_confidence", None) or "LOW").upper()
+        signal_grade = (getattr(service.strategy, "last_signal_grade", None) or "SKIP").upper()
+        cautions = set(getattr(service.strategy, "last_cautions", []) or [])
+        pressure_conflict = (getattr(service.strategy, "last_pressure_conflict_level", None) or "NONE").upper()
+        active_day_state = (getattr(service.strategy, "last_active_day_state", None) or "").upper()
+        day_state_direction = (getattr(service.strategy, "last_day_state_direction", None) or "").upper()
+        trigger_price = (
+            service.strategy.last_entry_plan.get("entry_above")
+            if signal == "CE"
+            else service.strategy.last_entry_plan.get("entry_below")
+        )
+        entry_phase = OptionSignalGuard.classify_entry_phase(
+            service,
+            signal,
+            signal_type,
+            candle_time,
+            price=price,
+            trigger_price=trigger_price,
+        )
+        premium_guard = premium_guard or {}
+        premium_label = (premium_guard.get("label") or "").upper()
+        premium_momentum_pct = premium_guard.get("premium_momentum_pct")
+        spread_pct = premium_guard.get("spread_pct")
+        if spread_pct is None and selected_option_contract:
+            spread_pct = service._spread_percent(selected_option_contract)
+        if premium_momentum_pct is None and premium_label == "PREMIUM_OK":
+            premium_momentum_pct = 0.0
+
+        weak_participation_count = len(
+            cautions.intersection(
+                {
+                    "participation_weak",
+                    "participation_delta_missing",
+                    "participation_baseline_weak",
+                }
+            )
+        )
+        late_risk_count = len(
+            cautions.intersection(
+                {"far_from_vwap", "theta_fast_exit_required", "late_day_breakdown_watch"}
+            )
+        )
+        day_state_aligned = (
+            active_day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
+            and day_state_direction == signal
+        )
+        clean_spread = spread_pct is None or float(spread_pct) <= 3.5
+        premium_confirmed = False
+        if premium_label == "PREMIUM_OK":
+            if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
+                premium_confirmed = premium_momentum_pct is None or float(premium_momentum_pct) >= 0.0
+            else:
+                premium_threshold = 1.0
+                if (
+                    day_state_aligned
+                    and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
+                    and clean_spread
+                    and signal_type in {
+                        "BREAKOUT",
+                        "BREAKOUT_CONFIRM",
+                        "CONTINUATION",
+                        "AGGRESSIVE_CONTINUATION",
+                        "RETEST",
+                        "OPENING_DRIVE",
+                    }
+                ):
+                    premium_threshold = 0.5
+                premium_confirmed = (
+                    premium_momentum_pct is not None
+                    and float(premium_momentum_pct) >= premium_threshold
+                )
+        breakout_family = {
+            "BREAKOUT",
+            "BREAKOUT_CONFIRM",
+            "CONTINUATION",
+            "AGGRESSIVE_CONTINUATION",
+            "RETEST",
+            "OPENING_DRIVE",
+        }
+        clean_tactical_context = (
+            pressure_conflict in {"NONE", "MILD"}
+            and weak_participation_count <= 1
+            and clean_spread
+            and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
+            and late_risk_count <= 1
+        )
+
+        quality_tag = "AVOID"
+        allow_trade = False
+        watch_only = False
+        likely_runner = False
+        path_quality = "VOLATILE_PATH"
+        reasons = []
+
+        if confidence not in {"MEDIUM", "HIGH"} or signal_grade == "WATCH":
+            reasons.append("confidence_or_grade_too_weak")
+            return {
+                "quality_tag": quality_tag,
+                "allow_trade": False,
+                "watch_only": False,
+                "entry_phase": entry_phase,
+                "premium_confirmed": premium_confirmed,
+                "path_quality": path_quality,
+                "likely_runner": likely_runner,
+                "reasons": reasons,
+            }
+
+        if (
+            entry_phase == "LATE_CHASE_SIGNAL"
+            and late_risk_count >= 2
+            and entry_score < 94
+        ):
+            reasons.append("late_chase_with_poor_asymmetry")
+            return {
+                "quality_tag": quality_tag,
+                "allow_trade": False,
+                "watch_only": False,
+                "entry_phase": entry_phase,
+                "premium_confirmed": premium_confirmed,
+                "path_quality": path_quality,
+                "likely_runner": likely_runner,
+                "reasons": reasons,
+            }
+
+        if (
+            candle_time is not None
+            and (candle_time.hour, candle_time.minute) <= (11, 0)
+            and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "OPENING_DRIVE"}
+            and weak_participation_count >= 2
+        ):
+            reasons.append("opening_breakout_without_participation")
+            return {
+                "quality_tag": quality_tag,
+                "allow_trade": False,
+                "watch_only": False,
+                "entry_phase": entry_phase,
+                "premium_confirmed": premium_confirmed,
+                "path_quality": path_quality,
+                "likely_runner": likely_runner,
+                "reasons": reasons,
+            }
+
+        if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
+            if pressure_conflict == "NONE" and entry_score >= 90 and (day_state_aligned or score >= 85):
+                quality_tag = "RQ"
+                allow_trade = premium_confirmed or (premium_momentum_pct is not None and float(premium_momentum_pct) >= -0.25)
+                path_quality = "CLEAN_PATH" if weak_participation_count <= 1 else "TACTICAL_PATH"
+                likely_runner = allow_trade and (premium_momentum_pct is not None and float(premium_momentum_pct) >= 2.0)
+                if not allow_trade:
+                    watch_only = True
+                    reasons.append("reversal_needs_premium_confirmation")
+            else:
+                reasons.append("reversal_not_elite_enough")
+            return {
+                "quality_tag": quality_tag,
+                "allow_trade": allow_trade,
+                "watch_only": watch_only,
+                "entry_phase": entry_phase,
+                "premium_confirmed": premium_confirmed,
+                "path_quality": path_quality,
+                "likely_runner": likely_runner,
+                "reasons": reasons,
+            }
+
+        if not premium_confirmed and signal_type in breakout_family:
+            clean_tactical = clean_tactical_context and entry_score >= 82 and score >= 78
+            quality_tag = "TQ_CLEAN" if clean_tactical else "TQ_VOLATILE"
+            watch_only = True
+            reasons.append("premium_confirmation_pending")
+            return {
+                "quality_tag": quality_tag,
+                "allow_trade": False,
+                "watch_only": watch_only,
+                "entry_phase": entry_phase,
+                "premium_confirmed": premium_confirmed,
+                "path_quality": "TACTICAL_PATH",
+                "likely_runner": False,
+                "reasons": reasons,
+            }
+
+        if (
+            entry_score >= 86
+            and score >= 82
+            and clean_tactical_context
+            and entry_phase == "FIRST_SIGNAL_IN_MOVE"
+            and premium_confirmed
+            and clean_spread
+            and (day_state_aligned or entry_score >= 90)
+        ):
+            quality_tag = "HQ"
+            allow_trade = True
+            path_quality = "CLEAN_PATH"
+            likely_runner = premium_momentum_pct is not None and float(premium_momentum_pct) >= 3.0
+        elif (
+            entry_phase == "LATE_CHASE_SIGNAL"
+            and entry_score >= 94
+            and premium_momentum_pct is not None
+            and float(premium_momentum_pct) >= 3.0
+            and (spread_pct is None or float(spread_pct) <= 3.5)
+        ):
+            quality_tag = "LQ"
+            allow_trade = True
+            path_quality = "TACTICAL_PATH"
+            likely_runner = True
+        elif (
+            signal_type in breakout_family
+            and premium_confirmed
+            and clean_tactical_context
+            and entry_score >= 82
+            and score >= 78
+        ):
+            quality_tag = "TQ_CLEAN"
+            allow_trade = True
+            path_quality = "CLEAN_PATH" if signal_type in {"BREAKOUT_CONFIRM", "RETEST"} or day_state_aligned else "TACTICAL_PATH"
+            likely_runner = premium_momentum_pct is not None and float(premium_momentum_pct) >= 2.5
+        elif entry_score >= 80 and score >= 78:
+            clean_tactical = (
+                pressure_conflict in {"NONE", "MILD"}
+                and weak_participation_count <= 1
+                and clean_spread
+                and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
+            )
+            quality_tag = "TQ_CLEAN" if clean_tactical else "TQ_VOLATILE"
+            allow_trade = True
+            path_quality = "TACTICAL_PATH" if clean_tactical else "VOLATILE_PATH"
+        else:
+            reasons.append("expectancy_below_trade_floor")
+
+        return {
+            "quality_tag": quality_tag,
+            "allow_trade": allow_trade,
+            "watch_only": watch_only,
+            "entry_phase": entry_phase,
+            "premium_confirmed": premium_confirmed,
+            "path_quality": path_quality,
+            "likely_runner": likely_runner,
+            "reasons": reasons,
+        }
+
+    @staticmethod
     def assess_raw_feed_health(service, candle_time):
         session_start = service._session_start_for(candle_time)
         candle_health = service.db_reader.fetch_intraday_candle_health(
@@ -53,6 +350,71 @@ class OptionSignalGuard:
         }
         service.last_data_health = result
         return result
+
+    @staticmethod
+    def maybe_relax_reject_for_strong_setup(service, feed_health, signal=None):
+        if not feed_health or (feed_health.get("label") or "").upper() != "REJECT":
+            return feed_health
+        signal = (signal or "").upper()
+        if signal not in {"CE", "PE"}:
+            return feed_health
+
+        candle_health = feed_health.get("candle_health") or {}
+        oi_health = feed_health.get("oi_health") or {}
+        score = float(getattr(service.strategy, "last_score", 0) or 0)
+        entry_score = float(getattr(service.strategy, "last_entry_score", score) or score)
+        confidence = (getattr(service.strategy, "last_confidence", "") or "").upper()
+        signal_type = (getattr(service.strategy, "last_signal_type", "") or "").upper()
+        day_state = (getattr(service.strategy, "last_active_day_state", "") or "").upper()
+        day_state_direction = (getattr(service.strategy, "last_day_state_direction", "") or "").upper()
+        pressure_conflict = (getattr(service.strategy, "last_pressure_conflict_level", "NONE") or "NONE").upper()
+        strong_setup_types = {
+            "BREAKOUT",
+            "BREAKOUT_CONFIRM",
+            "CONTINUATION",
+            "AGGRESSIVE_CONTINUATION",
+            "RETEST",
+            "OPENING_DRIVE",
+            "REVERSAL",
+        }
+        candle_cov = float(candle_health.get("coverage_pct") or 0)
+        candle_gap = float(candle_health.get("max_gap_seconds") or 0)
+        oi_cov = float(oi_health.get("coverage_pct") or 0)
+        oi_gap = float(oi_health.get("max_gap_seconds") or 0)
+
+        strong_alignment = (
+            day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
+            and day_state_direction == signal
+        )
+        strong_sweep = bool(service._should_soften_option_sweep_filters(signal))
+        setup_is_elite = (
+            signal_type in strong_setup_types
+            and confidence in {"MEDIUM", "HIGH"}
+            and score >= 88
+            and entry_score >= 88
+            and pressure_conflict in {"NONE", "MILD"}
+        )
+        candle_side_healthy = candle_cov >= 90 and candle_gap <= 600
+        oi_side_degraded_but_usable = oi_cov >= 20 and oi_gap <= 1200
+        if not (setup_is_elite and candle_side_healthy and oi_side_degraded_but_usable):
+            return feed_health
+        if not (strong_alignment or strong_sweep):
+            return feed_health
+
+        relaxed_reasons = list(feed_health.get("reasons") or [])
+        if "strong_setup_oi_softened" not in relaxed_reasons:
+            relaxed_reasons.append("strong_setup_oi_softened")
+        summary = (
+            f"feed=RISKY_SOFTENED | candle_cov={candle_cov}% ({candle_health.get('count')}/{candle_health.get('expected_count')}) "
+            f"| oi_cov={oi_cov}% ({oi_health.get('distinct_minutes')}/{oi_health.get('expected_minutes')}) "
+            f"| candle_gap={candle_gap}s | oi_gap={oi_gap}s | elite_setup=yes"
+        )
+        relaxed = dict(feed_health)
+        relaxed["label"] = "RISKY"
+        relaxed["reasons"] = relaxed_reasons
+        relaxed["summary"] = summary
+        service.last_data_health = relaxed
+        return relaxed
 
     @staticmethod
     def derive_option_volume_signal(option_data):

@@ -32,8 +32,8 @@ def test_unified_actionable_rules_allow_nifty_a_grade_breakout():
     assert allowed is True
 
 
-def test_unified_actionable_rules_allow_nifty_late_day_breakdown_watch():
-    allowed = InstrumentActionableRules.should_allow_signal(
+def test_unified_actionable_rules_block_nifty_late_day_breakdown_watch():
+    blocked = InstrumentActionableRules.should_allow_signal(
         instrument="NIFTY",
         signal_type="BREAKOUT_CONFIRM",
         signal_grade="WATCH",
@@ -42,6 +42,23 @@ def test_unified_actionable_rules_allow_nifty_late_day_breakdown_watch():
         score=70,
         entry_score=40,
         pressure_conflict_level="MILD",
+        candle_time=datetime(2026, 4, 16, 14, 25),
+    )
+
+    assert blocked is False
+
+
+def test_unified_actionable_rules_allow_nifty_late_day_breakdown_only_when_strong():
+    allowed = InstrumentActionableRules.should_allow_signal(
+        instrument="NIFTY",
+        signal_type="BREAKOUT_CONFIRM",
+        signal_grade="B",
+        confidence="HIGH",
+        regime="LATE_DAY_BREAKDOWN",
+        score=84,
+        entry_score=82,
+        pressure_conflict_level="MILD",
+        candle_time=datetime(2026, 4, 16, 14, 25),
     )
 
     assert allowed is True
@@ -105,6 +122,22 @@ def test_unified_actionable_rules_match_banknifty_time_gate():
     assert blocked is False
 
 
+def test_unified_actionable_rules_block_banknifty_late_day_breakdown_watch():
+    blocked = InstrumentActionableRules.should_allow_signal(
+        instrument="BANKNIFTY",
+        signal_type="BREAKOUT_CONFIRM",
+        signal_grade="WATCH",
+        confidence="HIGH",
+        regime="LATE_DAY_BREAKDOWN",
+        candle_time=datetime(2026, 4, 16, 14, 25),
+        score=88,
+        entry_score=84,
+        pressure_conflict_level="NONE",
+    )
+
+    assert blocked is False
+
+
 def test_unified_actionable_rules_match_sensex_ultra_late_guard():
     blocked = InstrumentActionableRules.should_allow_signal(
         instrument="SENSEX",
@@ -115,6 +148,22 @@ def test_unified_actionable_rules_match_sensex_ultra_late_guard():
         candle_time=datetime(2026, 4, 16, 14, 28),
         score=90,
         entry_score=95,
+        pressure_conflict_level="NONE",
+    )
+
+    assert blocked is False
+
+
+def test_unified_actionable_rules_block_sensex_late_day_breakdown_watch():
+    blocked = InstrumentActionableRules.should_allow_signal(
+        instrument="SENSEX",
+        signal_type="BREAKOUT_CONFIRM",
+        signal_grade="WATCH",
+        confidence="HIGH",
+        regime="LATE_DAY_BREAKDOWN",
+        candle_time=datetime(2026, 4, 16, 14, 25),
+        score=88,
+        entry_score=84,
         pressure_conflict_level="NONE",
     )
 
@@ -137,6 +186,38 @@ def test_unified_actionable_rules_allow_sensex_clean_reversal():
     assert allowed is True
 
 
+def test_unified_actionable_rules_allow_banknifty_elite_b_reversal():
+    allowed = InstrumentActionableRules.should_allow_signal(
+        instrument="BANKNIFTY",
+        signal_type="REVERSAL",
+        signal_grade="B",
+        confidence="MEDIUM",
+        regime="CHOPPY",
+        candle_time=datetime(2026, 4, 16, 13, 55),
+        score=92,
+        entry_score=89,
+        pressure_conflict_level="NONE",
+    )
+
+    assert allowed is True
+
+
+def test_unified_actionable_rules_allow_sensex_elite_b_reversal():
+    allowed = InstrumentActionableRules.should_allow_signal(
+        instrument="SENSEX",
+        signal_type="REVERSAL",
+        signal_grade="B",
+        confidence="MEDIUM",
+        regime="TRENDING",
+        candle_time=datetime(2026, 4, 16, 14, 20),
+        score=87,
+        entry_score=93,
+        pressure_conflict_level="NONE",
+    )
+
+    assert allowed is True
+
+
 def test_threshold_builder_preserves_sensex_midday_focus_behavior():
     thresholds = build_time_regime_thresholds(
         instrument="SENSEX",
@@ -145,8 +226,8 @@ def test_threshold_builder_preserves_sensex_midday_focus_behavior():
         market_regime="CHOPPY",
     )
 
-    assert thresholds["breakout_min_score"] == 63
-    assert thresholds["confirm_min_score"] == 66
+    assert thresholds["breakout_min_score"] == 61
+    assert thresholds["confirm_min_score"] == 64
     assert thresholds["allow_fallback_continuation"] is False
 
 

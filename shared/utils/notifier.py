@@ -423,6 +423,10 @@ class Notifier:
         pressure_read = trade_data.get("pressure_read")
         oi_read = trade_data.get("oi_read")
         greek_summary = trade_data.get("greek_summary")
+        quality_tag = trade_data.get("quality_tag")
+        entry_phase = trade_data.get("entry_phase")
+        premium_confirmed = trade_data.get("premium_confirmed")
+        path_quality = trade_data.get("path_quality")
         projected_premium_sl = trade_data.get("projected_premium_sl")
         projected_premium_t1 = trade_data.get("projected_premium_t1")
         entry_bid = trade_data.get("entry_bid")
@@ -442,6 +446,8 @@ class Notifier:
             summary.append(setup_bucket)
         if decision_label:
             summary.append(_decision_label_text(decision_label))
+        if quality_tag:
+            summary.append(quality_tag)
         if grade:
             summary.append(grade)
         if confidence:
@@ -463,6 +469,15 @@ class Notifier:
             contract_bits.append(t1_label)
         if contract_bits:
             lines.append(" | ".join(contract_bits))
+        state_bits = []
+        if entry_phase:
+            state_bits.append(entry_phase)
+        if premium_confirmed is not None:
+            state_bits.append("Premium OK" if premium_confirmed else "Premium Confirm Pending")
+        if path_quality:
+            state_bits.append(path_quality)
+        if state_bits:
+            lines.append(" | ".join(state_bits[:3]))
         if action_text:
             lines.append(action_text)
         message = "\n".join(lines)
@@ -509,6 +524,10 @@ class Notifier:
         journal_note = watch_data.get("journal_note")
         structure_suggestion = watch_data.get("structure_suggestion")
         greek_summary = watch_data.get("greek_summary")
+        quality_tag = watch_data.get("quality_tag")
+        entry_phase = watch_data.get("entry_phase")
+        premium_confirmed = watch_data.get("premium_confirmed")
+        path_quality = watch_data.get("path_quality")
         setup_label = _setup_label(setup)
 
         lines = []
@@ -536,6 +555,8 @@ class Notifier:
             summary.append(f"E:{entry_score}")
         if grade and grade != "SKIP":
             summary.append(f"G:{grade}")
+        if quality_tag:
+            summary.append(quality_tag)
         if summary:
             lines.append(" | ".join(summary))
         spot_bits = []
@@ -571,6 +592,15 @@ class Notifier:
             flow.append(participation_read.split("|", 1)[0].strip())
         if flow:
             lines.append(" | ".join(flow[:2]))
+        state_bits = []
+        if entry_phase:
+            state_bits.append(entry_phase)
+        if premium_confirmed is not None:
+            state_bits.append("Premium OK" if premium_confirmed else "Premium Confirm Pending")
+        if path_quality:
+            state_bits.append(path_quality)
+        if state_bits:
+            lines.append(" | ".join(state_bits[:3]))
         if greek_summary:
             lines.append(greek_summary)
         for explainer in _signal_explainer(reason, confidence_summary=confidence_summary)[:2]:

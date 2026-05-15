@@ -116,6 +116,7 @@ class SignalService:
         
         # Get instrument-specific config
         self.config = get_config_for_instrument(self.instrument)
+        self.current_expectancy_profile = None
         
         # Database access
         self.db_reader = DBReader()
@@ -575,6 +576,27 @@ class SignalService:
     def _evaluate_premium_quality_guard(self, signal, selected_option_contract, candle_time):
         return OptionSignalGuard.evaluate_premium_quality_guard(self, signal, selected_option_contract, candle_time)
 
+    def _assess_high_expectancy_profile(
+        self,
+        signal,
+        candle_time,
+        balanced_pro=None,
+        selected_option_contract=None,
+        premium_guard=None,
+        risk_profile=None,
+        price=None,
+    ):
+        return OptionSignalGuard.assess_high_expectancy(
+            self,
+            signal,
+            candle_time,
+            balanced_pro=balanced_pro,
+            selected_option_contract=selected_option_contract,
+            premium_guard=premium_guard,
+            risk_profile=risk_profile,
+            price=price,
+        )
+
     def _compute_flip_score(self, direction, structure_break, vwap_break, latest_1m=None, previous_1m=None):
         return OptionSignalGuard.compute_flip_score(self, direction, structure_break, vwap_break, latest_1m, previous_1m)
 
@@ -913,9 +935,14 @@ class SignalService:
         signal_grade = (self.strategy.last_signal_grade or "SKIP").upper()
         confidence = (self.strategy.last_confidence or "LOW").upper()
         regime = (self.strategy.last_regime or "UNKNOWN").upper()
+        current_cautions = set(getattr(self.strategy, "last_cautions", []) or [])
         score = float(
             getattr(self.strategy, "last_entry_score", None)
             or getattr(self.strategy, "last_score", 0)
+            or 0
+        )
+        entry_score = float(
+            getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0))
             or 0
         )
         sweep_override = (
@@ -934,9 +961,27 @@ class SignalService:
             regime=regime,
             candle_time=candle_time,
             score=getattr(self.strategy, "last_score", score),
-            entry_score=getattr(self.strategy, "last_entry_score", getattr(self.strategy, "last_score", 0)),
+            entry_score=entry_score,
             pressure_conflict_level=getattr(self.strategy, "last_pressure_conflict_level", "NONE"),
         )
+        opening_breakout_window = (
+            candle_time is not None
+            and (candle_time.hour, candle_time.minute) <= (11, 0)
+        )
+        weak_participation_flags = {
+            "participation_weak",
+            "participation_delta_missing",
+            "participation_baseline_weak",
+        }
+        late_chase_window = (
+            candle_time is not None
+            and (candle_time.hour, candle_time.minute) >= (14, 45)
+        )
+        late_chase_flags = {
+            "far_from_vwap",
+            "theta_fast_exit_required",
+            "late_day_breakdown_watch",
+        }
 
         if signal_type == "CONTINUATION" and not Config.ALLOW_CONTINUATION_ENTRY:
             breakout_memory = getattr(self.strategy, "breakout_memory", None) or {}
@@ -958,6 +1003,32 @@ class SignalService:
                 return False
         if sweep_override and signal_type in {"REVERSAL", "BREAKOUT_CONFIRM", "CONTINUATION", "RETEST", "BREAKOUT"}:
             return True
+        if (
+            signal in {"CE", "PE"}
+            and opening_breakout_window
+            and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "OPENING_DRIVE"}
+            and len(current_cautions.intersection(weak_participation_flags)) >= 2
+            and signal_grade not in {"A+"}
+        ):
+            return False
+        if (
+            signal in {"CE", "PE"}
+            and late_chase_window
+            and signal_type in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}
+            and len(current_cautions.intersection(late_chase_flags)) >= 2
+            and signal_grade not in {"A+"}
+            and entry_score < 92
+        ):
+            return False
+        if (
+            signal in {"CE", "PE"}
+            and candle_time is not None
+            and (candle_time.hour, candle_time.minute) >= (14, 50)
+            and signal_type in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}
+            and signal_grade not in {"A+"}
+            and current_cautions.intersection({"far_from_vwap", "adx_not_confirmed", "theta_fast_exit_required"})
+        ):
+            return False
         if self.instrument == "SENSEX":
             return instrument_rule_allows
         late_reversal_window = (
@@ -992,7 +1063,6 @@ class SignalService:
             "higher_tf_not_aligned",
             "oi_divergence_against",
         }
-        current_cautions = set(getattr(self.strategy, "last_cautions", []) or [])
         caution_hits = current_cautions.intersection(critical_cautions)
         if len(caution_hits) >= 2 and score < 90:
             return False
@@ -2662,6 +2732,7 @@ class SignalService:
             direction,
         )
         pressure_summary = (balanced_pro or {}).get("pressure_summary")
+        expectancy_profile = self.current_expectancy_profile or {}
 
         return {
             "instrument": self.instrument,
@@ -2702,6 +2773,10 @@ class SignalService:
             "avoid_if": avoid_if,
             "participation_read": participation_read,
             "pressure_read": pressure_summary.get("summary") if pressure_summary else None,
+            "quality_tag": expectancy_profile.get("quality_tag"),
+            "entry_phase": expectancy_profile.get("entry_phase"),
+            "premium_confirmed": expectancy_profile.get("premium_confirmed"),
+            "path_quality": expectancy_profile.get("path_quality"),
             "flip_context": flip_context,
             "key": (
                 self.instrument,
@@ -3078,6 +3153,11 @@ class SignalService:
             option_sweep_context=option_sweep_context,
             can_trade=can_trade_live,
         )
+        feed_health = OptionSignalGuard.maybe_relax_reject_for_strong_setup(
+            self,
+            feed_health,
+            signal=signal,
+        )
         if feed_health["label"] == "RISKY":
             self.strategy.last_cautions = list(dict.fromkeys(list(self.strategy.last_cautions or []) + ["feed_quality_risky"]))
         elif feed_health["label"] == "REJECT":
@@ -3089,6 +3169,7 @@ class SignalService:
         
         candidate_signal = signal
         candidate_reason = reason
+        self.current_expectancy_profile = None
         self._current_candle_time = candle_5m["time"]
         pre_ml_balanced_pro = self._build_balanced_pro_summary(
             base_bias,
@@ -3317,6 +3398,39 @@ class SignalService:
                     balanced_pro=balanced_pro,
                     risk_profile=signal_risk_profile,
                 )
+                expectancy_profile = self._assess_high_expectancy_profile(
+                    signal=signal,
+                    candle_time=candle_5m["time"],
+                    balanced_pro=balanced_pro,
+                    selected_option_contract=selected_option_contract,
+                    premium_guard=premium_guard,
+                    risk_profile=signal_risk_profile,
+                    price=price,
+                )
+                self.current_expectancy_profile = expectancy_profile
+                if not expectancy_profile.get("allow_trade"):
+                    candidate_signal = signal
+                    candidate_reason = (
+                        f"{reason} | expectancy={expectancy_profile.get('quality_tag')} "
+                        f"| phase={expectancy_profile.get('entry_phase')} "
+                        f"| {';'.join(expectancy_profile.get('reasons') or ['not_high_expectancy'])}"
+                    )
+                    if expectancy_profile.get("watch_only"):
+                        balanced_pro["tradability"] = "WATCH"
+                        balanced_pro["decision_state"] = "WATCH"
+                        balanced_pro["watch_bucket"] = "WATCH_CONFIRMATION_PENDING"
+                        signal = None
+                        reason = (
+                            f"High expectancy gate pending "
+                            f"({expectancy_profile.get('quality_tag')} / {expectancy_profile.get('entry_phase')})"
+                        )
+                    else:
+                        signal = None
+                        reason = (
+                            f"High expectancy gate blocked "
+                            f"({expectancy_profile.get('quality_tag')} / {expectancy_profile.get('entry_phase')} | "
+                            f"{'; '.join(expectancy_profile.get('reasons') or ['not_high_expectancy'])})"
+                        )
 
         if option_candidates:
             candidate_rows = []
@@ -3399,6 +3513,13 @@ class SignalService:
             enriched_reason += f" | wall_guard={wall_guard['label']}"
         if premium_guard:
             enriched_reason += f" | premium_guard={premium_guard['label']}"
+        if self.current_expectancy_profile:
+            enriched_reason += (
+                f" | expectancy={self.current_expectancy_profile.get('quality_tag')}"
+                f" | entry_phase={self.current_expectancy_profile.get('entry_phase')}"
+                f" | premium_confirmed={self.current_expectancy_profile.get('premium_confirmed')}"
+                f" | path_quality={self.current_expectancy_profile.get('path_quality')}"
+            )
 
         oi_mode = "OI_ONLY_FALLBACK" if fallback_context and fallback_context["fallback_used"] else "FULL_OPTION_BAND"
 
@@ -3479,6 +3600,7 @@ class SignalService:
             print(f"Score: {self.strategy.last_score} | Confidence: {self.strategy.last_confidence}")
             print(f"Strike: {selected_strike} | Reason: {reason}")
             print(f"Price: {option_signal_price} | Spot: {price} | Time: {candle_5m['time']}")
+            expectancy_profile = self.current_expectancy_profile or {}
             trade_notification = {
                 "instrument": self.instrument,
                 "signal": signal,
@@ -3522,6 +3644,11 @@ class SignalService:
                 "pressure_read": (balanced_pro.get("pressure_summary") or {}).get("summary"),
                 "oi_read": (oi_ladder_data or {}).get("oi_summary"),
                 "greek_summary": format_greek_summary(selected_option_contract),
+                "quality_tag": expectancy_profile.get("quality_tag"),
+                "entry_phase": expectancy_profile.get("entry_phase"),
+                "premium_confirmed": expectancy_profile.get("premium_confirmed"),
+                "path_quality": expectancy_profile.get("path_quality"),
+                "likely_runner": expectancy_profile.get("likely_runner"),
             }
             if self._suppress_live_actions:
                 self._log(

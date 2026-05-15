@@ -30,7 +30,7 @@ class SignalStateManager:
 
     @staticmethod
     def should_suppress_duplicate(strategy, direction, signal_type, current_bar_time, level=None):
-        if current_bar_time is None or signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST"}:
+        if current_bar_time is None or signal_type not in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "REVERSAL", "TRAP_REVERSAL"}:
             return False
         last = strategy.last_emitted_signal
         if not last or last["session_day"] != current_bar_time.date():
@@ -38,7 +38,8 @@ class SignalStateManager:
         if last["direction"] != direction or last["signal_type"] != signal_type:
             return False
         bars_apart = int((current_bar_time - last["time"]).total_seconds() // 300)
-        if bars_apart > 2:
+        max_bars_apart = 1 if signal_type in {"REVERSAL", "TRAP_REVERSAL"} else 2
+        if bars_apart > max_bars_apart:
             return False
         if level is None or last["level"] is None:
             return True

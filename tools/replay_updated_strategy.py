@@ -401,9 +401,14 @@ def live_gate(signal, strategy, instrument, candle_time):
         or getattr(strategy, "last_score", 0)
         or 0
     )
+    entry_score = float(
+        getattr(strategy, "last_entry_score", getattr(strategy, "last_score", 0))
+        or 0
+    )
     pressure_conflict_level = (
         getattr(strategy, "last_pressure_conflict_level", "NONE") or "NONE"
     ).upper()
+    current_cautions = set(getattr(strategy, "last_cautions", []) or [])
 
     allowed = InstrumentActionableRules.should_allow_signal(
         instrument=instrument,
@@ -418,6 +423,48 @@ def live_gate(signal, strategy, instrument, candle_time):
     )
     if signal_type not in Config.OPTION_BUYER_ALERT_TYPES and not allowed:
         return False, "signal_type_blocked"
+    opening_breakout_window = (
+        candle_time is not None and (candle_time.hour, candle_time.minute) <= (11, 0)
+    )
+    weak_participation_flags = {
+        "participation_weak",
+        "participation_delta_missing",
+        "participation_baseline_weak",
+    }
+    if (
+        signal in {"CE", "PE"}
+        and opening_breakout_window
+        and signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "OPENING_DRIVE"}
+        and len(current_cautions.intersection(weak_participation_flags)) >= 2
+        and signal_grade not in {"A+"}
+    ):
+        return False, "weak_opening_participation"
+    late_chase_window = (
+        candle_time is not None and (candle_time.hour, candle_time.minute) >= (14, 45)
+    )
+    late_chase_flags = {
+        "far_from_vwap",
+        "theta_fast_exit_required",
+        "late_day_breakdown_watch",
+    }
+    if (
+        signal in {"CE", "PE"}
+        and late_chase_window
+        and signal_type in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}
+        and len(current_cautions.intersection(late_chase_flags)) >= 2
+        and signal_grade not in {"A+"}
+        and entry_score < 92
+    ):
+        return False, "late_chase_expectancy"
+    if (
+        signal in {"CE", "PE"}
+        and candle_time is not None
+        and (candle_time.hour, candle_time.minute) >= (14, 50)
+        and signal_type in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION"}
+        and signal_grade not in {"A+"}
+        and current_cautions.intersection({"far_from_vwap", "adx_not_confirmed", "theta_fast_exit_required"})
+    ):
+        return False, "endgame_chase_expectancy"
     if instrument in {"NIFTY", "BANKNIFTY", "SENSEX"}:
         if allowed:
             return True, "live_actionable"

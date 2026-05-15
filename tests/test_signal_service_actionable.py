@@ -1,4 +1,5 @@
 from services.signal_service import SignalService
+from services.signal_service_support import OptionSignalGuard
 from datetime import datetime, timedelta
 from shared.market.oi_quote_confirmation import OIQuoteConfirmation
 from shared.market.option_spike_detector import OptionSpikeDetector
@@ -66,10 +67,167 @@ def test_banknifty_allows_b_grade_breakout_before_11_am_when_quality_is_clean():
     assert service._is_option_buyer_actionable("PE", candle_time=datetime(2026, 4, 16, 10, 25)) is True
 
 
+def test_option_buyer_actionable_blocks_opening_breakout_when_participation_is_weak():
+    service = build_service("BREAKOUT_CONFIRM", "B", "HIGH")
+    service.instrument = "NIFTY"
+    service.strategy.last_score = 86
+    service.strategy.last_entry_score = 84
+    service.strategy.last_cautions = [
+        "participation_weak",
+        "participation_delta_missing",
+    ]
+
+    assert service._is_option_buyer_actionable("CE", candle_time=datetime(2026, 4, 16, 9, 50)) is False
+
+
 def test_sensex_allows_a_grade_breakout_confirm():
     service = build_service("BREAKOUT_CONFIRM", "A", "MEDIUM")
     service.instrument = "SENSEX"
     assert service._is_option_buyer_actionable("PE", candle_time=datetime(2026, 4, 16, 11, 5)) is True
+
+
+def test_option_buyer_actionable_blocks_late_chase_breakdown_when_theta_and_vwap_flags_hit():
+    service = build_service("BREAKOUT_CONFIRM", "B", "HIGH")
+    service.instrument = "SENSEX"
+    service.strategy.last_score = 90
+    service.strategy.last_entry_score = 88
+    service.strategy.last_pressure_conflict_level = "NONE"
+    service.strategy.last_cautions = [
+        "far_from_vwap",
+        "theta_fast_exit_required",
+        "late_day_breakdown_watch",
+    ]
+
+    assert service._is_option_buyer_actionable("PE", candle_time=datetime(2026, 4, 16, 14, 50)) is False
+
+
+def test_high_expectancy_gate_holds_breakout_until_premium_confirms():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "NIFTY"
+    service.strategy.last_score = 90
+    service.strategy.last_entry_score = 92
+    service.strategy.last_cautions = []
+    service.strategy.last_pressure_conflict_level = "NONE"
+    service.strategy.last_entry_plan = {"entry_above": 100.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 5.0), "atr": 10.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 11, 15),
+        premium_guard={"label": "PREMIUM_SLEEPY", "premium_momentum_pct": 0.0, "spread_pct": 2.0},
+        price=101.0,
+    )
+
+    assert profile["allow_trade"] is False
+    assert profile["watch_only"] is True
+    assert profile["quality_tag"] == "TQ_CLEAN"
+
+
+def test_high_expectancy_gate_promotes_clean_first_signal_to_hq():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "NIFTY"
+    service.strategy.last_score = 84
+    service.strategy.last_entry_score = 88
+    service.strategy.last_cautions = ["far_from_vwap"]
+    service.strategy.last_pressure_conflict_level = "MILD"
+    service.strategy.last_entry_plan = {"entry_above": 100.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_emitted_signal = None
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 5.0), "atr": 10.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 11, 15),
+        premium_guard={"label": "PREMIUM_OK", "premium_momentum_pct": 0.6, "spread_pct": 2.0},
+        price=100.5,
+    )
+
+    assert profile["allow_trade"] is True
+    assert profile["quality_tag"] == "HQ"
+
+
+def test_high_expectancy_marks_volatile_tactical_when_conflicts_exist():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "BANKNIFTY"
+    service.strategy.last_score = 82
+    service.strategy.last_entry_score = 84
+    service.strategy.last_cautions = ["participation_weak", "far_from_vwap"]
+    service.strategy.last_pressure_conflict_level = "MODERATE"
+    service.strategy.last_entry_plan = {"entry_above": 54000.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_emitted_signal = None
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 12, 15),
+        premium_guard={"label": "PREMIUM_OK", "premium_momentum_pct": 1.2, "spread_pct": 4.2},
+        price=54020.0,
+    )
+
+    assert profile["allow_trade"] is True
+    assert profile["quality_tag"] == "TQ_VOLATILE"
+
+
+def test_high_expectancy_promotes_clean_retest_to_tq_clean():
+    service = build_service("RETEST", "B", "MEDIUM")
+    service.instrument = "BANKNIFTY"
+    service.strategy.last_score = 80
+    service.strategy.last_entry_score = 84
+    service.strategy.last_cautions = ["far_from_vwap"]
+    service.strategy.last_pressure_conflict_level = "MILD"
+    service.strategy.last_entry_plan = {"entry_above": 54000.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_emitted_signal = None
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 12, 15),
+        premium_guard={"label": "PREMIUM_OK", "premium_momentum_pct": 1.2, "spread_pct": 2.8},
+        price=54020.0,
+    )
+
+    assert profile["allow_trade"] is True
+    assert profile["quality_tag"] == "TQ_CLEAN"
+
+
+def test_high_expectancy_gate_allows_elite_reversal_quality():
+    service = build_service("REVERSAL", "B", "MEDIUM")
+    service.instrument = "SENSEX"
+    service.strategy.last_score = 87
+    service.strategy.last_entry_score = 93
+    service.strategy.last_cautions = ["far_from_vwap"]
+    service.strategy.last_pressure_conflict_level = "NONE"
+    service.strategy.last_entry_plan = {"entry_below": 75500.0}
+    service.strategy.last_active_day_state = "BEAR_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "PE"
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "PE",
+        datetime(2026, 4, 16, 13, 55),
+        premium_guard={"label": "PREMIUM_OK", "premium_momentum_pct": 0.5, "spread_pct": 2.5},
+        price=75490.0,
+    )
+
+    assert profile["allow_trade"] is True
+    assert profile["quality_tag"] == "RQ"
 
 
 def test_sensex_allows_clean_b_grade_continuation_even_when_global_continuation_flag_is_off():
@@ -1011,6 +1169,77 @@ def test_no_trade_zone_allows_clean_high_confidence_midday_breakout_even_in_chop
     )
 
     assert zone is None
+
+
+def test_feed_reject_softens_for_elite_aligned_setup_when_only_oi_health_is_weak():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.option_sweep_context = {}
+    service.last_data_health = None
+    service._should_soften_option_sweep_filters = lambda _signal: False
+    service.strategy = type(
+        "StrategyStub",
+        (),
+        {
+            "last_score": 92,
+            "last_entry_score": 91,
+            "last_confidence": "HIGH",
+            "last_signal_type": "BREAKOUT_CONFIRM",
+            "last_active_day_state": "BULL_TREND_ACTIVE",
+            "last_day_state_direction": "CE",
+            "last_pressure_conflict_level": "NONE",
+        },
+    )()
+
+    feed_health = {
+        "label": "REJECT",
+        "summary": "feed=REJECT",
+        "reasons": ["coverage_too_low", "large_gap_detected"],
+        "candle_health": {"coverage_pct": 94.0, "count": 12, "expected_count": 13, "max_gap_seconds": 600},
+        "oi_health": {"coverage_pct": 28.0, "distinct_minutes": 17, "expected_minutes": 61, "max_gap_seconds": 1080},
+    }
+
+    from services.signal_service_support.option_signal_guard import OptionSignalGuard
+
+    result = OptionSignalGuard.maybe_relax_reject_for_strong_setup(service, feed_health, signal="CE")
+
+    assert result["label"] == "RISKY"
+    assert "strong_setup_oi_softened" in result["reasons"]
+    assert service.last_data_health["label"] == "RISKY"
+
+
+def test_feed_reject_stays_reject_for_non_elite_setup():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.option_sweep_context = {}
+    service.last_data_health = None
+    service._should_soften_option_sweep_filters = lambda _signal: False
+    service.strategy = type(
+        "StrategyStub",
+        (),
+        {
+            "last_score": 74,
+            "last_entry_score": 72,
+            "last_confidence": "MEDIUM",
+            "last_signal_type": "BREAKOUT_CONFIRM",
+            "last_active_day_state": "BULL_TREND_ACTIVE",
+            "last_day_state_direction": "CE",
+            "last_pressure_conflict_level": "NONE",
+        },
+    )()
+    feed_health = {
+        "label": "REJECT",
+        "summary": "feed=REJECT",
+        "reasons": ["coverage_too_low", "large_gap_detected"],
+        "candle_health": {"coverage_pct": 94.0, "count": 12, "expected_count": 13, "max_gap_seconds": 600},
+        "oi_health": {"coverage_pct": 28.0, "distinct_minutes": 17, "expected_minutes": 61, "max_gap_seconds": 1080},
+    }
+
+    from services.signal_service_support.option_signal_guard import OptionSignalGuard
+
+    result = OptionSignalGuard.maybe_relax_reject_for_strong_setup(service, feed_health, signal="CE")
+
+    assert result["label"] == "REJECT"
 
 
 def test_structure_suggestion_prefers_bull_call_spread_in_expiry_noise():

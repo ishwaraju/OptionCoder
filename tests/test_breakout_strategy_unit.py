@@ -1,6 +1,7 @@
 from strategies.shared.breakout_strategy import BreakoutSignalStrategy, BreakoutStrategy
 from datetime import datetime
 from config import Config
+from strategies.shared.breakout.trend_quality_refiner import TrendQualityRefiner
 from strategies.shared.expiry_context import ExpirySessionContext
 from strategies.shared.expiry_day_rules import ExpiryDayRules
 
@@ -35,6 +36,36 @@ def test_allows_high_conviction_bullish_continuation_even_if_far_from_vwap():
 
     assert signal == "CE"
     assert "breakout" in reason.lower() or "continuation" in reason.lower()
+
+
+def test_trend_quality_refiner_cleans_low_value_trend_cautions():
+    clean_leg = TrendQualityRefiner.is_clean_trend_leg(
+        scored_direction="CE",
+        day_state={"state": "BULL_TREND_ACTIVE", "direction": "CE"},
+        price=23900,
+        vwap=23800,
+        volume_signal="STRONG",
+        breakout_body_ok=True,
+        breakout_structure_ok=True,
+        candle_liquidity_ok=True,
+        pressure_conflict_level="MILD",
+        opposite_pressure_present=False,
+        adx_trade_ok=False,
+        mtf_trade_ok=False,
+        score=85,
+        entry_score=87,
+    )
+
+    refined = TrendQualityRefiner.refine_cautions(
+        ["far_from_vwap", "participation_baseline_weak", "adx_not_confirmed", "opposite_pressure"],
+        clean_trend_leg=clean_leg,
+    )
+
+    assert clean_leg is True
+    assert "far_from_vwap" not in refined
+    assert "participation_baseline_weak" not in refined
+    assert "adx_not_confirmed" not in refined
+    assert "opposite_pressure" in refined
 
 
 def test_breakout_signal_strategy_alias_and_preferred_method_work():
@@ -983,3 +1014,15 @@ def test_day_state_adjustment_penalizes_opposite_direction():
 
     assert score == 70.0
     assert "day_state_opposes_direction" in cautions
+
+
+def test_reversal_duplicate_is_suppressed_on_next_bar():
+    strategy = BreakoutStrategy(instrument="SENSEX")
+    first_bar = datetime(2026, 4, 16, 13, 55)
+    second_bar = datetime(2026, 4, 16, 14, 0)
+    later_bar = datetime(2026, 4, 16, 14, 20)
+
+    strategy._mark_signal_emitted("PE", "REVERSAL", first_bar, level=75500, buffer=20)
+
+    assert strategy._should_suppress_duplicate("PE", "REVERSAL", second_bar, level=75500) is True
+    assert strategy._should_suppress_duplicate("PE", "REVERSAL", later_bar, level=75500) is False

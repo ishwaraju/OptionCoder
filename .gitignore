@@ -6,4 +6,6 @@ data/watchdog/*_state.json
 data/run_signals_state.json
 data/run_collectors_state.json
 .token
+.option_data_cache
+.volume_cache
 logs/*/*.log

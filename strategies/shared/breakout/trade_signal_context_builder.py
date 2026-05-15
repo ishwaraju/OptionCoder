@@ -1,5 +1,7 @@
 from config import Config
 
+from .trend_quality_refiner import TrendQualityRefiner
+
 
 class TradeSignalContextBuilder:
     @staticmethod
@@ -529,6 +531,26 @@ class TradeSignalContextBuilder:
             mtf_trade_ok = tf_ok or (score >= 80 and volume_signal == "STRONG")
             if not tf_ok:
                 cautions.append("higher_tf_not_aligned")
+
+        clean_trend_leg = TrendQualityRefiner.is_clean_trend_leg(
+            scored_direction=scored_direction,
+            day_state=day_state,
+            price=price,
+            vwap=vwap,
+            volume_signal=volume_signal,
+            breakout_body_ok=breakout_body_ok,
+            breakout_structure_ok=breakout_structure_ok,
+            candle_liquidity_ok=candle_liquidity_ok,
+            pressure_conflict_level=pressure_conflict_level,
+            opposite_pressure_present="opposite_pressure" in cautions,
+            adx_trade_ok=adx_trade_ok,
+            mtf_trade_ok=mtf_trade_ok,
+            score=score,
+            entry_score=strategy.last_entry_score,
+        )
+        cautions = TrendQualityRefiner.refine_cautions(cautions, clean_trend_leg=clean_trend_leg)
+        if clean_trend_leg and "clean_trend_leg" not in components:
+            components.append("clean_trend_leg")
 
         strategy.last_entry_score = strategy._calculate_entry_score(
             score=score,
