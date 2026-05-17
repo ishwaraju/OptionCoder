@@ -18,6 +18,18 @@ def build_service(signal_type, signal_grade, confidence):
             "last_confidence": confidence,
             "last_regime": "TRENDING",
             "last_score": 80,
+            "last_entry_score": 80,
+            "last_cautions": [],
+            "last_pressure_conflict_level": "NONE",
+            "last_active_day_state": "UNKNOWN",
+            "last_day_state_direction": "NONE",
+            "last_trend_leg_stage": "NEUTRAL",
+            "last_session_map_phase": "AFTERNOON_EXPANSION",
+            "last_futures_acceptance": None,
+            "last_initiative_strength_score": 0,
+            "last_signal_family": "UNKNOWN",
+            "last_entry_plan": {},
+            "last_emitted_signal": None,
         },
     )()
     return service
@@ -127,6 +139,71 @@ def test_high_expectancy_gate_holds_breakout_until_premium_confirms():
     assert profile["quality_tag"] == "TQ_CLEAN"
 
 
+def test_price_action_strong_watch_bucket_when_premium_is_pending():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "NIFTY"
+    service.strategy.last_score = 90
+    service.strategy.last_entry_score = 92
+    service.strategy.last_cautions = []
+    service.strategy.last_pressure_conflict_level = "NONE"
+    service.strategy.last_entry_plan = {"entry_above": 100.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_trend_leg_stage = "FIRST_IMPULSE"
+    service.strategy.last_futures_acceptance = {"accepted": True, "score": 64}
+    service.strategy.last_initiative_strength_score = 34
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 5.0), "atr": 10.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 11, 15),
+        premium_guard={"label": "PREMIUM_OK", "premium_momentum_pct": 0.2, "spread_pct": 2.1, "volume_supporting": False},
+        price=100.8,
+    )
+
+    assert profile["allow_trade"] is False
+    assert profile["watch_only"] is True
+    assert profile["quality_tag"] == "PA_STRONG_WAIT_PREMIUM"
+
+
+def test_price_action_strong_can_enter_small_when_sponsorship_is_clean():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "BANKNIFTY"
+    service.strategy.last_score = 88
+    service.strategy.last_entry_score = 90
+    service.strategy.last_cautions = []
+    service.strategy.last_pressure_conflict_level = "NONE"
+    service.strategy.last_entry_plan = {"entry_above": 54000.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_trend_leg_stage = "FIRST_IMPULSE"
+    service.strategy.last_futures_acceptance = {"accepted": True, "score": 66}
+    service.strategy.last_initiative_strength_score = 36
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 12, 15),
+        premium_guard={
+            "label": "PREMIUM_OK",
+            "premium_momentum_pct": 0.15,
+            "spread_pct": 2.0,
+            "volume_supporting": True,
+            "previous_ltp": 100.0,
+            "current_ltp": 101.2,
+        },
+        price=54004.0,
+    )
+
+    assert profile["allow_trade"] is True
+    assert profile["watch_only"] is False
+    assert profile["quality_tag"] == "PA_STRONG_ENTER_SMALL"
+
+
 def test_high_expectancy_gate_promotes_clean_first_signal_to_hq():
     service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
     service.instrument = "NIFTY"
@@ -137,6 +214,7 @@ def test_high_expectancy_gate_promotes_clean_first_signal_to_hq():
     service.strategy.last_entry_plan = {"entry_above": 100.0}
     service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
     service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_trend_leg_stage = "FIRST_IMPULSE"
     service.strategy.last_emitted_signal = None
     service._entry_too_extended = lambda *_args, **_kwargs: False
     service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 5.0), "atr": 10.0})()
@@ -145,7 +223,13 @@ def test_high_expectancy_gate_promotes_clean_first_signal_to_hq():
         service,
         "CE",
         datetime(2026, 4, 16, 11, 15),
-        premium_guard={"label": "PREMIUM_OK", "premium_momentum_pct": 0.6, "spread_pct": 2.0},
+        premium_guard={
+            "label": "PREMIUM_OK",
+            "premium_momentum_pct": 1.4,
+            "spread_pct": 2.0,
+            "volume_supporting": True,
+            "clean_breakout_premium": True,
+        },
         price=100.5,
     )
 
@@ -175,7 +259,8 @@ def test_high_expectancy_marks_volatile_tactical_when_conflicts_exist():
         price=54020.0,
     )
 
-    assert profile["allow_trade"] is True
+    assert profile["allow_trade"] is False
+    assert profile["watch_only"] is True
     assert profile["quality_tag"] == "TQ_VOLATILE"
 
 
@@ -189,6 +274,7 @@ def test_high_expectancy_promotes_clean_retest_to_tq_clean():
     service.strategy.last_entry_plan = {"entry_above": 54000.0}
     service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
     service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_trend_leg_stage = "FIRST_RETEST"
     service.strategy.last_emitted_signal = None
     service._entry_too_extended = lambda *_args, **_kwargs: False
     service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
@@ -197,12 +283,131 @@ def test_high_expectancy_promotes_clean_retest_to_tq_clean():
         service,
         "CE",
         datetime(2026, 4, 16, 12, 15),
-        premium_guard={"label": "PREMIUM_OK", "premium_momentum_pct": 1.2, "spread_pct": 2.8},
+        premium_guard={
+            "label": "PREMIUM_OK",
+            "premium_momentum_pct": 1.2,
+            "spread_pct": 2.8,
+            "volume_supporting": True,
+            "clean_breakout_premium": True,
+        },
         price=54020.0,
     )
 
     assert profile["allow_trade"] is True
     assert profile["quality_tag"] == "TQ_CLEAN"
+
+
+def test_high_expectancy_blocks_dead_premium_risk_even_when_signal_is_strong():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "BANKNIFTY"
+    service.strategy.last_score = 91
+    service.strategy.last_entry_score = 92
+    service.strategy.last_entry_plan = {"entry_above": 54000.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_trend_leg_stage = "FIRST_IMPULSE"
+    service.strategy.last_futures_acceptance = {"accepted": True, "score": 70}
+    service.strategy.last_initiative_strength_score = 40
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 12, 15),
+        premium_guard={
+            "label": "PREMIUM_OK",
+            "premium_momentum_pct": 0.1,
+            "spread_pct": 5.1,
+            "volume_supporting": False,
+            "current_ltp": 210.0,
+            "previous_ltp": 209.7,
+        },
+        price=54020.0,
+    )
+
+    assert profile["allow_trade"] is False
+    assert profile["quality_tag"] == "AVOID"
+    assert "dead_premium_risk" in profile["reasons"]
+
+
+def test_high_expectancy_allows_clean_breakout_with_baseline_weak_only():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "NIFTY"
+    service.strategy.last_score = 82
+    service.strategy.last_entry_score = 84
+    service.strategy.last_cautions = ["participation_baseline_weak"]
+    service.strategy.last_pressure_conflict_level = "MILD"
+    service.strategy.last_entry_plan = {"entry_above": 100.0}
+    service.strategy.last_active_day_state = "BULL_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "CE"
+    service.strategy.last_trend_leg_stage = "FIRST_IMPULSE"
+    service.strategy.last_emitted_signal = None
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 5.0), "atr": 10.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "CE",
+        datetime(2026, 4, 16, 11, 45),
+        premium_guard={
+            "label": "PREMIUM_OK",
+            "premium_momentum_pct": 1.3,
+            "spread_pct": 2.5,
+            "volume_supporting": True,
+            "clean_breakout_premium": True,
+        },
+        price=100.6,
+    )
+
+    assert profile["allow_trade"] is True
+    assert profile["quality_tag"] == "TQ_CLEAN"
+
+
+def test_entry_phase_does_not_mark_different_breakout_family_as_reentry():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.strategy.last_cautions = []
+    service.strategy.last_trend_leg_stage = "FIRST_IMPULSE"
+    service.strategy.last_emitted_signal = {
+        "direction": "CE",
+        "signal_type": "REVERSAL",
+        "time": datetime(2026, 4, 16, 11, 0),
+        "session_day": datetime(2026, 4, 16, 11, 0).date(),
+        "level": 100.0,
+        "buffer": 5.0,
+    }
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 5.0), "atr": 10.0})()
+
+    phase = OptionSignalGuard.classify_entry_phase(
+        service,
+        "CE",
+        "BREAKOUT_CONFIRM",
+        datetime(2026, 4, 16, 11, 15),
+        price=101.0,
+        trigger_price=100.0,
+    )
+
+    assert phase == "FIRST_SIGNAL_IN_MOVE"
+
+
+def test_entry_phase_uses_trend_leg_stage_for_retest():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.strategy.last_cautions = []
+    service.strategy.last_trend_leg_stage = "FIRST_RETEST"
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 5.0), "atr": 10.0})()
+
+    phase = OptionSignalGuard.classify_entry_phase(
+        service,
+        "CE",
+        "BREAKOUT_CONFIRM",
+        datetime(2026, 4, 16, 11, 15),
+        price=101.0,
+        trigger_price=100.0,
+    )
+
+    assert phase == "RETEST_SIGNAL"
 
 
 def test_high_expectancy_gate_allows_elite_reversal_quality():

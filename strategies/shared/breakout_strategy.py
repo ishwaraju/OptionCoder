@@ -103,6 +103,13 @@ class BreakoutSignalStrategy:
         self.last_active_day_state = "UNKNOWN"
         self.last_day_state_direction = "NONE"
         self.last_day_state_detail = ""
+        self.last_trend_leg_stage = "NEUTRAL"
+        self.last_session_map_phase = "UNKNOWN"
+        self.last_futures_acceptance = None
+        self.last_futures_acceptance_score = 0.0
+        self.last_initiative_strength_score = 0.0
+        self.last_price_action_watch_ready = False
+        self.last_signal_family = "UNKNOWN"
         self.retest_setup = None
         self.confirmation_setup = None
         self.breakout_memory = None

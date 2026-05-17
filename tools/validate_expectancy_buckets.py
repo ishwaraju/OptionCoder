@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -128,6 +128,7 @@ def replay_instrument(instrument, from_date, to_date, horizon, max_minutes):
     participation_history = {"CE": deque(maxlen=12), "PE": deque(maxlen=12)}
     service = ReplayServiceStub(instrument, strategy, atr, snapshot_map)
     stats = defaultdict(BucketStat)
+    family_stats = defaultdict(BucketStat)
 
     for idx, candle in enumerate(candles):
         ts = candle["time"]
@@ -257,9 +258,11 @@ def replay_instrument(instrument, from_date, to_date, horizon, max_minutes):
         mfe = max(ltps) - entry_ltp
         mae = min(ltps) - entry_ltp
         bucket = profile.get("quality_tag") or "UNKNOWN"
+        family = profile.get("signal_family") or "UNKNOWN"
         stats[bucket].add(pnl, mfe, mae)
+        family_stats[family].add(pnl, mfe, mae)
 
-    return stats
+    return {"bucket_stats": stats, "family_stats": family_stats}
 
 
 def main():
@@ -267,10 +270,13 @@ def main():
     instruments = ["NIFTY", "BANKNIFTY", "SENSEX"]
     all_stats = {instrument: replay_instrument(instrument, args.from_date, args.to_date, args.horizon, args.max_minutes) for instrument in instruments}
     combined = defaultdict(BucketStat)
+    combined_family = defaultdict(BucketStat)
     for instrument, stats in all_stats.items():
         print(instrument)
-        for bucket in ["HQ", "RQ", "TQ_CLEAN", "TQ_VOLATILE", "LQ", "AVOID"]:
-            stat = stats.get(bucket)
+        bucket_stats = stats["bucket_stats"]
+        family_stats = stats["family_stats"]
+        for bucket in ["HQ", "PA_STRONG_ENTER_SMALL", "RQ", "TQ_CLEAN", "TQ_VOLATILE", "LQ", "AVOID"]:
+            stat = bucket_stats.get(bucket)
             if not stat or not stat.count:
                 continue
             print(
@@ -282,8 +288,20 @@ def main():
             combined[bucket].total_pnl += stat.total_pnl
             combined[bucket].total_mfe += stat.total_mfe
             combined[bucket].total_mae += stat.total_mae
+        if family_stats:
+            print("  FAMILIES")
+            for family, stat in sorted(family_stats.items(), key=lambda item: (-item[1].count, item[0])):
+                print(
+                    f"    {family}: count={stat.count} win_rate={round((stat.wins / stat.count) * 100, 1)}% "
+                    f"avg_5m={avg(stat.total_pnl, stat.count)} avg_mfe={avg(stat.total_mfe, stat.count)} avg_mae={avg(stat.total_mae, stat.count)}"
+                )
+                combined_family[family].count += stat.count
+                combined_family[family].wins += stat.wins
+                combined_family[family].total_pnl += stat.total_pnl
+                combined_family[family].total_mfe += stat.total_mfe
+                combined_family[family].total_mae += stat.total_mae
     print("ALL")
-    for bucket in ["HQ", "RQ", "TQ_CLEAN", "TQ_VOLATILE", "LQ", "AVOID"]:
+    for bucket in ["HQ", "PA_STRONG_ENTER_SMALL", "RQ", "TQ_CLEAN", "TQ_VOLATILE", "LQ", "AVOID"]:
         stat = combined.get(bucket)
         if not stat or not stat.count:
             continue
@@ -291,6 +309,13 @@ def main():
             f"  {bucket}: count={stat.count} win_rate={round((stat.wins / stat.count) * 100, 1)}% "
             f"avg_5m={avg(stat.total_pnl, stat.count)} avg_mfe={avg(stat.total_mfe, stat.count)} avg_mae={avg(stat.total_mae, stat.count)}"
         )
+    if combined_family:
+        print("  FAMILIES")
+        for family, stat in sorted(combined_family.items(), key=lambda item: (-item[1].count, item[0])):
+            print(
+                f"    {family}: count={stat.count} win_rate={round((stat.wins / stat.count) * 100, 1)}% "
+                f"avg_5m={avg(stat.total_pnl, stat.count)} avg_mfe={avg(stat.total_mfe, stat.count)} avg_mae={avg(stat.total_mae, stat.count)}"
+            )
 
 
 if __name__ == "__main__":

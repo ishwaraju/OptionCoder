@@ -8,6 +8,7 @@ shared strategy surface stays easier to scan.
 from .confirmation_engine import ConfirmationEngine, evaluate_confirmation_and_retest
 from .continuation_engine import ContinuationEngine, evaluate_aggressive_continuations, evaluate_core_continuations
 from .day_state_analyzer import DayStateAnalyzer, apply_day_state_adjustment, derive_active_day_state, derive_opening_bias
+from .futures_acceptance_engine import FuturesAcceptanceEngine, evaluate_futures_acceptance
 from .hybrid_continuation_engine import HybridContinuationEngine, evaluate_hybrid_continuations
 from .no_setup_finalizer import NoSetupFinalizer, finalize_no_setup
 from .opening_drive_engine import OpeningDriveEngine, evaluate_opening_drive
@@ -22,6 +23,7 @@ from .option_buyer_protection import (
 )
 from .orb_engine import OrbEngine, evaluate_manual_confirmations, evaluate_orb_breakouts
 from .reversal_engine import ReversalEngine, evaluate_reversal_setups
+from .session_map_classifier import SessionMapClassifier, classify_session_map
 from .signal_component_scorer import SignalComponentScorer, score_signal_components
 from .signal_state_manager import (
     SignalStateManager,
@@ -35,6 +37,7 @@ from .signal_state_manager import (
     update_retest_setup,
 )
 from .trade_signal_context_builder import TradeSignalContextBuilder, build_trade_signal_context
+from .trend_leg_classifier import TrendLegClassifier, classify_trend_leg
 from .watch_engine import WatchEngine, finalize_watch_state
 
 __all__ = [
@@ -53,6 +56,7 @@ __all__ = [
     "evaluate_aggressive_continuations",
     "evaluate_confirmation_and_retest",
     "evaluate_core_continuations",
+    "evaluate_futures_acceptance",
     "evaluate_hybrid_continuations",
     "evaluate_manual_confirmations",
     "evaluate_opening_drive",
@@ -66,6 +70,8 @@ __all__ = [
     "OptionBuyerProtection",
     "OrbEngine",
     "ReversalEngine",
+    "FuturesAcceptanceEngine",
+    "SessionMapClassifier",
     "SignalComponentScorer",
     "SignalStateManager",
     "score_signal_components",
@@ -76,7 +82,10 @@ __all__ = [
     "set_retest_setup",
     "should_suppress_duplicate",
     "TradeSignalContextBuilder",
+    "TrendLegClassifier",
     "build_trade_signal_context",
+    "classify_session_map",
+    "classify_trend_leg",
     "update_confirmation_setup",
     "update_retest_setup",
     "WatchEngine",

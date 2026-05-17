@@ -607,6 +607,40 @@ class SignalService:
     def _build_journal_note(decision_label, action_text, extra=None):
         return TradeMonitorSupport.build_journal_note(decision_label, action_text, extra)
 
+    def _build_trade_thesis(self, signal, balanced_pro=None, premium_guard=None):
+        signal = (signal or "").upper()
+        direction_text = "CE" if signal == "CE" else "PE" if signal == "PE" else "setup"
+        futures_acceptance = getattr(self.strategy, "last_futures_acceptance", None) or {}
+        session_phase = getattr(self.strategy, "last_session_map_phase", "UNKNOWN")
+        pressure_summary = (balanced_pro or {}).get("pressure_summary") or {}
+        pressure_bias = pressure_summary.get("bias")
+        active_day_state = getattr(self.strategy, "last_active_day_state", "UNKNOWN")
+        premium_guard = premium_guard or {}
+        premium_confirmed = (premium_guard.get("label") or "").upper() == "PREMIUM_OK"
+        volume_supporting = premium_guard.get("volume_supporting")
+        spread_pct = premium_guard.get("spread_pct")
+
+        bits = []
+        if futures_acceptance.get("accepted"):
+            bits.append(f"Price action accepted in {session_phase.lower().replace('_', ' ')}")
+        elif getattr(self.strategy, "last_price_action_watch_ready", False):
+            bits.append("Price action strong hai")
+        if active_day_state and active_day_state != "UNKNOWN":
+            bits.append(active_day_state.replace("_", " ").title())
+        if pressure_bias in {"BULLISH", "BEARISH"}:
+            bits.append(f"pressure {pressure_bias.lower()}")
+        if premium_confirmed:
+            premium_line = f"{direction_text} premium confirmed"
+            if volume_supporting:
+                premium_line += " with volume"
+            if spread_pct is not None:
+                premium_line += f" and spread {round(float(spread_pct), 2)}%"
+            bits.append(premium_line)
+        elif signal in {"CE", "PE"}:
+            bits.append(f"{direction_text} premium confirmation abhi pending hai")
+
+        return ". ".join(bits[:2]) if bits else None
+
     def _optimized_spread_short_strike(self, signal, long_strike, balanced_pro=None, risk_profile=None):
         return OptionSignalGuard.optimized_spread_short_strike(self, signal, long_strike, balanced_pro, risk_profile)
 
@@ -1099,6 +1133,10 @@ class SignalService:
             "watch_bucket": self.strategy.last_watch_bucket,
             "pressure_conflict_level": self.strategy.last_pressure_conflict_level,
             "confidence_summary": self.strategy.last_confidence_summary,
+            "session_map_phase": getattr(self.strategy, "last_session_map_phase", "UNKNOWN"),
+            "futures_acceptance_score": getattr(self.strategy, "last_futures_acceptance_score", 0.0),
+            "initiative_strength_score": getattr(self.strategy, "last_initiative_strength_score", 0.0),
+            "signal_family": getattr(self.strategy, "last_signal_family", "UNKNOWN"),
             "pressure_summary": None,
         }
 
@@ -2683,7 +2721,9 @@ class SignalService:
             f"Bucket={watch_bucket}",
         ]
         context = " | ".join(bit for bit in context_bits if bit and "None" not in bit)
-        if candidate_signal in {"CE", "PE"}:
+        if watch_bucket == "PA_STRONG_WAIT_PREMIUM":
+            action_hint = "Price action strong hai. Option premium confirm kare tabhi actual entry lena."
+        elif candidate_signal in {"CE", "PE"}:
             if flip_context:
                 action_hint = (
                     f"{flip_context['failed_side']} thesis weak ho rahi hai. "
@@ -2733,6 +2773,7 @@ class SignalService:
         )
         pressure_summary = (balanced_pro or {}).get("pressure_summary")
         expectancy_profile = self.current_expectancy_profile or {}
+        trade_thesis = self._build_trade_thesis(direction, balanced_pro=balanced_pro, premium_guard=None)
 
         return {
             "instrument": self.instrument,
@@ -2777,6 +2818,10 @@ class SignalService:
             "entry_phase": expectancy_profile.get("entry_phase"),
             "premium_confirmed": expectancy_profile.get("premium_confirmed"),
             "path_quality": expectancy_profile.get("path_quality"),
+            "signal_family": expectancy_profile.get("signal_family"),
+            "session_map_phase": expectancy_profile.get("session_map_phase"),
+            "price_action_watch_ready": expectancy_profile.get("price_action_watch_ready"),
+            "trade_thesis": trade_thesis,
             "flip_context": flip_context,
             "key": (
                 self.instrument,
@@ -2888,6 +2933,13 @@ class SignalService:
                 signal_grade in {"A", "A+"}
                 and score >= 78
                 and entry_score >= 72
+            )
+        if watch_bucket == "PA_STRONG_WAIT_PREMIUM":
+            return (
+                signal_grade in {"A", "A+", "B"}
+                and score >= 78
+                and entry_score >= 74
+                and "participation_delta_missing" not in cautions
             )
         if watch_bucket == "WATCH_SETUP":
             return (
@@ -3408,6 +3460,7 @@ class SignalService:
                     price=price,
                 )
                 self.current_expectancy_profile = expectancy_profile
+                self.strategy.last_signal_family = expectancy_profile.get("signal_family") or getattr(self.strategy, "last_signal_family", "UNKNOWN")
                 if not expectancy_profile.get("allow_trade"):
                     candidate_signal = signal
                     candidate_reason = (
@@ -3418,7 +3471,10 @@ class SignalService:
                     if expectancy_profile.get("watch_only"):
                         balanced_pro["tradability"] = "WATCH"
                         balanced_pro["decision_state"] = "WATCH"
-                        balanced_pro["watch_bucket"] = "WATCH_CONFIRMATION_PENDING"
+                        if expectancy_profile.get("quality_tag") == "PA_STRONG_WAIT_PREMIUM":
+                            balanced_pro["watch_bucket"] = "PA_STRONG_WAIT_PREMIUM"
+                        else:
+                            balanced_pro["watch_bucket"] = "WATCH_CONFIRMATION_PENDING"
                         signal = None
                         reason = (
                             f"High expectancy gate pending "
@@ -3513,13 +3569,15 @@ class SignalService:
             enriched_reason += f" | wall_guard={wall_guard['label']}"
         if premium_guard:
             enriched_reason += f" | premium_guard={premium_guard['label']}"
-        if self.current_expectancy_profile:
-            enriched_reason += (
-                f" | expectancy={self.current_expectancy_profile.get('quality_tag')}"
-                f" | entry_phase={self.current_expectancy_profile.get('entry_phase')}"
-                f" | premium_confirmed={self.current_expectancy_profile.get('premium_confirmed')}"
-                f" | path_quality={self.current_expectancy_profile.get('path_quality')}"
-            )
+            if self.current_expectancy_profile:
+                enriched_reason += (
+                    f" | expectancy={self.current_expectancy_profile.get('quality_tag')}"
+                    f" | entry_phase={self.current_expectancy_profile.get('entry_phase')}"
+                    f" | premium_confirmed={self.current_expectancy_profile.get('premium_confirmed')}"
+                    f" | path_quality={self.current_expectancy_profile.get('path_quality')}"
+                    f" | signal_family={self.current_expectancy_profile.get('signal_family')}"
+                    f" | session_phase={self.current_expectancy_profile.get('session_map_phase')}"
+                )
 
         oi_mode = "OI_ONLY_FALLBACK" if fallback_context and fallback_context["fallback_used"] else "FULL_OPTION_BAND"
 
@@ -3649,6 +3707,9 @@ class SignalService:
                 "premium_confirmed": expectancy_profile.get("premium_confirmed"),
                 "path_quality": expectancy_profile.get("path_quality"),
                 "likely_runner": expectancy_profile.get("likely_runner"),
+                "signal_family": expectancy_profile.get("signal_family"),
+                "session_map_phase": expectancy_profile.get("session_map_phase"),
+                "trade_thesis": self._build_trade_thesis(signal, balanced_pro=balanced_pro, premium_guard=premium_guard),
             }
             if self._suppress_live_actions:
                 self._log(

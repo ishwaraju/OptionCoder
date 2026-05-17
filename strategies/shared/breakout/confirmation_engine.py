@@ -38,6 +38,14 @@ class ConfirmationEngine:
         regime = ctx["regime"]
         opening_session = ctx["opening_session"]
         retest_zone = ctx["retest_zone"]
+        futures_acceptance = ctx.get("futures_acceptance") or {}
+        initiative_strength_score = float(ctx.get("initiative_strength_score") or 0)
+        trend_leg_stage = (ctx.get("trend_leg_stage") or "NEUTRAL").upper()
+        acceptance_context_ready = (
+            bool(futures_acceptance.get("accepted"))
+            and initiative_strength_score >= 28
+            and trend_leg_stage in {"FIRST_IMPULSE", "FIRST_RETEST"}
+        )
 
         if (
             active_confirmation
@@ -85,7 +93,10 @@ class ConfirmationEngine:
                 strong_context=True,
                 breakout_structure_ok=breakout_structure_ok,
                 ha_ok=bullish_ha_ok,
-                strong_context_ready=strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=continuation_regime_ok, cautions=cautions, direction_ok=bullish_ha_ok and bullish_build_up_ok),
+                strong_context_ready=(
+                    strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=continuation_regime_ok, cautions=cautions, direction_ok=bullish_ha_ok and bullish_build_up_ok)
+                    or acceptance_context_ready
+                ),
             )
         ):
             if strategy._should_suppress_duplicate("CE", "BREAKOUT_CONFIRM", candle_time, active_confirmation["level"]):
@@ -139,7 +150,10 @@ class ConfirmationEngine:
                 strong_context=True,
                 breakout_structure_ok=breakout_structure_ok,
                 ha_ok=bearish_ha_ok,
-                strong_context_ready=strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=continuation_regime_ok, cautions=cautions, direction_ok=bearish_ha_ok and bearish_build_up_ok),
+                strong_context_ready=(
+                    strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=continuation_regime_ok, cautions=cautions, direction_ok=bearish_ha_ok and bearish_build_up_ok)
+                    or acceptance_context_ready
+                ),
             )
         ):
             if strategy._should_suppress_duplicate("PE", "BREAKOUT_CONFIRM", candle_time, active_confirmation["level"]):
@@ -154,11 +168,12 @@ class ConfirmationEngine:
             if strategy._should_suppress_duplicate("CE", "RETEST", candle_time, active_retest["level"]):
                 return strategy._emit_duplicate_signal(blockers, cautions, regime, score, "Duplicate retest suppressed")
             level = active_retest["level"]
-            return strategy._emit_trade_signal("CE", "RETEST", score, volume_signal, pressure_metrics, cautions, blockers=blockers, regime=strategy._effective_signal_regime(expiry_eval, regime), candle_time=candle_time, message=f"Breakout retest support entry above {level}", trigger_price=level, invalidate_price=support, atr=atr, support=support, resistance=resistance, emitted_level=level, buffer=buffer, reset_retest=True, reset_confirmation=True, mark_emitted=True)
+            message = f"Acceptance-backed retest support entry above {level}" if acceptance_context_ready else f"Breakout retest support entry above {level}"
+            return strategy._emit_trade_signal("CE", "RETEST", score, volume_signal, pressure_metrics, cautions, blockers=blockers, regime=strategy._effective_signal_regime(expiry_eval, regime), candle_time=candle_time, message=message, trigger_price=level, invalidate_price=support, atr=atr, support=support, resistance=resistance, emitted_level=level, buffer=buffer, reset_retest=True, reset_confirmation=True, mark_emitted=True)
 
         if (
             active_retest
-            and retest_ready(direction="CE", active_direction=active_retest["direction"], price_vwap_aligned=price > vwap, retest_touch_ok=candle_low is not None and candle_low <= active_retest["level"] + retest_zone, close_holds_level=candle_close is not None and candle_close >= active_retest["level"], volume_signal=volume_signal, oi_bias_ok=oi_bias in ["BULLISH", "NEUTRAL"], oi_trend_ok=oi_trend in ["BULLISH", "NEUTRAL", None], build_up_ok=bullish_build_up_ok, no_opposite_pressure=True, candle_liquidity_ok=candle_liquidity_ok, score=score, retest_min_score=time_thresholds["retest_min_score"], opening_session=opening_session, retest_regime_ok=retest_regime_ok, strong_context=True, breakout_structure_ok=breakout_structure_ok, strong_context_ready=strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=retest_regime_ok, cautions=cautions, direction_ok=bullish_build_up_ok))
+            and retest_ready(direction="CE", active_direction=active_retest["direction"], price_vwap_aligned=price > vwap, retest_touch_ok=candle_low is not None and candle_low <= active_retest["level"] + retest_zone, close_holds_level=candle_close is not None and candle_close >= active_retest["level"], volume_signal=volume_signal, oi_bias_ok=oi_bias in ["BULLISH", "NEUTRAL"], oi_trend_ok=oi_trend in ["BULLISH", "NEUTRAL", None], build_up_ok=bullish_build_up_ok, no_opposite_pressure=True, candle_liquidity_ok=candle_liquidity_ok, score=score, retest_min_score=time_thresholds["retest_min_score"], opening_session=opening_session, retest_regime_ok=retest_regime_ok, strong_context=True, breakout_structure_ok=breakout_structure_ok, strong_context_ready=(strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=retest_regime_ok, cautions=cautions, direction_ok=bullish_build_up_ok) or acceptance_context_ready))
         ):
             if strategy._should_suppress_duplicate("CE", "RETEST", candle_time, active_retest["level"]):
                 return strategy._emit_duplicate_signal(blockers, cautions, regime, score, "Duplicate retest suppressed")
@@ -172,11 +187,12 @@ class ConfirmationEngine:
             if strategy._should_suppress_duplicate("PE", "RETEST", candle_time, active_retest["level"]):
                 return strategy._emit_duplicate_signal(blockers, cautions, regime, score, "Duplicate retest suppressed")
             level = active_retest["level"]
-            return strategy._emit_trade_signal("PE", "RETEST", score, volume_signal, pressure_metrics, cautions, blockers=blockers, regime=strategy._effective_signal_regime(expiry_eval, regime), candle_time=candle_time, message=f"Breakdown retest resistance entry below {level}", trigger_price=level, invalidate_price=resistance, atr=atr, support=support, resistance=resistance, emitted_level=level, buffer=buffer, reset_retest=True, reset_confirmation=True, mark_emitted=True)
+            message = f"Acceptance-backed retest resistance entry below {level}" if acceptance_context_ready else f"Breakdown retest resistance entry below {level}"
+            return strategy._emit_trade_signal("PE", "RETEST", score, volume_signal, pressure_metrics, cautions, blockers=blockers, regime=strategy._effective_signal_regime(expiry_eval, regime), candle_time=candle_time, message=message, trigger_price=level, invalidate_price=resistance, atr=atr, support=support, resistance=resistance, emitted_level=level, buffer=buffer, reset_retest=True, reset_confirmation=True, mark_emitted=True)
 
         if (
             active_retest
-            and retest_ready(direction="PE", active_direction=active_retest["direction"], price_vwap_aligned=price < vwap, retest_touch_ok=candle_high is not None and candle_high >= active_retest["level"] - retest_zone, close_holds_level=candle_close is not None and candle_close <= active_retest["level"], volume_signal=volume_signal, oi_bias_ok=oi_bias in ["BEARISH", "NEUTRAL"], oi_trend_ok=oi_trend in ["BEARISH", "NEUTRAL", None], build_up_ok=bearish_build_up_ok, no_opposite_pressure=True, candle_liquidity_ok=candle_liquidity_ok, score=score, retest_min_score=time_thresholds["retest_min_score"], opening_session=opening_session, retest_regime_ok=retest_regime_ok, strong_context=True, breakout_structure_ok=breakout_structure_ok, strong_context_ready=strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=retest_regime_ok, cautions=cautions, direction_ok=bearish_build_up_ok))
+            and retest_ready(direction="PE", active_direction=active_retest["direction"], price_vwap_aligned=price < vwap, retest_touch_ok=candle_high is not None and candle_high >= active_retest["level"] - retest_zone, close_holds_level=candle_close is not None and candle_close <= active_retest["level"], volume_signal=volume_signal, oi_bias_ok=oi_bias in ["BEARISH", "NEUTRAL"], oi_trend_ok=oi_trend in ["BEARISH", "NEUTRAL", None], build_up_ok=bearish_build_up_ok, no_opposite_pressure=True, candle_liquidity_ok=candle_liquidity_ok, score=score, retest_min_score=time_thresholds["retest_min_score"], opening_session=opening_session, retest_regime_ok=retest_regime_ok, strong_context=True, breakout_structure_ok=breakout_structure_ok, strong_context_ready=(strategy._strong_context_soft_entry_ready(score=score, entry_score=strategy.last_entry_score, volume_signal=volume_signal, candle_liquidity_ok=candle_liquidity_ok, breakout_structure_ok=breakout_structure_ok, regime_ok=retest_regime_ok, cautions=cautions, direction_ok=bearish_build_up_ok) or acceptance_context_ready))
         ):
             if strategy._should_suppress_duplicate("PE", "RETEST", candle_time, active_retest["level"]):
                 return strategy._emit_duplicate_signal(blockers, cautions, regime, score, "Duplicate retest suppressed")

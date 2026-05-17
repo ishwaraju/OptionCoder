@@ -3,16 +3,48 @@
 from datetime import timedelta
 
 from config import Config
+from .premium_elasticity_engine import PremiumElasticityEngine
 
 
 class OptionSignalGuard:
+    @staticmethod
+    def classify_signal_family(service, signal, signal_type, entry_phase):
+        signal = (signal or "").upper()
+        signal_type = (signal_type or "").upper()
+        entry_phase = (entry_phase or "").upper()
+        trend_leg_stage = (getattr(service.strategy, "last_trend_leg_stage", None) or "NEUTRAL").upper()
+
+        if signal_type == "TRAP_REVERSAL":
+            return "TRAP_REVERSAL"
+        if signal_type == "REVERSAL":
+            return "FAILURE_REVERSAL"
+        if signal_type == "RETEST" or entry_phase == "RETEST_SIGNAL" or trend_leg_stage == "FIRST_RETEST":
+            return "RETEST_CONTINUATION"
+        if entry_phase == "LATE_CHASE_SIGNAL" or trend_leg_stage == "STRETCHED":
+            return "LATE_EXTENSION"
+        if signal_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "CONTINUATION", "AGGRESSIVE_CONTINUATION", "OPENING_DRIVE"}:
+            return "IMPULSE_BREAKOUT"
+        return "GENERAL_SETUP"
+
     @staticmethod
     def classify_entry_phase(service, signal, signal_type, candle_time, price=None, trigger_price=None):
         signal = (signal or "").upper()
         signal_type = (signal_type or "").upper()
         cautions = set(getattr(service.strategy, "last_cautions", []) or [])
+        trend_leg_stage = (getattr(service.strategy, "last_trend_leg_stage", None) or "NEUTRAL").upper()
+        trend_family = {
+            "BREAKOUT",
+            "BREAKOUT_CONFIRM",
+            "CONTINUATION",
+            "AGGRESSIVE_CONTINUATION",
+            "OPENING_DRIVE",
+        }
         if signal_type == "RETEST":
             return "RETEST_SIGNAL"
+        if trend_leg_stage == "FIRST_RETEST":
+            return "RETEST_SIGNAL"
+        if trend_leg_stage == "STRETCHED":
+            return "LATE_CHASE_SIGNAL"
 
         last = getattr(service.strategy, "last_emitted_signal", None) or {}
         if (
@@ -26,7 +58,14 @@ class OptionSignalGuard:
                 minutes_apart = int((candle_time - last.get("time")).total_seconds() // 60)
             except Exception:
                 minutes_apart = None
-            if minutes_apart is not None and minutes_apart <= 30:
+            same_family_repeat = (
+                signal_type == (last.get("signal_type") or "").upper()
+                or (
+                    signal_type in trend_family
+                    and (last.get("signal_type") or "").upper() in trend_family
+                )
+            )
+            if minutes_apart is not None and minutes_apart <= 20 and same_family_repeat:
                 return "REENTRY_SIGNAL"
 
         late_session = candle_time is not None and (candle_time.hour, candle_time.minute) >= (14, 25)
@@ -62,6 +101,7 @@ class OptionSignalGuard:
     ):
         signal = (signal or "").upper()
         signal_type = (getattr(service.strategy, "last_signal_type", None) or "NONE").upper()
+        instrument = (getattr(service, "instrument", None) or "").upper()
         score = float(getattr(service.strategy, "last_score", 0) or 0)
         entry_score = float(getattr(service.strategy, "last_entry_score", score) or score)
         confidence = (getattr(service.strategy, "last_confidence", None) or "LOW").upper()
@@ -70,6 +110,10 @@ class OptionSignalGuard:
         pressure_conflict = (getattr(service.strategy, "last_pressure_conflict_level", None) or "NONE").upper()
         active_day_state = (getattr(service.strategy, "last_active_day_state", None) or "").upper()
         day_state_direction = (getattr(service.strategy, "last_day_state_direction", None) or "").upper()
+        trend_leg_stage = (getattr(service.strategy, "last_trend_leg_stage", None) or "NEUTRAL").upper()
+        session_map_phase = (getattr(service.strategy, "last_session_map_phase", None) or "UNKNOWN").upper()
+        futures_acceptance = getattr(service.strategy, "last_futures_acceptance", None) or {}
+        initiative_strength_score = float(getattr(service.strategy, "last_initiative_strength_score", 0) or 0)
         trigger_price = (
             service.strategy.last_entry_plan.get("entry_above")
             if signal == "CE"
@@ -92,15 +136,16 @@ class OptionSignalGuard:
         if premium_momentum_pct is None and premium_label == "PREMIUM_OK":
             premium_momentum_pct = 0.0
 
-        weak_participation_count = len(
+        raw_participation_hard_count = len(
             cautions.intersection(
                 {
                     "participation_weak",
                     "participation_delta_missing",
-                    "participation_baseline_weak",
                 }
             )
         )
+        participation_soft_count = len(cautions.intersection({"participation_baseline_weak"}))
+        weak_participation_count = raw_participation_hard_count + participation_soft_count
         late_risk_count = len(
             cautions.intersection(
                 {"far_from_vwap", "theta_fast_exit_required", "late_day_breakdown_watch"}
@@ -111,12 +156,21 @@ class OptionSignalGuard:
             and day_state_direction == signal
         )
         clean_spread = spread_pct is None or float(spread_pct) <= 3.5
+        clean_trend_leg = trend_leg_stage in {"FIRST_IMPULSE", "FIRST_RETEST"}
+        futures_acceptance_strong = bool(futures_acceptance.get("accepted")) and float(futures_acceptance.get("score") or 0) >= 58
         premium_confirmed = False
         if premium_label == "PREMIUM_OK":
             if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
                 premium_confirmed = premium_momentum_pct is None or float(premium_momentum_pct) >= 0.0
             else:
                 premium_threshold = 1.0
+                if (
+                    signal_type == "RETEST"
+                    and futures_acceptance_strong
+                    and clean_spread
+                    and clean_trend_leg
+                ):
+                    premium_threshold = 0.25 if instrument in {"BANKNIFTY", "SENSEX"} else 0.35
                 if (
                     day_state_aligned
                     and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
@@ -135,6 +189,17 @@ class OptionSignalGuard:
                     premium_momentum_pct is not None
                     and float(premium_momentum_pct) >= premium_threshold
                 )
+        volume_supporting = bool(premium_guard.get("volume_supporting"))
+        clean_breakout_premium = bool(
+            premium_guard.get("clean_breakout_premium")
+            or (
+                premium_confirmed
+                and clean_spread
+                and volume_supporting
+                and premium_momentum_pct is not None
+                and float(premium_momentum_pct) >= 1.0
+            )
+        )
         breakout_family = {
             "BREAKOUT",
             "BREAKOUT_CONFIRM",
@@ -143,12 +208,61 @@ class OptionSignalGuard:
             "RETEST",
             "OPENING_DRIVE",
         }
+        signal_family = OptionSignalGuard.classify_signal_family(service, signal, signal_type, entry_phase)
+        strong_price_action_watch = (
+            futures_acceptance_strong
+            and initiative_strength_score >= 28
+            and signal_type in breakout_family
+            and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
+        )
+        price_led_participation_override = (
+            strong_price_action_watch
+            and clean_spread
+            and signal_family == "IMPULSE_BREAKOUT"
+            and raw_participation_hard_count <= 2
+            and initiative_strength_score >= 32
+            and float(futures_acceptance.get("score") or 0) >= 60
+        )
+        participation_hard_count = 0 if price_led_participation_override else raw_participation_hard_count
         clean_tactical_context = (
             pressure_conflict in {"NONE", "MILD"}
-            and weak_participation_count <= 1
+            and participation_hard_count == 0
+            and participation_soft_count <= 1
             and clean_spread
             and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
             and late_risk_count <= 1
+        )
+        elasticity = PremiumElasticityEngine.evaluate(
+            signal=signal,
+            underlying_price=price,
+            trigger_price=trigger_price,
+            premium_guard=premium_guard,
+            selected_option_contract=selected_option_contract,
+            futures_acceptance=futures_acceptance,
+        )
+        dead_premium_risk = bool(elasticity.get("dead_premium_risk"))
+        small_size_price_led_entry = (
+            strong_price_action_watch
+            and signal_family == "IMPULSE_BREAKOUT"
+            and premium_label == "PREMIUM_OK"
+            and clean_spread
+            and participation_hard_count == 0
+            and late_risk_count <= 1
+            and entry_score >= (88 if instrument == "NIFTY" else 84)
+            and score >= (84 if instrument == "NIFTY" else 80)
+            and (
+                volume_supporting
+                or (
+                    instrument in {"BANKNIFTY", "SENSEX"}
+                    and (
+                        initiative_strength_score >= 38
+                        or float(futures_acceptance.get("score") or 0) >= 68
+                    )
+                )
+            )
+            and premium_momentum_pct is not None
+            and float(premium_momentum_pct) >= (0.25 if instrument == "NIFTY" else 0.0)
+            and not dead_premium_risk
         )
 
         quality_tag = "AVOID"
@@ -168,6 +282,12 @@ class OptionSignalGuard:
                 "premium_confirmed": premium_confirmed,
                 "path_quality": path_quality,
                 "likely_runner": likely_runner,
+                "signal_family": signal_family,
+                "session_map_phase": session_map_phase,
+                "price_action_watch_ready": strong_price_action_watch,
+                "initiative_strength_score": initiative_strength_score,
+                "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+                "elasticity": elasticity,
                 "reasons": reasons,
             }
 
@@ -185,6 +305,12 @@ class OptionSignalGuard:
                 "premium_confirmed": premium_confirmed,
                 "path_quality": path_quality,
                 "likely_runner": likely_runner,
+                "signal_family": signal_family,
+                "session_map_phase": session_map_phase,
+                "price_action_watch_ready": strong_price_action_watch,
+                "initiative_strength_score": initiative_strength_score,
+                "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+                "elasticity": elasticity,
                 "reasons": reasons,
             }
 
@@ -203,6 +329,12 @@ class OptionSignalGuard:
                 "premium_confirmed": premium_confirmed,
                 "path_quality": path_quality,
                 "likely_runner": likely_runner,
+                "signal_family": signal_family,
+                "session_map_phase": session_map_phase,
+                "price_action_watch_ready": strong_price_action_watch,
+                "initiative_strength_score": initiative_strength_score,
+                "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+                "elasticity": elasticity,
                 "reasons": reasons,
             }
 
@@ -210,7 +342,7 @@ class OptionSignalGuard:
             if pressure_conflict == "NONE" and entry_score >= 90 and (day_state_aligned or score >= 85):
                 quality_tag = "RQ"
                 allow_trade = premium_confirmed or (premium_momentum_pct is not None and float(premium_momentum_pct) >= -0.25)
-                path_quality = "CLEAN_PATH" if weak_participation_count <= 1 else "TACTICAL_PATH"
+                path_quality = "CLEAN_PATH" if participation_hard_count == 0 else "TACTICAL_PATH"
                 likely_runner = allow_trade and (premium_momentum_pct is not None and float(premium_momentum_pct) >= 2.0)
                 if not allow_trade:
                     watch_only = True
@@ -225,22 +357,65 @@ class OptionSignalGuard:
                 "premium_confirmed": premium_confirmed,
                 "path_quality": path_quality,
                 "likely_runner": likely_runner,
+                "signal_family": signal_family,
+                "session_map_phase": session_map_phase,
+                "price_action_watch_ready": strong_price_action_watch,
+                "initiative_strength_score": initiative_strength_score,
+                "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+                "elasticity": elasticity,
+                "reasons": reasons,
+            }
+
+        if dead_premium_risk:
+            reasons.append("dead_premium_risk")
+            return {
+                "quality_tag": "AVOID",
+                "allow_trade": False,
+                "watch_only": False,
+                "entry_phase": entry_phase,
+                "premium_confirmed": premium_confirmed,
+                "path_quality": "NO_EXPANSION",
+                "likely_runner": False,
+                "signal_family": signal_family,
+                "session_map_phase": session_map_phase,
+                "price_action_watch_ready": strong_price_action_watch,
+                "initiative_strength_score": initiative_strength_score,
+                "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+                "elasticity": elasticity,
                 "reasons": reasons,
             }
 
         if not premium_confirmed and signal_type in breakout_family:
             clean_tactical = clean_tactical_context and entry_score >= 82 and score >= 78
-            quality_tag = "TQ_CLEAN" if clean_tactical else "TQ_VOLATILE"
-            watch_only = True
+            if small_size_price_led_entry:
+                quality_tag = "PA_STRONG_ENTER_SMALL"
+                allow_trade = True
+                path_quality = "PRICE_LED_PATH"
+                likely_runner = bool(volume_supporting) or initiative_strength_score >= 36
+                reasons.append("price_action_strong_small_size_entry")
+            elif strong_price_action_watch:
+                quality_tag = "PA_STRONG_WAIT_PREMIUM"
+                path_quality = "PRICE_LED_PATH"
+                reasons.append("price_action_strong_waiting_for_premium")
+            else:
+                quality_tag = "TQ_CLEAN" if clean_tactical else "TQ_VOLATILE"
+                path_quality = "TACTICAL_PATH"
+            watch_only = not allow_trade
             reasons.append("premium_confirmation_pending")
             return {
                 "quality_tag": quality_tag,
-                "allow_trade": False,
+                "allow_trade": allow_trade,
                 "watch_only": watch_only,
                 "entry_phase": entry_phase,
                 "premium_confirmed": premium_confirmed,
-                "path_quality": "TACTICAL_PATH",
-                "likely_runner": False,
+                "path_quality": path_quality,
+                "likely_runner": likely_runner,
+                "signal_family": signal_family,
+                "session_map_phase": session_map_phase,
+                "price_action_watch_ready": strong_price_action_watch,
+                "initiative_strength_score": initiative_strength_score,
+                "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+                "elasticity": elasticity,
                 "reasons": reasons,
             }
 
@@ -248,15 +423,16 @@ class OptionSignalGuard:
             entry_score >= 86
             and score >= 82
             and clean_tactical_context
-            and entry_phase == "FIRST_SIGNAL_IN_MOVE"
-            and premium_confirmed
+            and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
+            and clean_breakout_premium
             and clean_spread
+            and clean_trend_leg
             and (day_state_aligned or entry_score >= 90)
         ):
             quality_tag = "HQ"
             allow_trade = True
             path_quality = "CLEAN_PATH"
-            likely_runner = premium_momentum_pct is not None and float(premium_momentum_pct) >= 3.0
+            likely_runner = premium_momentum_pct is not None and float(premium_momentum_pct) >= 2.5
         elif (
             entry_phase == "LATE_CHASE_SIGNAL"
             and entry_score >= 94
@@ -275,14 +451,15 @@ class OptionSignalGuard:
             and entry_score >= 82
             and score >= 78
         ):
-            quality_tag = "TQ_CLEAN"
+            quality_tag = "TQ_CLEAN" if clean_breakout_premium and clean_trend_leg else "TQ_VOLATILE"
             allow_trade = True
-            path_quality = "CLEAN_PATH" if signal_type in {"BREAKOUT_CONFIRM", "RETEST"} or day_state_aligned else "TACTICAL_PATH"
+            path_quality = "CLEAN_PATH" if clean_breakout_premium and (signal_type in {"BREAKOUT_CONFIRM", "RETEST"} or day_state_aligned) else "TACTICAL_PATH"
             likely_runner = premium_momentum_pct is not None and float(premium_momentum_pct) >= 2.5
         elif entry_score >= 80 and score >= 78:
             clean_tactical = (
                 pressure_conflict in {"NONE", "MILD"}
-                and weak_participation_count <= 1
+                and participation_hard_count == 0
+                and participation_soft_count <= 1
                 and clean_spread
                 and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
             )
@@ -292,6 +469,13 @@ class OptionSignalGuard:
         else:
             reasons.append("expectancy_below_trade_floor")
 
+        if quality_tag == "TQ_VOLATILE":
+            allow_trade = False
+            watch_only = True
+            likely_runner = False
+            if "volatile_tactical_watch_only" not in reasons:
+                reasons.append("volatile_tactical_watch_only")
+
         return {
             "quality_tag": quality_tag,
             "allow_trade": allow_trade,
@@ -300,6 +484,12 @@ class OptionSignalGuard:
             "premium_confirmed": premium_confirmed,
             "path_quality": path_quality,
             "likely_runner": likely_runner,
+            "signal_family": signal_family,
+            "session_map_phase": session_map_phase,
+            "price_action_watch_ready": strong_price_action_watch,
+            "initiative_strength_score": initiative_strength_score,
+            "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+            "elasticity": elasticity,
             "reasons": reasons,
         }
 
@@ -507,6 +697,20 @@ class OptionSignalGuard:
         )
         previous_ltp = float(previous_snapshot.get("ltp") or 0) if previous_snapshot else 0.0
         previous_volume = int(previous_snapshot.get("volume") or 0) if previous_snapshot else 0
+        directional_participation = (
+            (getattr(service.strategy, "last_participation_metrics", None) or {}).get(signal)
+            or {}
+        )
+        same_side_weighted_delta = float(directional_participation.get("same_side_weighted_delta") or 0.0)
+        opposite_side_weighted_delta = float(directional_participation.get("opposite_side_weighted_delta") or 0.0)
+        same_side_breadth = int(directional_participation.get("same_side_breadth") or 0)
+        opposite_side_breadth = int(directional_participation.get("opposite_side_breadth") or 0)
+        same_side_volume_positive = volume_now > previous_volume if previous_snapshot else volume_now > 0
+        participation_volume_supporting = (
+            same_side_weighted_delta > max(opposite_side_weighted_delta * 0.9, 0.0)
+            and same_side_breadth >= max(opposite_side_breadth, 1)
+        )
+        volume_supporting = same_side_volume_positive or participation_volume_supporting
         premium_momentum_pct = round(((ltp - previous_ltp) / previous_ltp) * 100.0, 2) if previous_ltp > 0 else None
         atm_row = service._get_option_contract_snapshot((service.option_data or {}).get("atm"), signal, before_ts=candle_time)
         atm_iv = float(atm_row.get("iv") or 0) if atm_row else 0.0
@@ -515,11 +719,35 @@ class OptionSignalGuard:
             return {"label": "PREMIUM_NOT_EXPANDING", "reason": f"Selected premium abhi expand nahi kar raha ({premium_momentum_pct:.2f}%).", "premium_momentum_pct": premium_momentum_pct}
         if premium_momentum_pct is not None and premium_momentum_pct < 1.0 and volume_now <= previous_volume and service.strategy.last_regime in {"RANGING", "CHOPPY"}:
             if service._should_soften_option_sweep_filters(signal) and (spread_pct is None or spread_pct < 4.5):
-                return {"label": "PREMIUM_OK", "reason": "Broad option sweep me premium sleepy check soften kiya gaya.", "premium_momentum_pct": premium_momentum_pct, "iv_markup_pct": iv_markup_pct, "spread_pct": spread_pct}
+                return {
+                    "label": "PREMIUM_OK",
+                    "reason": "Broad option sweep me premium sleepy check soften kiya gaya.",
+                    "premium_momentum_pct": premium_momentum_pct,
+                    "iv_markup_pct": iv_markup_pct,
+                    "spread_pct": spread_pct,
+                    "volume_supporting": volume_supporting,
+                    "clean_breakout_premium": False,
+                }
             return {"label": "PREMIUM_SLEEPY", "reason": "Premium response weak hai aur volume bhi expand nahi hua.", "premium_momentum_pct": premium_momentum_pct}
         if iv_markup_pct is not None and iv_markup_pct >= 18 and spread_pct is not None and spread_pct >= 4.0:
             return {"label": "IV_RICH_PREMIUM", "reason": f"Premium IV-rich hai ({iv_markup_pct:.1f}% ATM se upar) aur spread bhi wide hai.", "premium_momentum_pct": premium_momentum_pct}
-        return {"label": "PREMIUM_OK", "reason": "Premium expansion acceptable hai.", "premium_momentum_pct": premium_momentum_pct, "iv_markup_pct": iv_markup_pct, "spread_pct": spread_pct}
+        clean_breakout_premium = (
+            premium_momentum_pct is not None
+            and premium_momentum_pct >= 1.0
+            and volume_supporting
+            and (spread_pct is None or spread_pct <= 3.2)
+        )
+        return {
+            "label": "PREMIUM_OK",
+            "reason": "Premium expansion acceptable hai.",
+            "premium_momentum_pct": premium_momentum_pct,
+            "iv_markup_pct": iv_markup_pct,
+            "spread_pct": spread_pct,
+            "volume_supporting": volume_supporting,
+            "clean_breakout_premium": clean_breakout_premium,
+            "previous_ltp": previous_ltp if previous_ltp > 0 else None,
+            "current_ltp": ltp,
+        }
 
     @staticmethod
     def compute_flip_score(service, direction, structure_break, vwap_break, latest_1m=None, previous_1m=None):
@@ -724,11 +952,16 @@ class OptionSignalGuard:
                 iv_markup = (float(row["iv"]) - atm_iv) / atm_iv
                 if iv_markup > 0.12:
                     iv_penalty = min(8.0, iv_markup * 20.0)
+        contract_efficiency_score = round(
+            max(0.0, spread_score + depth_score + delta_score + max(0.0, 10.0 - theta_penalty) - iv_penalty),
+            2,
+        )
         candidate_score = round(spread_score + depth_score + volume_score + oi_score + delta_score + proximity_score + edge_score - iv_penalty, 2)
         reason_parts = [f"spread={float(row.get('spread') or 0):.2f} ({spread_percent:.2f}%)", f"delta={delta_abs:.2f}", f"vol={volume}", f"oi={oi}", f"edge={expected_edge:.2f}"]
         if iv_penalty > 0:
             reason_parts.append("iv_rich")
-        return {**dict(row), "candidate_direction": direction, "candidate_score": candidate_score, "expected_edge": expected_edge, "spread_percent": spread_percent, "reason": " | ".join(reason_parts)}
+        reason_parts.append(f"contract_eff={contract_efficiency_score:.1f}")
+        return {**dict(row), "candidate_direction": direction, "candidate_score": candidate_score, "expected_edge": expected_edge, "spread_percent": spread_percent, "contract_efficiency_score": contract_efficiency_score, "reason": " | ".join(reason_parts)}
 
     @staticmethod
     def build_option_candidates(service, underlying_price, preferred_strikes=None, signal_direction=None, balanced_pro=None):

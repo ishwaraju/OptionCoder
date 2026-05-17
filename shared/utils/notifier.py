@@ -56,6 +56,7 @@ def _watch_bucket_label(bucket):
     labels = {
         "WATCH_SETUP": "Setup Watch",
         "WATCH_CONFIRMATION_PENDING": "Confirmation Watch",
+        "PA_STRONG_WAIT_PREMIUM": "Price-Action Watch",
         "WATCH_CONTEXT": "Context Watch",
         "NONE": "Watch",
     }
@@ -427,6 +428,9 @@ class Notifier:
         entry_phase = trade_data.get("entry_phase")
         premium_confirmed = trade_data.get("premium_confirmed")
         path_quality = trade_data.get("path_quality")
+        signal_family = trade_data.get("signal_family")
+        session_map_phase = trade_data.get("session_map_phase")
+        trade_thesis = trade_data.get("trade_thesis")
         projected_premium_sl = trade_data.get("projected_premium_sl")
         projected_premium_t1 = trade_data.get("projected_premium_t1")
         entry_bid = trade_data.get("entry_bid")
@@ -454,6 +458,13 @@ class Notifier:
             summary.append(confidence)
         if summary:
             lines.append(" | ".join(summary))
+        family_bits = []
+        if signal_family:
+            family_bits.append(signal_family)
+        if session_map_phase:
+            family_bits.append(session_map_phase)
+        if family_bits:
+            lines.append(" | ".join(family_bits[:2]))
         buy_line = _entry_buy_line(signal, strike, price, entry_bid, entry_ask, entry_spread)
         if buy_line:
             lines.append(buy_line)
@@ -478,6 +489,8 @@ class Notifier:
             state_bits.append(path_quality)
         if state_bits:
             lines.append(" | ".join(state_bits[:3]))
+        if trade_thesis:
+            lines.append(trade_thesis)
         if action_text:
             lines.append(action_text)
         message = "\n".join(lines)
@@ -528,6 +541,9 @@ class Notifier:
         entry_phase = watch_data.get("entry_phase")
         premium_confirmed = watch_data.get("premium_confirmed")
         path_quality = watch_data.get("path_quality")
+        signal_family = watch_data.get("signal_family")
+        session_map_phase = watch_data.get("session_map_phase")
+        trade_thesis = watch_data.get("trade_thesis")
         setup_label = _setup_label(setup)
 
         lines = []
@@ -559,6 +575,13 @@ class Notifier:
             summary.append(quality_tag)
         if summary:
             lines.append(" | ".join(summary))
+        family_bits = []
+        if signal_family:
+            family_bits.append(signal_family)
+        if session_map_phase:
+            family_bits.append(session_map_phase)
+        if family_bits:
+            lines.append(" | ".join(family_bits[:2]))
         spot_bits = []
         if spot_price is not None:
             spot_bits.append(f"Spot {spot_price}")
@@ -601,6 +624,8 @@ class Notifier:
             state_bits.append(path_quality)
         if state_bits:
             lines.append(" | ".join(state_bits[:3]))
+        if trade_thesis:
+            lines.append(trade_thesis)
         if greek_summary:
             lines.append(greek_summary)
         for explainer in _signal_explainer(reason, confidence_summary=confidence_summary)[:2]:

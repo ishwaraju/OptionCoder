@@ -1,6 +1,9 @@
 from config import Config
 
+from .futures_acceptance_engine import FuturesAcceptanceEngine
+from .session_map_classifier import SessionMapClassifier
 from .trend_quality_refiner import TrendQualityRefiner
+from .trend_leg_classifier import TrendLegClassifier
 
 
 class TradeSignalContextBuilder:
@@ -67,6 +70,12 @@ class TradeSignalContextBuilder:
         strategy.last_active_day_state = "UNKNOWN"
         strategy.last_day_state_direction = "NONE"
         strategy.last_day_state_detail = ""
+        strategy.last_session_map_phase = "UNKNOWN"
+        strategy.last_futures_acceptance = None
+        strategy.last_futures_acceptance_score = 0.0
+        strategy.last_initiative_strength_score = 0.0
+        strategy.last_price_action_watch_ready = False
+        strategy.last_signal_family = "UNKNOWN"
         blockers = []
         cautions = []
         tuning = strategy._instrument_tuning()
@@ -141,6 +150,13 @@ class TradeSignalContextBuilder:
         current_now = candle_time.time() if candle_time is not None else strategy.time_utils.current_time()
         time_regime = strategy._derive_time_regime(current_now)
         strategy.last_time_regime = time_regime
+        session_map = SessionMapClassifier.classify(
+            candle_time=candle_time,
+            time_regime=time_regime,
+            recent_candles_5m=recent_candles_5m,
+            vwap=vwap,
+        )
+        strategy.last_session_map_phase = session_map.get("phase") or "UNKNOWN"
         opening_bias, opening_detail = strategy._derive_opening_bias(recent_candles_5m, vwap, atr)
         day_state = strategy._derive_active_day_state(
             recent_candles_5m=recent_candles_5m,
@@ -225,6 +241,54 @@ class TradeSignalContextBuilder:
         prev_high = previous_candle.get("high") if previous_candle else None
         prev_low = previous_candle.get("low") if previous_candle else None
         prev_close = previous_candle.get("close") if previous_candle else None
+        futures_acceptance = FuturesAcceptanceEngine.evaluate(
+            direction=scored_direction,
+            price=price,
+            vwap=vwap,
+            candle_open=candle_open,
+            candle_close=candle_close,
+            candle_high=candle_high,
+            candle_low=candle_low,
+            prev_high=prev_high,
+            prev_low=prev_low,
+            recent_candles_5m=recent_candles_5m,
+            buffer=buffer,
+            atr=atr,
+        )
+        strategy.last_futures_acceptance = futures_acceptance
+        strategy.last_futures_acceptance_score = futures_acceptance.get("score") or 0.0
+        strategy.last_initiative_strength_score = futures_acceptance.get("initiative_strength_score") or 0.0
+        strategy.last_price_action_watch_ready = bool(
+            futures_acceptance.get("accepted")
+            and (futures_acceptance.get("initiative_strength_score") or 0.0) >= 28.0
+            and scored_direction in {"CE", "PE"}
+        )
+        futures_acceptance_score = strategy.last_futures_acceptance_score
+        initiative_strength_score = strategy.last_initiative_strength_score
+        if futures_acceptance.get("accepted"):
+            components.append("futures_acceptance")
+        elif scored_direction in {"CE", "PE"}:
+            cautions = strategy._append_cautions(cautions, "futures_acceptance_building")
+        strategy.last_trend_leg_stage = TrendLegClassifier.classify(
+            strategy,
+            scored_direction=scored_direction,
+            candle_time=candle_time,
+            price=price,
+            vwap=vwap,
+            candle_open=candle_open,
+            candle_close=candle_close,
+            candle_high=candle_high,
+            candle_low=candle_low,
+            prev_high=prev_high,
+            prev_low=prev_low,
+            atr=atr,
+            buffer=buffer,
+        )
+        trend_leg_stage = strategy.last_trend_leg_stage
+        if strategy.last_trend_leg_stage == "STRETCHED":
+            cautions = strategy._append_cautions(cautions, "stretched_trend_leg")
+        elif strategy.last_trend_leg_stage in {"FIRST_IMPULSE", "FIRST_RETEST"}:
+            components.append(f"trend_leg_{strategy.last_trend_leg_stage.lower()}")
         reversal_trap_context = strategy._reversal_trap_context(
             prev_high=prev_high,
             prev_low=prev_low,
