@@ -132,6 +132,49 @@ class NoSetupFinalizer:
                 blockers.append("orb_breakout_missing")
             if orb_low is not None and price < orb_low - (buffer * tuning["extension_buffer_mult"]):
                 blockers.append("orb_extension_too_far")
+        pending_confirmation_blockers = {
+            "no_valid_setup",
+            "build_up_missing",
+            "build_up_inferred",
+            "pressure_conflict",
+            "orb_breakout_missing",
+            "orb_extension_too_far",
+        }
+        hard_invalid_blockers = {
+            "score_below_threshold",
+            "direction_unresolved",
+            "volume_weak",
+            "low_tick_density",
+            "vwap_not_supportive",
+            "oi_conflict",
+            "oi_divergence_conflict",
+        }
+        if (
+            score >= 90
+            and scored_direction in {"CE", "PE"}
+            and not set(blockers).intersection(hard_invalid_blockers)
+            and set(blockers).intersection(pending_confirmation_blockers)
+        ):
+            blockers = [flag for flag in blockers if flag != "no_valid_setup"]
+            blockers.append("high_score_confirmation_pending")
+            confidence = strategy._confidence_from_score(score, volume_signal, pressure_metrics, cautions)
+            strategy._set_diagnostics(
+                blockers=blockers,
+                cautions=cautions,
+                confidence=confidence,
+                regime="EXPIRY_DAY" if expiry_eval["is_expiry_day"] else ctx["regime"],
+                signal_type=strategy._watch_signal_type(cautions, "NONE"),
+            )
+            strategy.last_decision_state = strategy._derive_decision_state(
+                signal_type=strategy._watch_signal_type(cautions, "NONE"),
+                signal=None,
+                score=strategy.last_context_score,
+                entry_score=strategy.last_entry_score,
+                confidence=strategy.last_confidence,
+                blockers=strategy.last_blockers,
+                cautions=strategy.last_cautions,
+            )
+            return None, f"High-score setup pending confirmation | score={score}"
         strategy._set_diagnostics(
             blockers=blockers,
             cautions=cautions,

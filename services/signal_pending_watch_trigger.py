@@ -131,6 +131,22 @@ def maybe_fire_pending_entry_watch(service, latest_5m_candle):
         "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
         "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
         "entry_spread": option_contract.get("spread") if option_contract else None,
+        "execution_model": "15m context | 5m setup | 1m execution",
+        "trade_type": service._classify_action_trade_type(
+            setup_type=pending.get("signal_type"),
+            high_expectancy_profile={
+                "quality_tag": pending.get("quality_tag"),
+                "signal_family": pending.get("signal_family"),
+                "likely_runner": pending.get("likely_runner"),
+            },
+            premium_guard={"label": "PREMIUM_OK"},
+        ),
+        "exit_if": service._action_exit_if_line(
+            signal,
+            trigger_price=trigger_price,
+            invalidate_price=pending.get("invalidate_price"),
+            premium_sl=stop_loss_option_price,
+        ),
         "context": pending.get("context"),
         "risk_note": pending.get("risk_note"),
         "greek_summary": format_greek_summary(option_contract),
@@ -161,5 +177,12 @@ def maybe_fire_pending_entry_watch(service, latest_5m_candle):
     if not signal_saved:
         service._log("Signal issued save failed after entry notification dispatch")
     service._clear_pending_entry_watch()
-    service._start_trade_monitor(signal, latest_5m_candle, evaluation["price"], balanced_pro, strike)
+    service._start_trade_monitor(
+        signal,
+        latest_5m_candle,
+        evaluation["price"],
+        balanced_pro,
+        strike,
+        entry_time=evaluation["time"],
+    )
     service.signals_generated += 1

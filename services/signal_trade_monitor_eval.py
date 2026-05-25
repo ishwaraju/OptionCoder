@@ -250,6 +250,10 @@ def evaluate_trade_monitor(service, recent_1m_candles, recent_5m_candles):
         decision_label = "BOOK_PARTIAL_NOW"
         action_text = "Late-day profit hai. Partial book karna safer hai."
         reason = "Late-day move is in profit; partial booking is safer for an option buyer."
+    if signal == "CE":
+        exit_if = f"Exit if next 1m closes below {round(float(psar_style_level or micro_low), 2)}"
+    else:
+        exit_if = f"Exit if next 1m closes above {round(float(psar_style_level or micro_high), 2)}"
     return {
         "instrument": service.instrument, "signal": signal, "signal_type": service.active_trade_monitor.get("signal_type"),
         "setup_bucket": setup_bucket, "guidance": guidance, "decision_label": decision_label,
@@ -270,6 +274,7 @@ def evaluate_trade_monitor(service, recent_1m_candles, recent_5m_candles):
         "runner_mode": runner_mode, "partial_trigger_pct": partial_trigger_pct, "runner_trigger_pct": runner_trigger_pct,
         "quality": service.active_trade_monitor["quality"], "time_regime": time_regime, "heikin_ashi": (service.strategy.last_heikin_ashi or {}).get("bias"),
         "risk_note": risk_note, "entry_pressure_bias": entry_pressure_bias, "live_pressure_bias": live_pressure_bias,
+        "exit_if": exit_if,
         "live_pressure_summary": (live_pressure_summary or {}).get("summary"), "entry_participation_breadth": entry_breadth,
         "current_participation_breadth": current_breadth, "entry_participation_delta": entry_participation_delta,
         "current_participation_delta": current_participation_delta, "opposite_participation_delta": opposite_participation_delta,

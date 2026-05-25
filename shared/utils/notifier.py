@@ -368,10 +368,10 @@ class Notifier:
 
     def _send_telegram(self, message):
         if not self.telegram_enabled:
-            return
+            return False
 
         try:
-            requests.post(
+            response = requests.post(
                 f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage",
                 json={
                     "chat_id": Config.TELEGRAM_CHAT_ID,
@@ -379,22 +379,27 @@ class Notifier:
                 },
                 timeout=5,
             )
+            if response.status_code >= 400:
+                print(f"[TELEGRAM ERROR] HTTP {response.status_code}: {response.text[:300]}")
+                return False
+            return True
         except Exception as e:
             print(f"[TELEGRAM ERROR] {e}")
+            return False
     
     def send_alert(self, message):
         """Send alert notification"""
         if not self.enabled:
-            return
+            return False
         if Config.ENABLE_SOUND_ALERT:
             print("\a", end="")
         print(f"[ALERT] {message}")
-        self._send_telegram(message)
+        return self._send_telegram(message)
     
     def send_trade_notification(self, trade_data):
         """Send trade notification"""
         if not self.enabled:
-            return
+            return False
         signal = trade_data.get("signal")
         strike = trade_data.get("strike")
         confidence = trade_data.get("confidence")
@@ -423,6 +428,8 @@ class Notifier:
         structure_suggestion = trade_data.get("structure_suggestion")
         pressure_read = trade_data.get("pressure_read")
         oi_read = trade_data.get("oi_read")
+        trend_15m = trade_data.get("trend_15m")
+        institutional_read = trade_data.get("institutional_read")
         greek_summary = trade_data.get("greek_summary")
         quality_tag = trade_data.get("quality_tag")
         entry_phase = trade_data.get("entry_phase")
@@ -431,6 +438,8 @@ class Notifier:
         signal_family = trade_data.get("signal_family")
         session_map_phase = trade_data.get("session_map_phase")
         trade_thesis = trade_data.get("trade_thesis")
+        trade_type = trade_data.get("trade_type")
+        exit_if = trade_data.get("exit_if")
         projected_premium_sl = trade_data.get("projected_premium_sl")
         projected_premium_t1 = trade_data.get("projected_premium_t1")
         entry_bid = trade_data.get("entry_bid")
@@ -438,7 +447,7 @@ class Notifier:
         entry_spread = trade_data.get("entry_spread")
         setup_label = _setup_label(signal_type)
         lines = []
-        header = f"{instrument} ACTION {signal}" if instrument else f"ACTION {signal}"
+        header = f"ACTION SIGNAL - {instrument} {signal}" if instrument else f"ACTION SIGNAL - {signal}"
         lines.append(header)
         summary = []
         ist_label = _ist_now_label()
@@ -480,6 +489,8 @@ class Notifier:
             contract_bits.append(t1_label)
         if contract_bits:
             lines.append(" | ".join(contract_bits))
+        if trade_type:
+            lines.append(f"Type: {trade_type}")
         state_bits = []
         if entry_phase:
             state_bits.append(entry_phase)
@@ -489,12 +500,32 @@ class Notifier:
             state_bits.append(path_quality)
         if state_bits:
             lines.append(" | ".join(state_bits[:3]))
+        tf_bits = []
+        if trend_15m:
+            tf_bits.append(f"15m {trend_15m}")
+        if signal_type:
+            tf_bits.append(f"5m {setup_label}")
+        tf_bits.append("1m execution")
+        lines.append("TF: " + " | ".join(tf_bits[:3]))
+        short_oi = _short_oi_read(oi_read)
+        short_pressure = _short_pressure_read(pressure_read)
+        flow_bits = []
+        if short_oi:
+            flow_bits.append(short_oi)
+        if short_pressure:
+            flow_bits.append(short_pressure)
+        if flow_bits:
+            lines.append("Flow: " + " | ".join(flow_bits[:2]))
+        if institutional_read:
+            lines.append(institutional_read)
         if trade_thesis:
             lines.append(trade_thesis)
+        if exit_if:
+            lines.append(exit_if)
         if action_text:
             lines.append(action_text)
         message = "\n".join(lines)
-        self.send_alert(message)
+        return self.send_alert(message)
 
     def send_watch_notification(self, watch_data):
         """Send a curated watch alert for manual traders."""
@@ -545,10 +576,15 @@ class Notifier:
         session_map_phase = watch_data.get("session_map_phase")
         trade_thesis = watch_data.get("trade_thesis")
         setup_label = _setup_label(setup)
+        aggressive_watch = bool(watch_data.get("aggressive_watch"))
 
         lines = []
         trigger_line = _watch_trigger_line(direction, trigger_price)
-        if instrument and trigger_line:
+        if aggressive_watch and instrument:
+            header = f"{instrument} AGGRESSIVE WATCH {direction}"
+        elif aggressive_watch:
+            header = f"AGGRESSIVE WATCH {direction}"
+        elif instrument and trigger_line:
             header = f"{instrument} {trigger_line}"
         elif instrument:
             header = f"{instrument} WATCH {direction}"
@@ -682,6 +718,10 @@ class Notifier:
         entry_bid = trigger_data.get("entry_bid")
         entry_ask = trigger_data.get("entry_ask")
         entry_spread = trigger_data.get("entry_spread")
+        execution_model = trigger_data.get("execution_model")
+        pressure_read = trigger_data.get("pressure_read")
+        trade_type = trigger_data.get("trade_type")
+        exit_if = trigger_data.get("exit_if")
 
         instrument = trigger_data.get("instrument")
         header_parts = []
@@ -719,6 +759,18 @@ class Notifier:
             lines.append(market_line)
         if premium_plan_bits:
             lines.append(" | ".join(premium_plan_bits))
+        if trade_type:
+            lines.append(f"Type: {trade_type}")
+        if execution_model:
+            lines.append(f"TF: {execution_model}")
+        if exit_if:
+            lines.append(exit_if)
+        if pressure_read:
+            lines.append(f"Flow: {pressure_read}")
+        if context:
+            lines.append(context)
+        if risk_note:
+            lines.append(risk_note)
 
         message = "\n".join(lines)
 
@@ -777,6 +829,7 @@ class Notifier:
         greek_summary = monitor_data.get("greek_summary")
         run_profile = monitor_data.get("run_profile")
         runner_mode = monitor_data.get("runner_mode")
+        exit_if = monitor_data.get("exit_if")
         lines = []
         header_parts = []
         if instrument:
@@ -827,5 +880,7 @@ class Notifier:
         action_line = _monitor_action_line(guidance, action_text, reason=reason)
         if action_line:
             lines.append(action_line)
+        if exit_if:
+            lines.append(exit_if)
 
         self.send_alert("\n".join(lines))

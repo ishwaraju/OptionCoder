@@ -35,6 +35,8 @@ class WatchEngine:
         candle_low = ctx["candle_low"]
         candle_close = ctx["candle_close"]
         atr = ctx["atr"]
+        support = ctx["support"]
+        resistance = ctx["resistance"]
         candle_time = ctx["candle_time"]
         opening_breakout_override = ctx["opening_breakout_override"]
         expiry_eval = ctx["expiry_eval"]

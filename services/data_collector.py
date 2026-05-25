@@ -30,6 +30,7 @@ from shared.utils.service_watchdog import ServiceWatchdog
 from shared.utils.log_utils import build_log_path
 from shared.utils.runtime_gap_detector import RuntimeGapDetector
 from shared.utils.volume_cache import VolumeCache
+from shared.utils.option_data_cache import OptionDataCache
 
 
 class DataCollector:
@@ -58,6 +59,7 @@ class DataCollector:
         self.db = DBWriter()
         self.live_feed = LiveFeed(self.instruments)
         self.volume_cache = VolumeCache()
+        self.option_data_cache = OptionDataCache()
         
         # Connection management
         self.historical_backfill = HistoricalBackfill()
@@ -93,6 +95,13 @@ class DataCollector:
         }
         self.last_processed_update_dt = {
             item: None
+            for item in self.managed_instruments
+        }
+        self.last_option_subscription_refresh = 0
+        self.option_subscription_refresh_interval = int(os.getenv("OPTION_WS_SUBSCRIPTION_REFRESH_SECONDS", "30"))
+        self.last_option_tick_flush_minute = None
+        self.last_ws_option_totals = {
+            item: {"ce_oi": 0, "pe_oi": 0, "ce_volume": 0, "pe_volume": 0}
             for item in self.managed_instruments
         }
         self.recovery_backfill_anchor_dt = {
@@ -391,6 +400,150 @@ class DataCollector:
         except Exception as e:
             self._log(f"DB save error (5m candle): {e}")
 
+    def _refresh_option_ws_subscriptions(self):
+        option_contracts = []
+        for instrument in self.managed_instruments:
+            cached = self.option_data_cache.get(instrument)
+            for row in (cached or {}).get("band_snapshots") or []:
+                security_id = row.get("security_id")
+                if security_id is None:
+                    continue
+                option_contracts.append(
+                    {
+                        "instrument": instrument,
+                        "security_id": security_id,
+                        "strike": row.get("strike"),
+                        "atm_strike": row.get("atm_strike"),
+                        "distance_from_atm": row.get("distance_from_atm"),
+                        "option_type": row.get("option_type"),
+                        "exchange_segment": "BSE_FNO" if instrument == "SENSEX" else "NSE_FNO",
+                    }
+                )
+
+        if option_contracts:
+            self.live_feed.refresh_option_subscriptions(option_contracts)
+
+    def _safe_save_option_ws_ticks(self):
+        current_minute = self.time_utils.floor_to_minute(self.time_utils.now_ist())
+        if self.last_option_tick_flush_minute == current_minute:
+            return
+        self.last_option_tick_flush_minute = current_minute
+
+        for instrument in self.managed_instruments:
+            ticks = self.live_feed.get_option_ticks(instrument)
+            if not ticks:
+                continue
+
+            band_rows = []
+            ce_rows = []
+            pe_rows = []
+            for tick in ticks.values():
+                option_type = (tick.get("option_type") or "").upper()
+                if option_type not in {"CE", "PE"}:
+                    continue
+                row = (
+                    current_minute,
+                    instrument,
+                    tick.get("atm_strike"),
+                    tick.get("strike"),
+                    tick.get("distance_from_atm"),
+                    option_type,
+                    tick.get("security_id"),
+                    int(tick.get("oi") or 0),
+                    int(tick.get("volume") or 0),
+                    float(tick.get("price") or 0),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                band_rows.append(row)
+                if option_type == "CE":
+                    ce_rows.append(tick)
+                else:
+                    pe_rows.append(tick)
+
+            if not band_rows:
+                continue
+
+            try:
+                self.db.insert_option_band_snapshots_1m(band_rows)
+                self._safe_save_ws_oi_snapshot(current_minute, instrument, ce_rows, pe_rows)
+            except Exception as e:
+                self._log(f"DB save error (option ws ticks): {e}")
+
+    def _safe_save_ws_oi_snapshot(self, ts, instrument, ce_rows, pe_rows):
+        total_ce_oi = sum(int(row.get("oi") or 0) for row in ce_rows)
+        total_pe_oi = sum(int(row.get("oi") or 0) for row in pe_rows)
+        if total_ce_oi <= 0 and total_pe_oi <= 0:
+            return
+
+        total_ce_volume = sum(int(row.get("volume") or 0) for row in ce_rows)
+        total_pe_volume = sum(int(row.get("volume") or 0) for row in pe_rows)
+        pcr = (total_pe_oi / total_ce_oi) if total_ce_oi > 0 else 0.0
+        max_ce = max(ce_rows, key=lambda row: int(row.get("oi") or 0), default={})
+        max_pe = max(pe_rows, key=lambda row: int(row.get("oi") or 0), default={})
+        previous = self.last_ws_option_totals[instrument]
+        ce_oi_change = total_ce_oi - previous["ce_oi"] if previous["ce_oi"] else 0
+        pe_oi_change = total_pe_oi - previous["pe_oi"] if previous["pe_oi"] else 0
+        volume_change = (
+            (total_ce_volume - previous["ce_volume"] if previous["ce_volume"] else 0)
+            + (total_pe_volume - previous["pe_volume"] if previous["pe_volume"] else 0)
+        )
+        self.last_ws_option_totals[instrument] = {
+            "ce_oi": total_ce_oi,
+            "pe_oi": total_pe_oi,
+            "ce_volume": total_ce_volume,
+            "pe_volume": total_pe_volume,
+        }
+        support_level = float(max_pe.get("strike") or 0)
+        resistance_level = float(max_ce.get("strike") or 0)
+        row = (
+            ts,
+            instrument,
+            self.live_feed.get_live_data(instrument).get("price"),
+            total_ce_oi,
+            total_pe_oi,
+            total_ce_volume,
+            total_pe_volume,
+            total_ce_volume,
+            total_pe_volume,
+            round(pcr, 4),
+            ce_oi_change,
+            pe_oi_change,
+            ce_oi_change + pe_oi_change,
+            "SIDEWAYS",
+            0.0,
+            total_ce_volume + total_pe_volume,
+            volume_change,
+            (total_pe_volume / total_ce_volume) if total_ce_volume > 0 else 0.0,
+            int(max_ce.get("strike") or 0),
+            int(max_pe.get("strike") or 0),
+            0.0,
+            "SIDEWAYS",
+            0.0,
+            support_level,
+            resistance_level,
+            abs(resistance_level - support_level) if support_level and resistance_level else 0.0,
+            ts,
+            0,
+            "GOOD",
+            int(max_ce.get("oi") or 0),
+            int(max_pe.get("oi") or 0),
+            0.0,
+            0.0,
+        )
+        self.db.insert_oi_1m(row)
+
     def _process_tick_data(self, instrument, tick_data):
         """Process incoming tick data and generate candles"""
         if not tick_data or 'price' not in tick_data:
@@ -593,6 +746,12 @@ class DataCollector:
                         self.watchdogs[managed_instrument].touch({"phase": "data_pause", "reason": self.last_data_pause_reason, "pid": self.pid})
                     time_module.sleep(1)
                     continue
+
+                if current_time - self.last_option_subscription_refresh >= self.option_subscription_refresh_interval:
+                    self._refresh_option_ws_subscriptions()
+                    self.last_option_subscription_refresh = current_time
+
+                self._safe_save_option_ws_ticks()
                 
                 # Get live data
                 live_snapshot = self.live_feed.get_live_data(self.instrument)

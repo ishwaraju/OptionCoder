@@ -1368,6 +1368,16 @@ class BreakoutSignalStrategy:
         adjusted_score = max(0, min(100, score + int(directional.get("score_boost", 0))))
         quality = directional.get("quality")
         flags = directional.get("flags") or []
+        phase = directional.get("participation_phase")
+        same_side_breadth = int(directional.get("same_side_breadth") or 0)
+        opposite_side_breadth = int(directional.get("opposite_side_breadth") or 0)
+        oi_delta_same = float(directional.get("same_side_oi_delta") or 0.0)
+        oi_delta_opp = float(directional.get("opposite_side_oi_delta") or 0.0)
+        price_led_participation = (
+            phase in {"MID_MORNING", "MIDDAY", "LATE"}
+            and same_side_breadth >= max(opposite_side_breadth, 1)
+            and oi_delta_same >= oi_delta_opp
+        )
 
         if quality == "STRONG":
             components.append("participation_strong")
@@ -1380,13 +1390,22 @@ class BreakoutSignalStrategy:
             components.append(f"participation_{flag}")
 
         updated_cautions = list(cautions or [])
-        if quality == "WEAK" and "participation_weak" not in updated_cautions:
+        if quality == "WEAK" and not price_led_participation and "participation_weak" not in updated_cautions:
             updated_cautions.append("participation_weak")
         if "atm_spread_wide" in flags and "participation_spread_wide" not in updated_cautions:
             updated_cautions.append("participation_spread_wide")
-        if "same_side_volume_delta_missing" in flags and "participation_delta_missing" not in updated_cautions:
+        if (
+            "same_side_volume_delta_missing" in flags
+            and "same_side_breadth_missing" in flags
+            and not price_led_participation
+            and "participation_delta_missing" not in updated_cautions
+        ):
             updated_cautions.append("participation_delta_missing")
-        if "same_side_vs_rolling_avg_missing" in flags and "participation_baseline_weak" not in updated_cautions:
+        if (
+            "same_side_vs_rolling_avg_missing" in flags
+            and not price_led_participation
+            and "participation_baseline_weak" not in updated_cautions
+        ):
             updated_cautions.append("participation_baseline_weak")
         return adjusted_score, updated_cautions
 

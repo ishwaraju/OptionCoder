@@ -78,6 +78,9 @@ class LiveFeed:
         self.pe_oi = {}
         self.ce_volume = {}
         self.pe_volume = {}
+        self.option_security_map = {}
+        self.subscribed_option_ids = set()
+        self.option_ticks = {}
 
     def _is_debug_enabled(self):
         return Config.DEBUG or Config.CONSOLE_MODE == "DETAILED"
@@ -153,6 +156,57 @@ class LiveFeed:
                 }))
                 print(f"Subscribed {len(bse_futures_instruments)} BSE FUTURES instruments in QUOTE mode (with volume)")
 
+            self._subscribe_option_quotes()
+
+    def update_option_subscription_map(self, option_contracts):
+        for contract in option_contracts or []:
+            security_id = contract.get("security_id")
+            if security_id is None:
+                continue
+            try:
+                security_id = int(security_id)
+            except (TypeError, ValueError):
+                continue
+            self.option_security_map[security_id] = {
+                "instrument": (contract.get("instrument") or "").upper(),
+                "strike": int(contract.get("strike")) if contract.get("strike") is not None else None,
+                "atm_strike": int(contract.get("atm_strike")) if contract.get("atm_strike") is not None else None,
+                "distance_from_atm": int(contract.get("distance_from_atm")) if contract.get("distance_from_atm") is not None else None,
+                "option_type": (contract.get("option_type") or "").upper(),
+                "exchange_segment": contract.get("exchange_segment") or "NSE_FNO",
+            }
+
+    def refresh_option_subscriptions(self, option_contracts):
+        self.update_option_subscription_map(option_contracts)
+        self._subscribe_option_quotes()
+
+    def _subscribe_option_quotes(self):
+        if not self.ws or not self.is_connected or not self.option_security_map:
+            return
+
+        pending_by_segment = {}
+        for security_id, info in self.option_security_map.items():
+            if security_id in self.subscribed_option_ids:
+                continue
+            segment = info.get("exchange_segment") or "NSE_FNO"
+            pending_by_segment.setdefault(segment, []).append(
+                {"ExchangeSegment": segment, "SecurityId": str(security_id)}
+            )
+
+        for segment, instruments in pending_by_segment.items():
+            for start in range(0, len(instruments), 100):
+                chunk = instruments[start:start + 100]
+                try:
+                    self.ws.send(json.dumps({
+                        "RequestCode": 4,
+                        "InstrumentCount": len(chunk),
+                        "InstrumentList": chunk,
+                    }))
+                    self.subscribed_option_ids.update(int(item["SecurityId"]) for item in chunk)
+                    print(f"Subscribed {len(chunk)} {segment} OPTIONS instruments in QUOTE mode")
+                except Exception as exc:
+                    print(f"Option quote subscription failed for {segment}: {exc}")
+
     # =========================
     # WebSocket Message
     # =========================
@@ -190,13 +244,28 @@ class LiveFeed:
             )
 
         # OPTIONS (Multiple Strikes)
-        elif security_id in getattr(Config, "STRIKE_MAP", {}):
-            strike_info = Config.STRIKE_MAP[security_id]
+        elif security_id in self.option_security_map or security_id in getattr(Config, "STRIKE_MAP", {}):
+            strike_info = self.option_security_map.get(security_id) or Config.STRIKE_MAP[security_id]
             strike = strike_info["strike"]
-            opt_type = strike_info["type"]
+            opt_type = strike_info.get("option_type") or strike_info.get("type")
+            instrument = strike_info.get("instrument")
 
-            oi = data.get("oi", 0)
-            volume = data.get("volume", 0)
+            existing = self.option_ticks.get(security_id, {})
+            merged = {
+                **strike_info,
+                **existing,
+                "security_id": security_id,
+                "strike": strike,
+                "option_type": opt_type,
+                "last_update_dt": self.time_utils.now_ist(),
+            }
+            for field in ("price", "volume", "oi", "open", "high", "low"):
+                if data.get(field) is not None:
+                    merged[field] = data.get(field)
+            self.option_ticks[security_id] = merged
+
+            oi = merged.get("oi", 0)
+            volume = merged.get("volume", 0)
 
             if opt_type == "CE":
                 self.ce_oi[strike] = oi
@@ -559,3 +628,13 @@ class LiveFeed:
         snapshot["connection_diagnostics"] = self.get_connection_diagnostics()
 
         return snapshot
+
+    def get_option_ticks(self, instrument=None):
+        if instrument is None:
+            return dict(self.option_ticks)
+        instrument = instrument.upper()
+        return {
+            security_id: tick
+            for security_id, tick in self.option_ticks.items()
+            if (tick.get("instrument") or "").upper() == instrument
+        }

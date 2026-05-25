@@ -1,5 +1,8 @@
 import requests
 import time
+import json
+import os
+import fcntl
 from datetime import timedelta
 from config import Config
 from shared.utils.time_utils import TimeUtils
@@ -35,6 +38,58 @@ class OptionChain:
         self.underlying_price = None
         self.mock_step = 0
         self.rate_limited_until = 0
+        self.rate_limit_file = os.path.join(".option_data_cache", "option_chain_rate_limit.json")
+
+    def _with_global_rate_limit(self, label):
+        os.makedirs(os.path.dirname(self.rate_limit_file), exist_ok=True)
+        now = time.time()
+        with open(self.rate_limit_file, "a+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            try:
+                state = json.load(f)
+            except Exception:
+                state = {}
+
+            cooldown_until = float(state.get("cooldown_until") or 0)
+            if cooldown_until > now:
+                wait_seconds = cooldown_until - now
+                print(f"ERROR: {label} shared cooldown active after 429 ({int(wait_seconds)}s left)")
+                time.sleep(wait_seconds)
+                now = time.time()
+
+            last_request_at = float(state.get("last_request_at") or 0)
+            min_interval = float(getattr(Config, "OPTION_CHAIN_MIN_INTERVAL_SECONDS", 4.0))
+            wait_seconds = (last_request_at + min_interval) - now
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+                now = time.time()
+
+            state["last_request_at"] = now
+            f.seek(0)
+            f.truncate()
+            json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+    def _set_global_cooldown(self):
+        os.makedirs(os.path.dirname(self.rate_limit_file), exist_ok=True)
+        cooldown_until = time.time() + Config.OPTION_CHAIN_429_COOLDOWN_SECONDS
+        with open(self.rate_limit_file, "a+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            try:
+                state = json.load(f)
+            except Exception:
+                state = {}
+            state["cooldown_until"] = max(float(state.get("cooldown_until") or 0), cooldown_until)
+            f.seek(0)
+            f.truncate()
+            json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
+            fcntl.flock(f, fcntl.LOCK_UN)
 
     @staticmethod
     def _safe_spread(bid_price, ask_price):
@@ -52,6 +107,7 @@ class OptionChain:
 
         for attempt in range(1, Config.OPTION_CHAIN_RETRIES + 1):
             try:
+                self._with_global_rate_limit(label)
                 response = requests.post(
                     url,
                     headers=self.headers,
@@ -67,6 +123,7 @@ class OptionChain:
                 print("ERROR:", last_error, f"(attempt {attempt}/{Config.OPTION_CHAIN_RETRIES})")
                 if response.status_code == 429:
                     self.rate_limited_until = time.time() + Config.OPTION_CHAIN_429_COOLDOWN_SECONDS
+                    self._set_global_cooldown()
                     print(
                         f"ERROR: {label} hit 429, cooling down for "
                         f"{Config.OPTION_CHAIN_429_COOLDOWN_SECONDS}s"

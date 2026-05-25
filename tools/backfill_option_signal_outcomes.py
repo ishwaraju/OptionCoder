@@ -15,7 +15,7 @@ from config import Config
 
 
 MAX_MINUTES = 20
-HORIZONS = (1, 2, 3, 5)
+HORIZONS = (1, 2, 3, 5, 10, 15, 20)
 
 
 def classify_horizon(pnl_points, max_favorable_points, max_adverse_points):
@@ -78,6 +78,7 @@ def main():
     """
 
     inserted = 0
+    orphan_rows_deleted = 0
     with psycopg2.connect(Config.get_db_dsn()) as conn:
         with conn.cursor() as cur:
             signals = fetch_all(cur, signals_query, params)
@@ -92,6 +93,30 @@ def main():
                           AND signal = %s
                           AND entry_ts = %s
                     ),
+                    orphan_outcomes AS (
+                        SELECT
+                            o.observed_ts,
+                            MAX(o.option_ltp) AS option_ltp,
+                            MAX(o.option_bid) AS option_bid,
+                            MAX(o.option_ask) AS option_ask,
+                            MAX(o.option_spread) AS option_spread
+                        FROM option_signal_outcomes_1m o
+                        WHERE o.instrument = %s
+                          AND o.signal = %s
+                          AND o.strike = %s
+                          AND o.signal_ts < %s
+                          AND o.observed_ts >= %s
+                          AND o.observed_ts <= %s + (%s || ' minutes')::interval
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM signals_issued s2
+                              WHERE s2.ts = o.signal_ts
+                                AND s2.instrument = o.instrument
+                                AND s2.signal = o.signal
+                                AND s2.strike = o.strike
+                          )
+                        GROUP BY o.observed_ts
+                    ),
                     fallback_times AS (
                         SELECT DISTINCT date_trunc('minute', ob.ts) AS observed_ts
                         FROM option_band_snapshots_1m ob
@@ -104,16 +129,19 @@ def main():
                     all_times AS (
                         SELECT observed_ts FROM monitor_times
                         UNION
+                        SELECT observed_ts FROM orphan_outcomes
+                        UNION
                         SELECT observed_ts FROM fallback_times
                     )
                     SELECT
                         at.observed_ts,
-                        contract.ltp,
-                        contract.top_bid_price,
-                        contract.top_ask_price,
-                        contract.spread,
+                        COALESCE(contract.ltp, orphan_outcomes.option_ltp) AS ltp,
+                        COALESCE(contract.top_bid_price, orphan_outcomes.option_bid) AS top_bid_price,
+                        COALESCE(contract.top_ask_price, orphan_outcomes.option_ask) AS top_ask_price,
+                        COALESCE(contract.spread, orphan_outcomes.option_spread) AS spread,
                         underlying.close
                     FROM all_times at
+                    LEFT JOIN orphan_outcomes ON orphan_outcomes.observed_ts = at.observed_ts
                     LEFT JOIN LATERAL (
                         SELECT ltp, top_bid_price, top_ask_price, spread
                         FROM option_band_snapshots_1m ob
@@ -138,6 +166,13 @@ def main():
                         instrument,
                         signal,
                         signal_ts,
+                        instrument,
+                        signal,
+                        strike,
+                        signal_ts,
+                        signal_ts,
+                        signal_ts,
+                        MAX_MINUTES,
                         instrument,
                         strike,
                         signal,
@@ -221,6 +256,50 @@ def main():
                     )
                     inserted += 1
 
+                cur.execute(
+                    """
+                    DELETE FROM option_signal_outcomes_1m o
+                    WHERE o.instrument = %s
+                      AND o.signal = %s
+                      AND o.strike = %s
+                      AND o.signal_ts < %s
+                      AND o.observed_ts >= %s
+                      AND o.observed_ts <= %s + (%s || ' minutes')::interval
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM signals_issued s2
+                          WHERE s2.ts = o.signal_ts
+                            AND s2.instrument = o.instrument
+                            AND s2.signal = o.signal
+                            AND s2.strike = o.strike
+                      );
+                    """,
+                    (instrument, signal, strike, signal_ts, signal_ts, signal_ts, MAX_MINUTES),
+                )
+                orphan_rows_deleted += cur.rowcount
+
+                cur.execute(
+                    """
+                    DELETE FROM option_signal_horizon_outcomes h
+                    WHERE h.instrument = %s
+                      AND h.signal = %s
+                      AND h.strike = %s
+                      AND h.signal_ts < %s
+                      AND h.observed_ts >= %s
+                      AND h.observed_ts <= %s + (%s || ' minutes')::interval
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM signals_issued s2
+                          WHERE s2.ts = h.signal_ts
+                            AND s2.instrument = h.instrument
+                            AND s2.signal = h.signal
+                            AND s2.strike = h.strike
+                      );
+                    """,
+                    (instrument, signal, strike, signal_ts, signal_ts, signal_ts, MAX_MINUTES),
+                )
+                orphan_rows_deleted += cur.rowcount
+
                 for horizon in HORIZONS:
                     candidates = [item for item in horizon_candidates if item["minutes_since_signal"] >= horizon]
                     if not candidates:
@@ -276,7 +355,7 @@ def main():
                     )
         conn.commit()
 
-    print(f"outcome_rows_upserted={inserted}")
+    print(f"outcome_rows_upserted={inserted} orphan_rows_deleted={orphan_rows_deleted}")
 
 
 if __name__ == "__main__":

@@ -106,6 +106,7 @@ def parse_args():
     parser.add_argument("--to-date", required=True)
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--max-minutes", type=int, default=20)
+    parser.add_argument("--show-details", action="store_true", help="Print each replay trade that survives guards")
     return parser.parse_args()
 
 
@@ -129,6 +130,7 @@ def replay_instrument(instrument, from_date, to_date, horizon, max_minutes):
     service = ReplayServiceStub(instrument, strategy, atr, snapshot_map)
     stats = defaultdict(BucketStat)
     family_stats = defaultdict(BucketStat)
+    details = []
 
     for idx, candle in enumerate(candles):
         ts = candle["time"]
@@ -261,8 +263,30 @@ def replay_instrument(instrument, from_date, to_date, horizon, max_minutes):
         family = profile.get("signal_family") or "UNKNOWN"
         stats[bucket].add(pnl, mfe, mae)
         family_stats[family].add(pnl, mfe, mae)
+        details.append(
+            {
+                "ts": ts,
+                "instrument": instrument,
+                "signal": signal,
+                "strike": strike,
+                "entry_ltp": entry_ltp,
+                "horizon_ltp": horizon_ltp,
+                "pnl": pnl,
+                "mfe": mfe,
+                "mae": mae,
+                "spot": candle["close"],
+                "setup": strategy.last_signal_type,
+                "grade": strategy.last_signal_grade,
+                "confidence": strategy.last_confidence,
+                "score": strategy.last_score,
+                "bucket": bucket,
+                "family": family,
+                "premium_guard": premium_guard.get("label"),
+                "reason": profile.get("reason"),
+            }
+        )
 
-    return {"bucket_stats": stats, "family_stats": family_stats}
+    return {"bucket_stats": stats, "family_stats": family_stats, "details": details}
 
 
 def main():
@@ -288,6 +312,16 @@ def main():
             combined[bucket].total_pnl += stat.total_pnl
             combined[bucket].total_mfe += stat.total_mfe
             combined[bucket].total_mae += stat.total_mae
+        if args.show_details and stats["details"]:
+            print("  DETAILS")
+            for row in stats["details"]:
+                print(
+                    f"    {row['ts']:%Y-%m-%d %H:%M} {row['instrument']} {row['signal']} "
+                    f"{row['strike']} entry={row['entry_ltp']:.2f} spot={row['spot']:.2f} "
+                    f"5m={row['pnl']:+.2f} mfe={row['mfe']:+.2f} mae={row['mae']:+.2f} "
+                    f"{row['bucket']}/{row['family']} {row['setup']} grade={row['grade']} "
+                    f"score={row['score']} guard={row['premium_guard']}"
+                )
         if family_stats:
             print("  FAMILIES")
             for family, stat in sorted(family_stats.items(), key=lambda item: (-item[1].count, item[0])):

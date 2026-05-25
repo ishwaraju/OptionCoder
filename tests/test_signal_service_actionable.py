@@ -410,7 +410,7 @@ def test_entry_phase_uses_trend_leg_stage_for_retest():
     assert phase == "RETEST_SIGNAL"
 
 
-def test_high_expectancy_gate_allows_elite_reversal_quality():
+def test_high_expectancy_gate_keeps_reversal_watch_until_runner_premium_confirms():
     service = build_service("REVERSAL", "B", "MEDIUM")
     service.instrument = "SENSEX"
     service.strategy.last_score = 87
@@ -431,8 +431,10 @@ def test_high_expectancy_gate_allows_elite_reversal_quality():
         price=75490.0,
     )
 
-    assert profile["allow_trade"] is True
+    assert profile["allow_trade"] is False
+    assert profile["watch_only"] is True
     assert profile["quality_tag"] == "RQ"
+    assert "reversal_needs_runner_premium_confirmation" in profile["reasons"]
 
 
 def test_sensex_allows_clean_b_grade_continuation_even_when_global_continuation_flag_is_off():
@@ -649,6 +651,54 @@ def test_microstructure_allows_strict_option_sweep_override_when_oi_data_missing
     assert confirmed is True
     assert reason == "Option sweep microstructure override"
     assert metrics["override"] == "option_sweep_microstructure"
+    assert alternative is None
+
+
+def test_microstructure_allows_price_action_override_when_oi_data_missing():
+    service = SignalService.__new__(SignalService)
+    service.option_data = {"band_snapshots": [{"strike": 24200}]}
+    service.option_sweep_context = {}
+    service.strategy = type(
+        "StrategyStub",
+        (),
+        {
+            "last_entry_score": 95,
+            "last_signal_type": "BREAKOUT_CONFIRM",
+            "last_pressure_conflict_level": "NONE",
+            "last_futures_acceptance": {"accepted": True, "score": 66},
+            "last_initiative_strength_score": 36,
+        },
+    )()
+    service._prime_oi_quote_confirmation = lambda *args, **kwargs: None
+    service.spread_filter = type(
+        "SpreadStub",
+        (),
+        {"should_filter_signal": lambda *args, **kwargs: (False, None, None)},
+    )()
+    service.oi_quote_confirmation = type(
+        "QuoteStub",
+        (),
+        {
+            "confirm_signal_with_oi": lambda *args, **kwargs: (
+                False,
+                "Insufficient OI data",
+                None,
+                {"raw_confidence": 0.0},
+            )
+        },
+    )()
+
+    confirmed, reason, metrics, alternative = service._confirm_signal_microstructure(
+        signal="CE",
+        selected_strike=24200,
+        timestamp=datetime(2026, 5, 6, 10, 41),
+        price=24220,
+        strict=True,
+    )
+
+    assert confirmed is True
+    assert reason == "Price-action microstructure override"
+    assert metrics["override"] == "price_action_microstructure"
     assert alternative is None
 
 
@@ -1137,6 +1187,83 @@ def test_watch_alert_eligibility_allows_only_strong_spike_watch():
     assert service._watch_alert_is_eligible(weak_payload) is False
 
 
+def test_watch_alert_eligibility_allows_aggressive_b_grade_confirmation_watch():
+    service = SignalService.__new__(SignalService)
+
+    payload = {
+        "score": 96,
+        "entry_score": 92,
+        "confidence": "MEDIUM",
+        "signal_grade": "B",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "setup": "BREAKOUT_CONFIRM",
+        "blockers": ["direction_present_but_filters_incomplete"],
+        "cautions": ["option_sweep_confirmation_ready"],
+        "pressure_conflict_level": "NONE",
+        "premium_confirmed": True,
+        "reason": "No setup | micro yes | microstructure=Option sweep microstructure override",
+    }
+
+    assert service._aggressive_watch_is_eligible(payload) is True
+    assert service._watch_alert_is_eligible(payload) is True
+
+
+def test_aggressive_watch_requires_premium_confirmation():
+    service = SignalService.__new__(SignalService)
+    payload = {
+        "score": 96,
+        "entry_score": 92,
+        "confidence": "MEDIUM",
+        "signal_grade": "B",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "setup": "BREAKOUT_CONFIRM",
+        "blockers": ["direction_present_but_filters_incomplete"],
+        "cautions": [],
+        "pressure_conflict_level": "NONE",
+        "premium_confirmed": False,
+        "reason": "No setup | micro yes",
+    }
+
+    assert service._aggressive_watch_is_eligible(payload) is False
+    assert service._watch_alert_is_eligible(payload) is False
+
+
+def test_maybe_send_watch_alert_marks_aggressive_payload_before_notifying():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.watch_alert_state = {}
+    sent = []
+    service.notifier = type(
+        "NotifierStub",
+        (),
+        {"send_watch_notification": lambda self, payload: sent.append(payload)},
+    )()
+
+    payload = {
+        "instrument": "NIFTY",
+        "direction": "CE",
+        "score": 96,
+        "entry_score": 92,
+        "confidence": "MEDIUM",
+        "signal_grade": "B",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "setup": "BREAKOUT_CONFIRM",
+        "blockers": ["direction_present_but_filters_incomplete"],
+        "cautions": [],
+        "pressure_conflict_level": "NONE",
+        "premium_confirmed": True,
+        "reason": "No setup | micro yes | premium_guard=PREMIUM_OK",
+        "key": ("NIFTY", "CE", "BREAKOUT_CONFIRM"),
+    }
+
+    service._maybe_send_watch_alert(payload)
+
+    assert len(sent) == 1
+    assert sent[0]["aggressive_watch"] is True
+    assert sent[0]["setup_bucket"] == "AGGRESSIVE_WATCH"
+    assert sent[0]["decision_label"] == "AGGRESSIVE_WATCH_CE"
+
+
 def test_preserve_existing_pending_watch_handles_mixed_tz_datetimes():
     service = SignalService.__new__(SignalService)
     service.pending_entry_watch = {
@@ -1411,6 +1538,43 @@ def test_feed_reject_softens_for_elite_aligned_setup_when_only_oi_health_is_weak
     assert result["label"] == "RISKY"
     assert "strong_setup_oi_softened" in result["reasons"]
     assert service.last_data_health["label"] == "RISKY"
+
+
+def test_feed_reject_softens_for_price_action_sponsored_setup_with_large_oi_gap():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "SENSEX"
+    service.option_sweep_context = {}
+    service.last_data_health = None
+    service._should_soften_option_sweep_filters = lambda _signal: False
+    service.strategy = type(
+        "StrategyStub",
+        (),
+        {
+            "last_score": 96,
+            "last_entry_score": 97,
+            "last_confidence": "HIGH",
+            "last_signal_type": "BREAKOUT_CONFIRM",
+            "last_active_day_state": "UNKNOWN",
+            "last_day_state_direction": "NONE",
+            "last_pressure_conflict_level": "NONE",
+            "last_futures_acceptance": {"accepted": True, "score": 68},
+            "last_initiative_strength_score": 38,
+        },
+    )()
+
+    feed_health = {
+        "label": "REJECT",
+        "summary": "feed=REJECT",
+        "reasons": ["coverage_too_low", "large_gap_detected"],
+        "candle_health": {"coverage_pct": 96.9, "count": 31, "expected_count": 32, "max_gap_seconds": 600},
+        "oi_health": {"coverage_pct": 31.0, "distinct_minutes": 19, "expected_minutes": 61, "max_gap_seconds": 3360},
+    }
+
+    result = OptionSignalGuard.maybe_relax_reject_for_strong_setup(service, feed_health, signal="CE")
+
+    assert result["label"] == "RISKY"
+    assert "strong_setup_oi_softened" in result["reasons"]
+    assert "sponsorship=price_action" in result["summary"]
 
 
 def test_feed_reject_stays_reject_for_non_elite_setup():

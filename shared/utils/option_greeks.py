@@ -29,6 +29,8 @@ def time_to_expiry_years(current_dt, expiry_value, market_close=time(15, 30)):
         return None
 
     expiry_dt = datetime.combine(expiry_date, market_close)
+    if isinstance(current_dt, datetime) and current_dt.tzinfo is not None and current_dt.utcoffset() is not None:
+        expiry_dt = expiry_dt.replace(tzinfo=current_dt.tzinfo)
     if current_dt >= expiry_dt:
         return 1.0 / (365.0 * 24.0 * 60.0)
 

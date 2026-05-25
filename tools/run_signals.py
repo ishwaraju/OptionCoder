@@ -323,10 +323,18 @@ class SignalServiceManager:
                         f"[Signal Manager] {entry['instrument']} signal service "
                         f"exited with code {return_code}"
                     )
-                    self.running = False
+                    self.processes = [
+                        active_entry
+                        for active_entry in self.processes
+                        if active_entry is not entry
+                    ]
                     self._save_state()
-                    self.stop()
-                    return
+                    if not self.processes:
+                        print("[Signal Manager] No signal services still running")
+                        self.running = False
+                        self._clear_state()
+                        return
+                    break
 
                 time.sleep(1)
                 

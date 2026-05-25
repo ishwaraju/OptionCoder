@@ -560,6 +560,7 @@ class OICollector:
             pe_oi_change = total_pe_oi - self.last_pe_oi
             ce_volume_change = total_ce_volume - self.last_ce_volume
             pe_volume_change = total_pe_volume - self.last_pe_volume
+            has_previous = self.last_ce_oi > 0 and self.last_pe_oi > 0
             
             # Check for significant changes
             significant_change = (
@@ -568,16 +569,24 @@ class OICollector:
                 abs(ce_volume_change) >= self.significant_change_threshold or
                 abs(pe_volume_change) >= self.significant_change_threshold
             )
-            
-            if significant_change and (self.last_ce_oi > 0 and self.last_pe_oi > 0):
-                # Save OI change snapshot (preserve actual volume values)
-                self._save_oi_change_snapshot(
-                    current_time, ce_oi_change, pe_oi_change,
-                    ce_volume_change, pe_volume_change,
-                    total_ce_oi, total_pe_oi,
-                    total_ce_volume, total_pe_volume, option_data
-                )
-                
+
+            # Always persist the minute-level OI row. The signal feed-health gate
+            # measures coverage from oi_snapshots_1m, so quiet minutes must still
+            # count as fresh GOOD data even when no large OI delta is present.
+            self._save_oi_change_snapshot(
+                current_time,
+                ce_oi_change if has_previous else 0,
+                pe_oi_change if has_previous else 0,
+                ce_volume_change if has_previous else 0,
+                pe_volume_change if has_previous else 0,
+                total_ce_oi,
+                total_pe_oi,
+                total_ce_volume,
+                total_pe_volume,
+                option_data,
+            )
+
+            if significant_change and has_previous:
                 self.oi_changes_detected += 1
                 
                 self._log(f"Significant Change Detected | CE OI Change: {ce_oi_change:+,} | PE OI Change: {pe_oi_change:+,} | Total Changes: {self.oi_changes_detected}")

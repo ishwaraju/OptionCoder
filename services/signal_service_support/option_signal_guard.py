@@ -215,6 +215,15 @@ class OptionSignalGuard:
             and signal_type in breakout_family
             and entry_phase in {"FIRST_SIGNAL_IN_MOVE", "RETEST_SIGNAL"}
         )
+        nifty_watch_allowed = not (
+            instrument == "NIFTY"
+            and (
+                signal_family != "IMPULSE_BREAKOUT"
+                or raw_participation_hard_count >= 1
+                or initiative_strength_score < 34
+                or float(futures_acceptance.get("score") or 0) < 64
+            )
+        )
         price_led_participation_override = (
             strong_price_action_watch
             and clean_spread
@@ -341,12 +350,21 @@ class OptionSignalGuard:
         if signal_type in {"REVERSAL", "TRAP_REVERSAL"}:
             if pressure_conflict == "NONE" and entry_score >= 90 and (day_state_aligned or score >= 85):
                 quality_tag = "RQ"
-                allow_trade = premium_confirmed or (premium_momentum_pct is not None and float(premium_momentum_pct) >= -0.25)
+                reversal_premium_momentum = (
+                    premium_momentum_pct is not None
+                    and float(premium_momentum_pct) >= 2.0
+                )
+                allow_trade = (
+                    premium_confirmed
+                    and reversal_premium_momentum
+                    and participation_hard_count == 0
+                    and clean_spread
+                )
                 path_quality = "CLEAN_PATH" if participation_hard_count == 0 else "TACTICAL_PATH"
-                likely_runner = allow_trade and (premium_momentum_pct is not None and float(premium_momentum_pct) >= 2.0)
+                likely_runner = allow_trade
                 if not allow_trade:
                     watch_only = True
-                    reasons.append("reversal_needs_premium_confirmation")
+                    reasons.append("reversal_needs_runner_premium_confirmation")
             else:
                 reasons.append("reversal_not_elite_enough")
             return {
@@ -393,7 +411,7 @@ class OptionSignalGuard:
                 path_quality = "PRICE_LED_PATH"
                 likely_runner = bool(volume_supporting) or initiative_strength_score >= 36
                 reasons.append("price_action_strong_small_size_entry")
-            elif strong_price_action_watch:
+            elif strong_price_action_watch and nifty_watch_allowed:
                 quality_tag = "PA_STRONG_WAIT_PREMIUM"
                 path_quality = "PRICE_LED_PATH"
                 reasons.append("price_action_strong_waiting_for_premium")
@@ -509,13 +527,13 @@ class OptionSignalGuard:
         )
         label = "GOOD"
         reasons = []
-        if candle_health["coverage_pct"] < 84 or oi_health["coverage_pct"] < 78:
+        if candle_health["coverage_pct"] < 84 or oi_health["coverage_pct"] < 12:
             label = "REJECT"
             reasons.append("coverage_too_low")
         elif candle_health["coverage_pct"] < 92 or oi_health["coverage_pct"] < 90:
             label = "RISKY"
             reasons.append("coverage_soft")
-        if candle_health["max_gap_seconds"] >= 901 or oi_health["max_gap_seconds"] >= 721:
+        if candle_health["max_gap_seconds"] >= 901 or oi_health["max_gap_seconds"] >= 2101:
             label = "REJECT"
             reasons.append("large_gap_detected")
         elif candle_health["max_gap_seconds"] >= 601 or oi_health["max_gap_seconds"] >= 361:
@@ -558,6 +576,8 @@ class OptionSignalGuard:
         day_state = (getattr(service.strategy, "last_active_day_state", "") or "").upper()
         day_state_direction = (getattr(service.strategy, "last_day_state_direction", "") or "").upper()
         pressure_conflict = (getattr(service.strategy, "last_pressure_conflict_level", "NONE") or "NONE").upper()
+        futures_acceptance = getattr(service.strategy, "last_futures_acceptance", None) or {}
+        initiative_strength_score = float(getattr(service.strategy, "last_initiative_strength_score", 0) or 0)
         strong_setup_types = {
             "BREAKOUT",
             "BREAKOUT_CONFIRM",
@@ -576,6 +596,7 @@ class OptionSignalGuard:
             day_state in {"REVERSAL_UNDERWAY", "BULL_TREND_ACTIVE", "BEAR_TREND_ACTIVE"}
             and day_state_direction == signal
         )
+        futures_acceptance_strong = bool(futures_acceptance.get("accepted")) and float(futures_acceptance.get("score") or 0) >= 58
         strong_sweep = bool(service._should_soften_option_sweep_filters(signal))
         setup_is_elite = (
             signal_type in strong_setup_types
@@ -585,10 +606,10 @@ class OptionSignalGuard:
             and pressure_conflict in {"NONE", "MILD"}
         )
         candle_side_healthy = candle_cov >= 90 and candle_gap <= 600
-        oi_side_degraded_but_usable = oi_cov >= 20 and oi_gap <= 1200
+        oi_side_degraded_but_usable = oi_cov >= 12 and oi_gap <= 3600
         if not (setup_is_elite and candle_side_healthy and oi_side_degraded_but_usable):
             return feed_health
-        if not (strong_alignment or strong_sweep):
+        if not (strong_alignment or strong_sweep or futures_acceptance_strong or initiative_strength_score >= 34):
             return feed_health
 
         relaxed_reasons = list(feed_health.get("reasons") or [])
@@ -597,7 +618,8 @@ class OptionSignalGuard:
         summary = (
             f"feed=RISKY_SOFTENED | candle_cov={candle_cov}% ({candle_health.get('count')}/{candle_health.get('expected_count')}) "
             f"| oi_cov={oi_cov}% ({oi_health.get('distinct_minutes')}/{oi_health.get('expected_minutes')}) "
-            f"| candle_gap={candle_gap}s | oi_gap={oi_gap}s | elite_setup=yes"
+            f"| candle_gap={candle_gap}s | oi_gap={oi_gap}s | elite_setup=yes | sponsorship="
+            f"{'price_action' if (futures_acceptance_strong or initiative_strength_score >= 34) else 'alignment'}"
         )
         relaxed = dict(feed_health)
         relaxed["label"] = "RISKY"
@@ -689,13 +711,21 @@ class OptionSignalGuard:
             return {"label": "PREMIUM_MISSING", "reason": "Selected option ka live premium missing hai."}
         if spread_pct is not None and spread_pct >= 5.5:
             return {"label": "PREMIUM_SPREAD_WIDE", "reason": f"Selected option spread {spread_pct:.2f}% hai."}
+        effective_candle_time = selected_option_contract.get("ts") or candle_time
         previous_snapshot = service.db_reader.fetch_option_contract_snapshot(
             instrument=service.instrument,
             strike=selected_option_contract.get("strike"),
             option_type=signal,
-            before_ts=candle_time - timedelta(minutes=2),
+            before_ts=effective_candle_time - timedelta(minutes=2),
+        )
+        three_min_snapshot = service.db_reader.fetch_option_contract_snapshot(
+            instrument=service.instrument,
+            strike=selected_option_contract.get("strike"),
+            option_type=signal,
+            before_ts=effective_candle_time - timedelta(minutes=3),
         )
         previous_ltp = float(previous_snapshot.get("ltp") or 0) if previous_snapshot else 0.0
+        three_min_ltp = float(three_min_snapshot.get("ltp") or 0) if three_min_snapshot else 0.0
         previous_volume = int(previous_snapshot.get("volume") or 0) if previous_snapshot else 0
         directional_participation = (
             (getattr(service.strategy, "last_participation_metrics", None) or {}).get(signal)
@@ -712,11 +742,38 @@ class OptionSignalGuard:
         )
         volume_supporting = same_side_volume_positive or participation_volume_supporting
         premium_momentum_pct = round(((ltp - previous_ltp) / previous_ltp) * 100.0, 2) if previous_ltp > 0 else None
+        premium_momentum_3m_pct = round(((ltp - three_min_ltp) / three_min_ltp) * 100.0, 2) if three_min_ltp > 0 else None
         atm_row = service._get_option_contract_snapshot((service.option_data or {}).get("atm"), signal, before_ts=candle_time)
         atm_iv = float(atm_row.get("iv") or 0) if atm_row else 0.0
         iv_markup_pct = round(((iv_now - atm_iv) / atm_iv) * 100.0, 2) if atm_iv > 0 and iv_now > 0 else None
         if premium_momentum_pct is not None and premium_momentum_pct <= -2.0 and service.strategy.last_score < 88:
             return {"label": "PREMIUM_NOT_EXPANDING", "reason": f"Selected premium abhi expand nahi kar raha ({premium_momentum_pct:.2f}%).", "premium_momentum_pct": premium_momentum_pct}
+        chase_limit_pct = float(getattr(Config, "PREMIUM_CHASE_MAX_2M_PCT", 14.0) or 14.0)
+        if premium_momentum_pct is not None and premium_momentum_pct >= chase_limit_pct:
+            return {
+                "label": "PREMIUM_CHASED",
+                "reason": (
+                    f"Selected premium already {premium_momentum_pct:.2f}% move kar chuka hai "
+                    f"last 2m me; fresh option entry chase ho jayegi."
+                ),
+                "premium_momentum_pct": premium_momentum_pct,
+                "previous_ltp": previous_ltp if previous_ltp > 0 else None,
+                "current_ltp": ltp,
+            }
+        chase_3m_limit_pct = float(getattr(Config, "PREMIUM_CHASE_MAX_3M_PCT", 18.0) or 18.0)
+        if premium_momentum_3m_pct is not None and premium_momentum_3m_pct >= chase_3m_limit_pct:
+            return {
+                "label": "PREMIUM_CHASED_3M",
+                "reason": (
+                    f"Selected premium already {premium_momentum_3m_pct:.2f}% move kar chuka hai "
+                    f"last 3m me; fresh entry ke liye pullback/retest chahiye."
+                ),
+                "premium_momentum_pct": premium_momentum_pct,
+                "premium_momentum_3m_pct": premium_momentum_3m_pct,
+                "previous_ltp": previous_ltp if previous_ltp > 0 else None,
+                "three_min_ltp": three_min_ltp if three_min_ltp > 0 else None,
+                "current_ltp": ltp,
+            }
         if premium_momentum_pct is not None and premium_momentum_pct < 1.0 and volume_now <= previous_volume and service.strategy.last_regime in {"RANGING", "CHOPPY"}:
             if service._should_soften_option_sweep_filters(signal) and (spread_pct is None or spread_pct < 4.5):
                 return {
@@ -741,6 +798,7 @@ class OptionSignalGuard:
             "label": "PREMIUM_OK",
             "reason": "Premium expansion acceptable hai.",
             "premium_momentum_pct": premium_momentum_pct,
+            "premium_momentum_3m_pct": premium_momentum_3m_pct,
             "iv_markup_pct": iv_markup_pct,
             "spread_pct": spread_pct,
             "volume_supporting": volume_supporting,

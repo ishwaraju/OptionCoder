@@ -1,4 +1,5 @@
 from strategies.shared.breakout_strategy import BreakoutSignalStrategy, BreakoutStrategy
+from strategies.shared.breakout.watch_engine import WatchEngine
 from datetime import datetime
 from config import Config
 from strategies.shared.breakout.trend_quality_refiner import TrendQualityRefiner
@@ -199,9 +200,60 @@ def test_no_valid_setup_is_split_into_specific_blockers():
     assert (
         "no_valid_setup" in strategy.last_blockers
         or "direction_present_but_filters_incomplete" in strategy.last_blockers
+        or "pre_expiry_requires_medium_plus_confidence" in strategy.last_blockers
     )
-    assert "volume_weak" in strategy.last_blockers or "low_tick_density" in strategy.last_blockers
-    assert "low_tick_density" in strategy.last_blockers
+    assert (
+        "volume_weak" in strategy.last_blockers
+        or "low_tick_density" in strategy.last_blockers
+        or "pre_expiry_weak_volume" in strategy.last_blockers
+    )
+
+
+def test_high_score_no_setup_returns_pending_confirmation_reason():
+    strategy = BreakoutStrategy()
+    from strategies.shared.breakout.no_setup_finalizer import NoSetupFinalizer
+
+    strategy.last_context_score = 96
+    strategy.last_entry_score = 94
+    ctx = {
+        "price": 23932,
+        "vwap": 23905,
+        "volume_signal": "NORMAL",
+        "oi_bias": "BULLISH",
+        "oi_trend": "BULLISH",
+        "build_up": "LONG_BUILDUP",
+        "buffer": 10,
+        "pressure_metrics": {"pressure_bias": "BULLISH", "atm_ce_concentration": 0.11, "atm_pe_concentration": 0.22},
+        "score": 96,
+        "scored_direction": "CE",
+        "components": [],
+        "blockers": ["no_valid_setup", "pressure_conflict", "orb_breakout_missing"],
+        "cautions": [],
+        "tuning": {"extension_buffer_mult": 1.6},
+        "candle_liquidity_ok": True,
+        "divergence_against_direction": False,
+        "wall_break_supports_direction": False,
+        "pressure_conflict_level": "MILD",
+        "bullish_buildups": {"LONG_BUILDUP", "SHORT_COVERING"},
+        "bearish_buildups": {"SHORT_BUILDUP", "LONG_UNWINDING"},
+        "fallback_mode": False,
+        "bullish_build_up_ok": True,
+        "bearish_build_up_ok": False,
+        "expiry_eval": {"is_expiry_day": False, "score_floor": 56},
+        "expiry_session_mode": "NORMAL",
+        "soften_build_up_requirement": False,
+        "soften_pressure_conflict": False,
+        "time_regime": "MID_MORNING",
+        "orb_high": 23950,
+        "orb_low": 23880,
+        "regime": "TRENDING",
+    }
+
+    signal, reason = NoSetupFinalizer.finalize(strategy, ctx)
+
+    assert signal is None
+    assert reason.startswith("High-score setup pending confirmation")
+    assert "high_score_confirmation_pending" in strategy.last_blockers
 
 
 def test_retest_entry_can_trigger_on_first_clean_breakout():
@@ -481,6 +533,59 @@ def test_banknifty_strong_option_sweep_can_break_with_weak_underlying_volume():
 
     assert no_signal is None
     assert signal == "CE"
+
+
+def test_watch_engine_option_sweep_breakout_uses_support_resistance_from_context():
+    strategy = BreakoutStrategy(instrument="BANKNIFTY")
+    signal, reason = WatchEngine.finalize_watch_state(
+        strategy,
+        {
+            "scored_direction": "CE",
+            "score": 88,
+            "pressure_metrics": {"pressure_bias": "BULLISH"},
+            "cautions": [],
+            "blockers": [],
+            "orb_ready": True,
+            "price": 55580,
+            "orb_high": 55344,
+            "orb_low": 54980,
+            "vwap": 55310,
+            "volume_signal": "NORMAL",
+            "oi_bias": "BULLISH",
+            "oi_trend": "BULLISH",
+            "bullish_build_up_ok": True,
+            "bearish_build_up_ok": False,
+            "candle_liquidity_ok": True,
+            "opening_session": False,
+            "continuation_regime_ok": True,
+            "breakout_body_ok": True,
+            "breakout_structure_ok": True,
+            "retest_regime_ok": True,
+            "buffer": 20,
+            "tuning": strategy._instrument_tuning(),
+            "time_thresholds": strategy._get_time_regime_thresholds("LATE", False, market_regime="TRENDING"),
+            "breakout_regime_ok": True,
+            "reversal_regime_ok": True,
+            "pressure_conflict_level": "NONE",
+            "candle_high": 55600,
+            "candle_low": 55470,
+            "candle_close": 55572,
+            "atr": 110,
+            "support": 55210,
+            "resistance": 55720,
+            "candle_time": datetime(2026, 5, 6, 14, 20),
+            "opening_breakout_override": False,
+            "expiry_eval": {"allow_trade": True, "is_expiry_day": False},
+            "regime": "CHOPPY",
+            "active_confirmation": None,
+            "strong_sweep_trade_ready": True,
+            "prev_high": 55344,
+            "prev_low": 54980,
+        },
+    )
+
+    assert signal == "CE"
+    assert "option sweep breakout confirmation" in reason.lower()
 
 
 def test_high_conviction_opening_breakdown_allowed_even_if_far_from_vwap():

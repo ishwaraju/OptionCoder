@@ -3,22 +3,23 @@
 from shared.utils.option_greeks import format_greek_summary
 
 
-def start_trade_monitor(service, signal, candle_5m, price, balanced_pro, selected_strike):
+def start_trade_monitor(service, signal, candle_5m, price, balanced_pro, selected_strike, entry_time=None):
     """Start 1-minute manual trade monitor after a signal."""
+    monitor_entry_time = entry_time or candle_5m.get("close_time") or candle_5m["time"]
     option_contract = service._get_option_contract_snapshot(
         selected_strike,
         signal,
-        before_ts=candle_5m.get("close_time") or candle_5m["time"],
+        before_ts=monitor_entry_time,
     )
     option_contract = service._greek_enriched_option_contract(
         option_contract,
         signal,
         price,
-        before_ts=candle_5m.get("close_time") or candle_5m["time"],
+        before_ts=monitor_entry_time,
     )
     reference_contract = service._get_atm_reference_option_contract(
         signal=signal,
-        before_ts=candle_5m.get("close_time") or candle_5m["time"],
+        before_ts=monitor_entry_time,
     )
     service._current_risk_option_contract = option_contract
     service._current_risk_reference_contract = reference_contract
@@ -38,16 +39,16 @@ def start_trade_monitor(service, signal, candle_5m, price, balanced_pro, selecte
     first_target_option_price = round(option_entry_price * (1 + target_pct / 100.0), 2) if option_entry_price else None
     pressure_summary = (balanced_pro or {}).get("pressure_summary") or {}
     entry_participation = ((getattr(service.strategy, "last_participation_metrics", None) or {}).get(signal) or {})
-    signal_key = service._build_signal_key(candle_5m["time"], service.instrument, signal, selected_strike)
+    signal_key = service._build_signal_key(monitor_entry_time, service.instrument, signal, selected_strike)
     service.active_trade_monitor = {
         "signal": signal,
         "signal_key": signal_key,
-        "signal_ts": candle_5m["time"],
+        "signal_ts": monitor_entry_time,
         "signal_type": (balanced_pro or {}).get("setup"),
         "signal_grade": getattr(service.strategy, "last_signal_grade", None),
         "entry_confidence": getattr(service.strategy, "last_confidence", None),
         "entry_score": getattr(service.strategy, "last_entry_score", None),
-        "entry_time": candle_5m["time"],
+        "entry_time": monitor_entry_time,
         "entry_price": option_entry_price if option_entry_price is not None else price,
         "entry_underlying_price": price,
         "invalidate_underlying_price": (service.strategy.last_entry_plan or {}).get("invalidate_price"),

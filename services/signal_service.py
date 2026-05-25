@@ -13,6 +13,7 @@ import sys
 import os
 import argparse
 import threading
+import traceback
 from collections import deque
 from datetime import timedelta, time, datetime
 
@@ -240,7 +241,7 @@ class SignalService:
     def _handle_runtime_gap(self, gap_event):
         return RuntimeGapManager.handle_runtime_gap(self, gap_event)
 
-    def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike):
+    def _start_trade_monitor(self, signal, candle_5m, price, balanced_pro, selected_strike, entry_time=None):
         return TradeMonitorStateManager.start_trade_monitor(
             self,
             signal,
@@ -248,6 +249,7 @@ class SignalService:
             price,
             balanced_pro,
             selected_strike,
+            entry_time=entry_time,
         )
 
     @staticmethod
@@ -641,6 +643,79 @@ class SignalService:
 
         return ". ".join(bits[:2]) if bits else None
 
+    def _classify_action_trade_type(self, setup_type=None, high_expectancy_profile=None, premium_guard=None):
+        setup_type = (setup_type or getattr(self.strategy, "last_signal_type", None) or "").upper()
+        profile = high_expectancy_profile or {}
+        quality_tag = (profile.get("quality_tag") or "").upper()
+        signal_family = (profile.get("signal_family") or "").upper()
+        premium_guard = premium_guard or {}
+        momentum = premium_guard.get("premium_momentum_pct")
+        likely_runner = bool(profile.get("likely_runner"))
+
+        if quality_tag == "LQ" or signal_family == "LATE_EXTENSION":
+            return "LATE CHASE - AVOID"
+        if likely_runner or (momentum is not None and float(momentum) >= 2.5 and setup_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "CONTINUATION"}):
+            return "RUNNER CANDIDATE"
+        if setup_type in {"BREAKOUT_CONFIRM", "RETEST", "CONTINUATION", "AGGRESSIVE_CONTINUATION"}:
+            return "CLEAN CONTINUATION"
+        if setup_type in {"REVERSAL", "TRAP_REVERSAL"}:
+            return "SCALP"
+        return "SCALP"
+
+    @staticmethod
+    def _action_exit_if_line(signal, trigger_price=None, invalidate_price=None, premium_sl=None):
+        signal = (signal or "").upper()
+        if signal not in {"CE", "PE"}:
+            return None
+        level = invalidate_price if invalidate_price is not None else trigger_price
+        side = "below" if signal == "CE" else "above"
+        bits = []
+        if level is not None:
+            bits.append(f"Exit if next 1m closes {side} {round(float(level), 2)}")
+        if premium_sl is not None:
+            bits.append(f"or premium loses {round(float(premium_sl), 2)}")
+        return " ".join(bits) if bits else None
+
+    def _evaluate_1m_execution_gate(self, signal, trigger_price=None, signal_entry_time=None):
+        if not bool(getattr(Config, "REQUIRE_1M_EXECUTION_FOR_ACTION", True)):
+            return True, "1m execution gate disabled", None
+        if signal not in {"CE", "PE"}:
+            return True, "No option direction", None
+        recent_1m = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=3)
+        if not recent_1m:
+            return False, "1m execution data unavailable", None
+        latest_1m = recent_1m[-1]
+        latest_time = latest_1m.get("time")
+        reference_time = signal_entry_time or latest_time
+        if latest_time and reference_time:
+            reference_time_cmp, latest_time_cmp = self._coerce_comparable_datetimes(reference_time, latest_time)
+            age_seconds = abs((latest_time_cmp - reference_time_cmp).total_seconds())
+            max_age = int(getattr(Config, "ONE_MIN_EXECUTION_MAX_AGE_SECONDS", 120) or 120)
+            if age_seconds > max_age:
+                return False, f"1m execution candle stale ({int(age_seconds)}s old)", latest_1m
+
+        close_price = float(latest_1m.get("close") or 0.0)
+        open_price = float(latest_1m.get("open") or close_price)
+        high_price = float(latest_1m.get("high") or close_price)
+        low_price = float(latest_1m.get("low") or close_price)
+        candle_range = max(high_price - low_price, 0.01)
+        body = abs(close_price - open_price)
+        min_body = float(getattr(Config, "ENTRY_TRIGGER_MIN_BODY", 5) or 5)
+        body_ok = body >= min(min_body, max(candle_range * 0.35, 1.0))
+        if signal == "CE":
+            trigger_ok = trigger_price is None or close_price >= float(trigger_price)
+            direction_ok = close_price >= open_price
+            side_text = "above"
+        else:
+            trigger_ok = trigger_price is None or close_price <= float(trigger_price)
+            direction_ok = close_price <= open_price
+            side_text = "below"
+        if not trigger_ok:
+            return False, f"1m close trigger ke {side_text} confirm nahi hua", latest_1m
+        if not direction_ok or not body_ok:
+            return False, "1m execution candle decisive nahi hai", latest_1m
+        return True, "1m execution confirmed", latest_1m
+
     def _optimized_spread_short_strike(self, signal, long_strike, balanced_pro=None, risk_profile=None):
         return OptionSignalGuard.optimized_spread_short_strike(self, signal, long_strike, balanced_pro, risk_profile)
 
@@ -771,6 +846,8 @@ class SignalService:
         if not confirmed:
             sweep_ctx = getattr(self, "option_sweep_context", None) or {}
             setup_type = (getattr(self.strategy, "last_signal_type", None) or "NONE").upper()
+            futures_acceptance = getattr(self.strategy, "last_futures_acceptance", None) or {}
+            initiative_strength_score = float(getattr(self.strategy, "last_initiative_strength_score", 0) or 0)
             sweep_micro_override = (
                 sweep_ctx.get("direction") == signal
                 and sweep_ctx.get("quality") == "STRONG"
@@ -786,6 +863,33 @@ class SignalService:
                 override_metrics["override"] = "option_sweep_microstructure"
                 override_metrics["base_reason"] = oi_reason
                 return True, "Option sweep microstructure override", override_metrics, None
+            price_action_micro_override = (
+                oi_reason in {"Insufficient OI data", "Microstructure data unavailable"}
+                and setup_type in {
+                    "BREAKOUT",
+                    "BREAKOUT_CONFIRM",
+                    "CONTINUATION",
+                    "AGGRESSIVE_CONTINUATION",
+                    "RETEST",
+                    "OPENING_DRIVE",
+                    "REVERSAL",
+                    "TRAP_REVERSAL",
+                }
+                and getattr(self.strategy, "last_pressure_conflict_level", "NONE") in {"NONE", "MILD"}
+                and bool(futures_acceptance.get("accepted"))
+                and float(futures_acceptance.get("score") or 0) >= 62
+                and initiative_strength_score >= 32
+                and float(getattr(self.strategy, "last_entry_score", 0) or 0) >= (
+                    92 if setup_type in {"BREAKOUT", "BREAKOUT_CONFIRM", "CONTINUATION", "AGGRESSIVE_CONTINUATION", "RETEST", "OPENING_DRIVE"} else 88
+                )
+            )
+            if price_action_micro_override:
+                override_metrics = dict(metrics or {})
+                override_metrics["override"] = "price_action_microstructure"
+                override_metrics["base_reason"] = oi_reason
+                override_metrics["futures_acceptance_score"] = float(futures_acceptance.get("score") or 0)
+                override_metrics["initiative_strength_score"] = initiative_strength_score
+                return True, "Price-action microstructure override", override_metrics, None
             return False, oi_reason, metrics, None
 
         return True, oi_reason, metrics, None
@@ -1724,6 +1828,98 @@ class SignalService:
             return None
         return calculate_trend_from_candles(grouped, lookback=min(5, len(grouped)))
 
+    def _institutional_confluence_gate(
+        self,
+        signal,
+        trend_15m,
+        pressure_metrics,
+        oi_ladder_data,
+        participation_metrics,
+        option_sweep_context=None,
+    ):
+        if signal not in {"CE", "PE"}:
+            return True, "no_signal"
+
+        expected_bias = "BULLISH" if signal == "CE" else "BEARISH"
+        setup = (getattr(self.strategy, "last_signal_type", None) or "NONE").upper()
+        grade = (getattr(self.strategy, "last_signal_grade", None) or "SKIP").upper()
+        confidence = (getattr(self.strategy, "last_confidence", None) or "LOW").upper()
+        context_score = float(getattr(self.strategy, "last_context_score", 0) or 0)
+        entry_score = float(getattr(self.strategy, "last_entry_score", 0) or 0)
+        pressure_bias = (pressure_metrics or {}).get("pressure_bias")
+        pressure_bias = (pressure_bias or "NEUTRAL").upper()
+        flow_edge = float((pressure_metrics or {}).get("smoothed_flow_edge") or (pressure_metrics or {}).get("flow_edge") or 0.0)
+        oi_trend = ((oi_ladder_data or {}).get("trend") or "NEUTRAL").upper()
+        build_up = ((oi_ladder_data or {}).get("build_up") or "NONE").upper()
+        wall_alert = ((oi_ladder_data or {}).get("wall_break_alert") or "NONE").upper()
+        directional = (participation_metrics or {}).get(signal) or {}
+        participation_quality = (directional.get("quality") or "WEAK").upper()
+        participation_delta = float(directional.get("same_side_weighted_delta") or 0.0)
+        participation_breadth = float(directional.get("same_side_weighted_breadth") or 0.0)
+        opposite_delta = float(directional.get("opposite_side_weighted_delta") or 0.0)
+        sweep_quality = ((option_sweep_context or {}).get("quality") or "").upper()
+
+        trend_text = (trend_15m or "UNKNOWN").upper()
+        aligned_trend = (
+            trend_text in {"BULLISH", "STRONG_BULLISH", "UP"}
+            if signal == "CE"
+            else trend_text in {"BEARISH", "STRONG_BEARISH", "DOWN"}
+        )
+        neutral_trend = trend_text in {"NEUTRAL", "UNKNOWN", "INSUFFICIENT_DATA", "NONE"}
+        reversal_setup = setup in {"REVERSAL", "TRAP_REVERSAL"}
+        if not aligned_trend and not (neutral_trend and reversal_setup):
+            return False, f"15m context not aligned ({trend_text} vs {signal})"
+
+        if context_score < float(getattr(Config, "INSTITUTIONAL_MIN_CONTEXT_SCORE", 88.0) or 88.0):
+            return False, f"context score low ({context_score:.0f})"
+        if entry_score < float(getattr(Config, "INSTITUTIONAL_MIN_ENTRY_SCORE", 84.0) or 84.0):
+            return False, f"entry score low ({entry_score:.0f})"
+        if grade not in {"A+", "A", "B"} or confidence not in {"MEDIUM", "HIGH"}:
+            return False, f"setup quality weak ({grade}/{confidence})"
+
+        if pressure_bias != expected_bias:
+            return False, f"pressure not aligned ({pressure_bias})"
+        if flow_edge < float(getattr(Config, "INSTITUTIONAL_MIN_FLOW_EDGE", 8.0) or 8.0):
+            return False, f"flow edge weak ({flow_edge:.1f})"
+        if oi_trend != expected_bias:
+            return False, f"OI trend not aligned ({oi_trend})"
+
+        supportive_build_ups = (
+            {"LONG_BUILDUP", "SHORT_COVERING"}
+            if signal == "CE"
+            else {"SHORT_BUILDUP", "LONG_UNWINDING"}
+        )
+        squeeze_ok = (
+            build_up == "NO_CLEAR_SIGNAL"
+            and sweep_quality == "STRONG"
+            and pressure_bias == expected_bias
+            and oi_trend == expected_bias
+            and wall_alert in {"RESISTANCE_BREAK_RISK", "SUPPORT_BREAK_RISK"}
+        )
+        if build_up not in supportive_build_ups and not squeeze_ok:
+            return False, f"build-up not supportive ({build_up})"
+
+        wall_ok = (
+            wall_alert in {"RESISTANCE_BREAK_RISK", "NONE", ""}
+            if signal == "CE"
+            else wall_alert in {"SUPPORT_BREAK_RISK", "NONE", ""}
+        )
+        if not wall_ok:
+            return False, f"OI wall against trade ({wall_alert})"
+
+        participation_ok = (
+            participation_quality in {"STRONG", "MODERATE"}
+            and participation_delta > max(opposite_delta * 0.85, 0.0)
+            and participation_breadth >= 1.8
+        )
+        if not participation_ok and sweep_quality != "STRONG":
+            return False, "option participation not broad enough"
+
+        return True, (
+            f"institutional confluence ok | 15m={trend_text} | pressure={pressure_bias} "
+            f"| oi={oi_trend}/{build_up} | participation={participation_quality}"
+        )
+
     def _restore_indicator_state(self):
         """Restore indicator state from database"""
         if not self.db_writer.enabled:
@@ -2485,6 +2681,7 @@ class SignalService:
                 entry_window_end,
             )
             self.db_writer.insert_signal_issued(row)
+            self.last_signal_time = time_module.time()
             return True
         except Exception as e:
             self._log(f"DB save error (signal issued): {e}")
@@ -2860,6 +3057,27 @@ class SignalService:
             return
 
         now_ts = time_module.time()
+        post_signal_suppress_seconds = int(getattr(Config, "POST_SIGNAL_WATCH_SUPPRESS_SECONDS", 0) or 0)
+        if (
+            post_signal_suppress_seconds > 0
+            and getattr(self, "last_signal_time", 0)
+            and now_ts - self.last_signal_time < post_signal_suppress_seconds
+        ):
+            return
+
+        if self._aggressive_watch_is_eligible(watch_payload):
+            watch_payload = dict(watch_payload)
+            watch_payload["aggressive_watch"] = True
+            watch_payload["setup_bucket"] = "AGGRESSIVE_WATCH"
+            direction = (watch_payload.get("direction") or "").upper()
+            watch_payload["decision_label"] = f"AGGRESSIVE_WATCH_{direction}"
+            watch_payload["action_text"] = (
+                "Fast setup hai, safe ACTION nahi. Entry sirf 1m follow-through aur tight risk ke saath lena."
+            )
+            watch_payload["risk_note"] = (
+                "Aggressive watch: half size, fast SL, aur 6-8 minute me follow-through nahi aaye to skip/exit."
+            )
+
         state = self.watch_alert_state.get(watch_payload["key"])
         if state and now_ts - state["time"] < 30 * 60:
             score_improved = (watch_payload.get("score") or 0) >= state.get("score", 0) + 5
@@ -2895,6 +3113,46 @@ class SignalService:
             "blocker_count": len(watch_payload.get("blockers") or []),
         }
 
+    @staticmethod
+    def _aggressive_watch_is_eligible(watch_payload):
+        score = float(watch_payload.get("score") or 0)
+        entry_score = float(watch_payload.get("entry_score") or 0)
+        confidence = (watch_payload.get("confidence") or "LOW").upper()
+        signal_grade = (watch_payload.get("signal_grade") or "SKIP").upper()
+        watch_bucket = (watch_payload.get("watch_bucket") or "").upper()
+        setup = (watch_payload.get("setup") or "").upper()
+        blockers = set(watch_payload.get("blockers") or [])
+        cautions = set(watch_payload.get("cautions") or [])
+        pressure_conflict_level = (watch_payload.get("pressure_conflict_level") or "NONE").upper()
+        reason = (watch_payload.get("reason") or "").lower()
+
+        premium_ok = bool(watch_payload.get("premium_confirmed")) or "premium_guard=premium_ok" in reason
+        micro_ok = (
+            "micro yes" in reason
+            or "microstructure=" in reason
+            or "option sweep microstructure override" in reason
+        )
+        hard_blockers = {
+            "time_filter",
+            "pre_expiry_requires_medium_plus_confidence",
+            "sensex_late_day_requires_elite_score",
+        }
+
+        return (
+            watch_bucket == "WATCH_CONFIRMATION_PENDING"
+            and setup in {"BREAKOUT_CONFIRM", "BREAKOUT", "RETEST", "CONTINUATION", "REVERSAL", "TRAP_REVERSAL"}
+            and signal_grade in {"A", "A+", "B"}
+            and confidence in {"MEDIUM", "HIGH"}
+            and score >= 90
+            and entry_score >= 88
+            and premium_ok
+            and micro_ok
+            and pressure_conflict_level in {"NONE", "MILD", ""}
+            and not hard_blockers.intersection(blockers)
+            and "participation_baseline_weak" not in cautions
+            and "participation_weak" not in cautions
+        )
+
     def _watch_alert_is_eligible(self, watch_payload):
         score = float(watch_payload.get("score") or 0)
         entry_score = float(watch_payload.get("entry_score") or 0)
@@ -2927,6 +3185,8 @@ class SignalService:
             return watch_bucket == "WATCH_CONFIRMATION_PENDING"
 
         if watch_bucket == "WATCH_CONFIRMATION_PENDING":
+            if self._aggressive_watch_is_eligible(watch_payload):
+                return True
             if "participation_baseline_weak" in cautions:
                 return False
             return (
@@ -2959,6 +3219,13 @@ class SignalService:
         latest_1m = recent_1m_candles[-1]
         recent_5m = self.db_reader.fetch_recent_candles_5m(self.instrument, limit=9)
         oi_ladder_data = self._build_oi_ladder_context(float(latest_1m.get("close") or 0.0))
+        pressure_metrics = None
+        if getattr(self, "pressure_analyzer", None) and getattr(self, "option_data", None):
+            pressure_metrics = self.pressure_analyzer.analyze(
+                self.option_data,
+                underlying_price=float(latest_1m.get("close") or 0.0),
+                oi_ladder_data=oi_ladder_data,
+            )
         snapshot_groups = self.db_reader.fetch_recent_option_band_snapshots(
             self.instrument,
             before_ts=latest_1m["time"],
@@ -3036,8 +3303,197 @@ class SignalService:
             "pressure_read": f"{structure.get('summary') or ''} | {spike.get('summary')}".strip(" |"),
             "flip_context": None,
             "key": (self.instrument, direction, "OPTION_SPIKE_1M"),
-            "spike_context": spike,
+            "spike_context": {
+                **spike,
+                "oi_ladder_data": oi_ladder_data,
+                "pressure_metrics": pressure_metrics,
+            },
         }
+
+    def _fast_spike_action_ready(self, watch_payload):
+        if not bool(getattr(Config, "ENABLE_FAST_SPIKE_ACTION", True)):
+            return False
+        spike = watch_payload.get("spike_context") or {}
+        direction = (watch_payload.get("direction") or "").upper()
+        structure = spike.get("structure") or {}
+        oi_ladder_data = spike.get("oi_ladder_data") or {}
+        pressure_metrics = spike.get("pressure_metrics") or {}
+        min_breadth = int(getattr(Config, "FAST_SPIKE_ACTION_MIN_BREADTH", 8) or 8)
+        min_flow_edge = float(getattr(Config, "FAST_SPIKE_ACTION_MIN_FLOW_EDGE", 10.0) or 10.0)
+        expected_bias = "BULLISH" if direction == "CE" else "BEARISH"
+        supportive_build_ups = (
+            {"LONG_BUILDUP", "SHORT_COVERING"}
+            if direction == "CE"
+            else {"SHORT_BUILDUP", "LONG_UNWINDING"}
+        )
+        pressure_bias = (pressure_metrics.get("pressure_bias") or "").upper()
+        flow_edge = float(pressure_metrics.get("smoothed_flow_edge") or pressure_metrics.get("flow_edge") or 0.0)
+        oi_trend = (oi_ladder_data.get("trend") or "").upper()
+        build_up = (oi_ladder_data.get("build_up") or "").upper()
+        wall_alert = (oi_ladder_data.get("wall_break_alert") or "").upper()
+        sweep_quality = (spike.get("quality") or "").upper()
+        wall_ok = (
+            wall_alert in {"RESISTANCE_BREAK_RISK", "NONE", ""}
+            if direction == "CE"
+            else wall_alert in {"SUPPORT_BREAK_RISK", "NONE", ""}
+        )
+        squeeze_ok = (
+            build_up == "NO_CLEAR_SIGNAL"
+            and sweep_quality == "STRONG"
+            and pressure_bias == expected_bias
+            and oi_trend == expected_bias
+            and wall_alert in {"RESISTANCE_BREAK_RISK", "SUPPORT_BREAK_RISK"}
+        )
+        return (
+            direction in {"CE", "PE"}
+            and
+            sweep_quality == "STRONG"
+            and int(spike.get("price_breadth") or 0) >= min_breadth
+            and int(spike.get("volume_breadth") or 0) >= min_breadth
+            and (structure.get("alignment") or "").upper() == "SUPPORTIVE"
+            and bool(structure.get("five_min_ready"))
+            and pressure_bias == expected_bias
+            and flow_edge >= min_flow_edge
+            and oi_trend == expected_bias
+            and (build_up in supportive_build_ups or squeeze_ok)
+            and wall_ok
+            and (watch_payload.get("signal_grade") or "").upper() in {"A", "A+"}
+            and (watch_payload.get("confidence") or "").upper() == "HIGH"
+        )
+
+    def _fire_fast_spike_action(self, watch_payload, latest_1m, latest_5m):
+        signal = watch_payload.get("direction")
+        if signal not in {"CE", "PE"}:
+            return False
+
+        price = float(latest_1m.get("close") or watch_payload.get("price") or 0.0)
+        strike, strike_reason = self.strike_selector.select_strike_with_reason(
+            price=price,
+            signal=signal,
+            volume_signal="SPIKE",
+            strategy_score=watch_payload.get("score"),
+            pressure_metrics=None,
+            candle_time=latest_1m["time"],
+        )
+        option_contract = self._get_option_contract_snapshot(strike, signal, before_ts=latest_1m["time"])
+        option_contract = self._greek_enriched_option_contract(
+            option_contract,
+            signal,
+            price,
+            before_ts=latest_1m["time"],
+        )
+        premium_guard = self._evaluate_premium_quality_guard(
+            signal=signal,
+            selected_option_contract=option_contract,
+            candle_time=latest_1m["time"],
+        )
+        if premium_guard and premium_guard.get("label") not in {"PREMIUM_OK"}:
+            self._safe_save_entry_decision_1m(
+                ts=latest_1m["time"],
+                pending=self.pending_entry_watch or watch_payload,
+                decision="INVALIDATED",
+                latest_1m=latest_1m,
+                option_contract=option_contract,
+                strike=strike,
+                reason=f"Fast spike action blocked: {premium_guard.get('label')} ({premium_guard.get('reason')})",
+            )
+            return False
+
+        option_price = (option_contract or {}).get("ltp")
+        if option_price is None:
+            return False
+
+        stop_loss_option_price = round(float(option_price) * (1 - float(watch_payload.get("option_stop_loss_pct") or 18) / 100.0), 2)
+        first_target_option_price = round(float(option_price) * (1 + float(watch_payload.get("option_target_pct") or 28) / 100.0), 2)
+        balanced_pro = {
+            "quality": "A",
+            "setup": watch_payload.get("setup") or "BREAKOUT_CONFIRM",
+            "tradability": "ACTION",
+            "time_regime": "FAST_1M_SPIKE",
+        }
+        self.strategy.last_entry_plan = {
+            "entry_above": watch_payload.get("trigger_price") if signal == "CE" else None,
+            "entry_below": watch_payload.get("trigger_price") if signal == "PE" else None,
+            "invalidate_price": watch_payload.get("invalidate_price"),
+            "first_target_price": watch_payload.get("first_target_price"),
+        }
+        entry_notification = {
+            "instrument": self.instrument,
+            "signal": signal,
+            "strike": strike,
+            "confidence": watch_payload.get("confidence"),
+            "confidence_summary": watch_payload.get("confidence_summary"),
+            "signal_type": watch_payload.get("setup"),
+            "signal_grade": watch_payload.get("signal_grade"),
+            "price": round(float(option_price), 2),
+            "underlying_price": round(price, 2),
+            "trigger_price": watch_payload.get("trigger_price"),
+            "invalidate_price": watch_payload.get("invalidate_price"),
+            "first_target_price": watch_payload.get("first_target_price"),
+            "stop_loss_option_price": stop_loss_option_price,
+            "first_target_option_price": first_target_option_price,
+            "option_stop_loss_pct": watch_payload.get("option_stop_loss_pct"),
+            "option_target_pct": watch_payload.get("option_target_pct"),
+            "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
+            "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
+            "entry_spread": option_contract.get("spread") if option_contract else None,
+            "execution_model": "15m context | 5m setup | 1m fast action",
+            "trade_type": self._classify_action_trade_type(
+                setup_type=watch_payload.get("setup") or "BREAKOUT_CONFIRM",
+                high_expectancy_profile={"quality_tag": "TQ_CLEAN", "signal_family": "IMPULSE_BREAKOUT"},
+                premium_guard=premium_guard,
+            ),
+            "exit_if": self._action_exit_if_line(
+                signal,
+                trigger_price=watch_payload.get("trigger_price"),
+                invalidate_price=watch_payload.get("invalidate_price"),
+                premium_sl=stop_loss_option_price,
+            ),
+            "pressure_read": watch_payload.get("pressure_read"),
+            "context": watch_payload.get("context"),
+            "risk_note": "FAST 1m action: size chhota rakho, premium chase mat karo, aur reversal pe exit fast.",
+            "greek_summary": format_greek_summary(option_contract),
+            "decision_label": f"CONFIRMED_{signal}_ENTRY",
+            "reason": f"FAST_1M_SPIKE_ACTION | {watch_payload.get('reason')}",
+        }
+        self._run_async_notification(self.notifier.send_entry_trigger_notification, entry_notification)
+        self._safe_save_entry_decision_1m(
+            ts=latest_1m["time"],
+            pending=self.pending_entry_watch or watch_payload,
+            decision="TRIGGERED",
+            latest_1m=latest_1m,
+            evaluation={
+                "time": latest_1m["time"],
+                "price": price,
+                "status": "TRIGGERED",
+                "reason": "FAST_1M_SPIKE_ACTION",
+                "micro_reason": watch_payload.get("reason"),
+            },
+            option_contract=option_contract,
+            strike=strike,
+            reason=f"FAST_1M_SPIKE_ACTION | {watch_payload.get('reason')}",
+        )
+        self._safe_save_signal_issued(
+            ts=latest_1m["time"],
+            signal=signal,
+            price=option_price,
+            strike=strike,
+            reason=f"FAST_1M_SPIKE_ACTION | {watch_payload.get('reason')}",
+            balanced_pro=balanced_pro,
+            oi_mode="FAST_1M_SPIKE",
+            telegram_sent=Config.ENABLE_ALERTS,
+            monitor_started=True,
+            entry_window_end=latest_1m["time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES),
+            underlying_price=price,
+            option_contract=option_contract,
+            strike_reason=strike_reason,
+            option_data_source=self.option_data_source,
+        )
+        self._clear_pending_entry_watch()
+        self._clear_pending_spike_watch()
+        self._start_trade_monitor(signal, latest_5m, price, balanced_pro, strike, entry_time=latest_1m["time"])
+        self.signals_generated += 1
+        return True
 
     def _maybe_prepare_option_spike_watch(self):
         recent_1m_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=6)
@@ -3089,6 +3545,9 @@ class SignalService:
             "spike_origin": True,
             "spike_context": watch_payload.get("spike_context"),
         }
+        if self._fast_spike_action_ready(watch_payload):
+            if self._fire_fast_spike_action(watch_payload, latest_1m, recent_5m[-1] if recent_5m else latest_1m):
+                return
         self._maybe_send_watch_alert(watch_payload)
 
     def _process_5m_candle(self, candle_5m):
@@ -3218,6 +3677,26 @@ class SignalService:
         if signal and feed_health["label"] == "REJECT":
             signal = None
             reason = f"Raw data health rejected ({feed_health['summary']})"
+
+        institutional_confluence_reason = None
+        if signal:
+            institutional_ok, institutional_reason = self._institutional_confluence_gate(
+                signal=signal,
+                trend_15m=trend_15m,
+                pressure_metrics=pressure_metrics,
+                oi_ladder_data=oi_ladder_data,
+                participation_metrics=participation_metrics,
+                option_sweep_context=option_sweep_context,
+            )
+            if institutional_ok:
+                institutional_confluence_reason = institutional_reason
+                reason = f"{reason} | {institutional_reason}"
+            else:
+                signal = None
+                reason = f"Institutional confluence gate blocked ({institutional_reason})"
+                self.strategy.last_blockers = list(
+                    dict.fromkeys(list(self.strategy.last_blockers or []) + ["institutional_confluence_reject"])
+                )
         
         candidate_signal = signal
         candidate_reason = reason
@@ -3298,6 +3777,11 @@ class SignalService:
                 ml_features = None
         
         signal, reason = self._apply_signal_cooldowns(signal, reason)
+        if signal and self.active_trade_monitor:
+            active_signal = self.active_trade_monitor.get("signal")
+            active_entry_time = self.active_trade_monitor.get("entry_time")
+            signal = None
+            reason = f"Active trade monitor already running ({active_signal} from {active_entry_time}); skipping duplicate late 5m action"
         balanced_pro = self._build_balanced_pro_summary(
             base_bias,
             candidate_signal,
@@ -3487,6 +3971,43 @@ class SignalService:
                             f"({expectancy_profile.get('quality_tag')} / {expectancy_profile.get('entry_phase')} | "
                             f"{'; '.join(expectancy_profile.get('reasons') or ['not_high_expectancy'])})"
                         )
+                if signal:
+                    trigger_price = (
+                        self.strategy.last_entry_plan.get("entry_above")
+                        if signal == "CE"
+                        else self.strategy.last_entry_plan.get("entry_below")
+                    )
+                    execution_ok, execution_reason, execution_1m = self._evaluate_1m_execution_gate(
+                        signal=signal,
+                        trigger_price=trigger_price,
+                        signal_entry_time=(selected_option_contract or {}).get("ts") or candle_5m.get("close_time") or candle_5m["time"],
+                    )
+                    if not execution_ok:
+                        candidate_signal = signal
+                        candidate_reason = f"{reason} | 1m_execution_pending={execution_reason}"
+                        balanced_pro["tradability"] = "WATCH"
+                        balanced_pro["decision_state"] = "WATCH"
+                        balanced_pro["watch_bucket"] = "WAIT_1M_EXECUTION"
+                        self._safe_save_entry_decision_1m(
+                            ts=(execution_1m or {}).get("time") or candle_5m["time"],
+                            pending={
+                                "direction": signal,
+                                "score": self.strategy.last_score,
+                                "signal_type": self.strategy.last_signal_type,
+                                "signal_grade": self.strategy.last_signal_grade,
+                                "confidence": self.strategy.last_confidence,
+                                "trigger_price": trigger_price,
+                                "invalidate_price": self.strategy.last_entry_plan.get("invalidate_price"),
+                                "first_target_price": self.strategy.last_entry_plan.get("first_target_price"),
+                            },
+                            decision="WAIT",
+                            latest_1m=execution_1m or {"time": candle_5m["time"]},
+                            option_contract=selected_option_contract,
+                            strike=selected_strike,
+                            reason=f"5m setup held for 1m execution: {execution_reason}",
+                        )
+                        signal = None
+                        reason = f"1m execution pending ({execution_reason})"
 
         if option_candidates:
             candidate_rows = []
@@ -3624,11 +4145,16 @@ class SignalService:
 
         # Send notification if signal
         if signal:
+            signal_entry_time = (
+                (selected_option_contract or {}).get("ts")
+                or candle_5m.get("close_time")
+                or candle_5m["time"]
+            )
             selected_option_contract = self._greek_enriched_option_contract(
                 selected_option_contract,
                 signal,
                 price,
-                before_ts=candle_5m.get("close_time") or candle_5m["time"],
+                before_ts=signal_entry_time,
             )
             option_signal_price = (selected_option_contract or {}).get("ltp") if selected_option_contract else price
             spot_trigger_price = self.strategy.last_entry_plan.get("entry_above") if signal == "CE" else self.strategy.last_entry_plan.get("entry_below")
@@ -3639,12 +4165,12 @@ class SignalService:
                 signal,
                 spot_invalidate_price,
                 spot_target_price,
-                before_ts=candle_5m.get("close_time") or candle_5m["time"],
+                before_ts=signal_entry_time,
             )
             self._current_risk_option_contract = selected_option_contract
             self._current_risk_reference_contract = self._get_atm_reference_option_contract(
                 signal=signal,
-                before_ts=candle_5m.get("close_time") or candle_5m["time"],
+                before_ts=signal_entry_time,
             )
             risk_profile = self._resolve_trade_risk_profile(
                 setup_type=self.strategy.last_signal_type,
@@ -3659,6 +4185,17 @@ class SignalService:
             print(f"Strike: {selected_strike} | Reason: {reason}")
             print(f"Price: {option_signal_price} | Spot: {price} | Time: {candle_5m['time']}")
             expectancy_profile = self.current_expectancy_profile or {}
+            trade_type = self._classify_action_trade_type(
+                setup_type=self.strategy.last_signal_type,
+                high_expectancy_profile=expectancy_profile,
+                premium_guard=premium_guard,
+            )
+            exit_if = self._action_exit_if_line(
+                signal,
+                trigger_price=spot_trigger_price,
+                invalidate_price=spot_invalidate_price,
+                premium_sl=projected_premium_sl,
+            )
             trade_notification = {
                 "instrument": self.instrument,
                 "signal": signal,
@@ -3701,6 +4238,8 @@ class SignalService:
                 "reason": enriched_reason,
                 "pressure_read": (balanced_pro.get("pressure_summary") or {}).get("summary"),
                 "oi_read": (oi_ladder_data or {}).get("oi_summary"),
+                "trend_15m": trend_15m,
+                "institutional_read": institutional_confluence_reason,
                 "greek_summary": format_greek_summary(selected_option_contract),
                 "quality_tag": expectancy_profile.get("quality_tag"),
                 "entry_phase": expectancy_profile.get("entry_phase"),
@@ -3710,6 +4249,8 @@ class SignalService:
                 "signal_family": expectancy_profile.get("signal_family"),
                 "session_map_phase": expectancy_profile.get("session_map_phase"),
                 "trade_thesis": self._build_trade_thesis(signal, balanced_pro=balanced_pro, premium_guard=premium_guard),
+                "trade_type": trade_type,
+                "exit_if": exit_if,
             }
             if self._suppress_live_actions:
                 self._log(
@@ -3720,7 +4261,7 @@ class SignalService:
                 self._run_async_notification(self.notifier.send_trade_notification, trade_notification)
 
                 signal_saved = self._safe_save_signal_issued(
-                    ts=candle_5m["time"],
+                    ts=signal_entry_time,
                     signal=signal,
                     price=option_signal_price,
                     strike=selected_strike,
@@ -3730,8 +4271,8 @@ class SignalService:
                     telegram_sent=Config.ENABLE_ALERTS,
                     monitor_started=True,
                     entry_window_end=(
-                        candle_5m["close_time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
-                        if candle_5m.get("close_time") else None
+                        signal_entry_time + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
+                        if signal_entry_time else None
                     ),
                     underlying_price=price,
                     option_contract=selected_option_contract,
@@ -3747,7 +4288,14 @@ class SignalService:
 
                 self._clear_pending_entry_watch()
                 self._clear_pending_spike_watch()
-                self._start_trade_monitor(signal, candle_5m, price, balanced_pro, selected_strike)
+                self._start_trade_monitor(
+                    signal,
+                    candle_5m,
+                    price,
+                    balanced_pro,
+                    selected_strike,
+                    entry_time=signal_entry_time,
+                )
                 self.signals_generated += 1
         else:
             watch_payload = self._build_manual_watch_payload(
@@ -3933,6 +4481,7 @@ class SignalService:
             print(f"\n[{self.time_utils.now_ist().strftime('%H:%M:%S')}] [Signal Service] Shutdown requested by user")
         except Exception as e:
             self._log(f"Unexpected error: {e}")
+            self._log(traceback.format_exc())
         finally:
             self.running = False
             self.watchdog.stop()
