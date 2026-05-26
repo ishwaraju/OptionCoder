@@ -8,6 +8,140 @@ from .premium_elasticity_engine import PremiumElasticityEngine
 
 class OptionSignalGuard:
     @staticmethod
+    def pro_trader_quality_check(
+        service,
+        *,
+        signal,
+        selected_option_contract=None,
+        premium_guard=None,
+        risk_profile=None,
+        elasticity=None,
+        entry_phase=None,
+    ):
+        """20-year option-trader style sanity check before converting setup to ACTION."""
+        signal = (signal or "").upper()
+        premium_guard = premium_guard or {}
+        risk_profile = risk_profile or {}
+        elasticity = elasticity or {}
+        option = selected_option_contract or {}
+        reasons = []
+        score = 100.0
+
+        ltp = option.get("ltp")
+        if ltp in {None, ""}:
+            ltp = premium_guard.get("current_ltp")
+        ltp = float(ltp) if ltp not in {None, ""} else None
+        spread_pct = premium_guard.get("spread_pct")
+        if spread_pct is None and selected_option_contract:
+            spread_pct = service._spread_percent(selected_option_contract)
+        spread_pct = float(spread_pct) if spread_pct not in {None, ""} else None
+        raw_distance = option.get("distance_from_atm")
+        distance = int(raw_distance) if raw_distance not in {None, ""} else None
+        theta = option.get("theta")
+        theta = abs(float(theta)) if theta not in {None, ""} else None
+        target_pct = risk_profile.get("target_pct") or risk_profile.get("target")
+        stop_pct = risk_profile.get("hard_premium_stop_pct") or risk_profile.get("hard_stop") or risk_profile.get("stop_loss_pct")
+        rr_ratio = None
+        if target_pct is not None and stop_pct not in {None, 0, "0"}:
+            rr_ratio = float(target_pct) / max(float(stop_pct), 0.01)
+
+        max_spread = float(getattr(Config, "PRO_TRADER_MAX_ACTION_SPREAD_PCT", 3.8) or 3.8)
+        min_premium = float(getattr(Config, "PRO_TRADER_MIN_PREMIUM", 25.0) or 25.0)
+        max_otm_distance = int(getattr(Config, "PRO_TRADER_MAX_OTM_DISTANCE", 2) or 2)
+        max_itm_distance = int(getattr(Config, "PRO_TRADER_MAX_ITM_DISTANCE", 5) or 5)
+        min_rr = float(getattr(Config, "PRO_TRADER_MIN_RR", 1.25) or 1.25)
+        max_theta_pct = float(getattr(Config, "PRO_TRADER_MAX_THETA_PCT", 8.0) or 8.0)
+
+        hard_reject = False
+        if ltp is None or ltp <= 0:
+            if selected_option_contract:
+                hard_reject = True
+                score -= 45
+                reasons.append("premium_missing")
+            else:
+                score -= 10
+                reasons.append("contract_snapshot_missing")
+        elif ltp < min_premium:
+            lottery_exception = (
+                premium_guard.get("volume_supporting")
+                and (premium_guard.get("premium_momentum_pct") is not None and float(premium_guard.get("premium_momentum_pct")) >= 2.5)
+                and (spread_pct is None or spread_pct <= 2.5)
+            )
+            if not lottery_exception:
+                score -= 30
+                reasons.append("cheap_lottery_premium")
+
+        if spread_pct is not None and spread_pct > max_spread:
+            score -= 35
+            reasons.append("execution_spread_wide")
+            if spread_pct >= max_spread + 2.0:
+                hard_reject = True
+
+        if signal == "CE":
+            otm_distance = max(distance or 0, 0)
+            itm_distance = max(-(distance or 0), 0)
+        else:
+            otm_distance = max(-(distance or 0), 0)
+            itm_distance = max(distance or 0, 0)
+        if distance is not None and otm_distance > max_otm_distance:
+            score -= 28
+            reasons.append("too_far_otm")
+            if otm_distance > max_otm_distance + 1:
+                hard_reject = True
+        if distance is not None and itm_distance > max_itm_distance:
+            score -= 12
+            reasons.append("too_deep_itm")
+
+        if rr_ratio is not None and rr_ratio < min_rr:
+            score -= 24
+            reasons.append("rr_not_worth_risk")
+
+        theta_pct = None
+        if theta is not None and ltp:
+            theta_pct = (theta / max(ltp, 1.0)) * 100.0
+            if theta_pct > max_theta_pct:
+                score -= 22
+                reasons.append("theta_drag_high")
+
+        if elasticity.get("dead_premium_risk"):
+            score -= 35
+            hard_reject = True
+            reasons.append("dead_premium_risk")
+        elif float(elasticity.get("score") or 100.0) < 58:
+            score -= 16
+            reasons.append("premium_elasticity_dull")
+
+        if (entry_phase or "").upper() == "LATE_CHASE_SIGNAL" and (rr_ratio is None or rr_ratio < 1.5):
+            score -= 25
+            reasons.append("late_chase_asymmetry_poor")
+
+        score = round(max(min(score, 100.0), 0.0), 2)
+        if hard_reject or score < 55:
+            label = "PRO_REJECT"
+        elif score < 75:
+            label = "PRO_WATCH"
+        else:
+            label = "PRO_PASS"
+        if not selected_option_contract and label == "PRO_REJECT":
+            label = "PRO_WATCH"
+        summary_bits = [label, f"score={score}"]
+        if rr_ratio is not None:
+            summary_bits.append(f"RR={rr_ratio:.2f}")
+        if spread_pct is not None:
+            summary_bits.append(f"spread={spread_pct:.2f}%")
+        if theta_pct is not None:
+            summary_bits.append(f"theta={theta_pct:.1f}%")
+        return {
+            "label": label,
+            "score": score,
+            "reasons": reasons,
+            "rr_ratio": rr_ratio,
+            "spread_pct": spread_pct,
+            "theta_pct": theta_pct,
+            "summary": " | ".join(summary_bits),
+        }
+
+    @staticmethod
     def classify_signal_family(service, signal, signal_type, entry_phase):
         signal = (signal or "").upper()
         signal_type = (signal_type or "").upper()
@@ -250,6 +384,15 @@ class OptionSignalGuard:
             futures_acceptance=futures_acceptance,
         )
         dead_premium_risk = bool(elasticity.get("dead_premium_risk"))
+        pro_check = OptionSignalGuard.pro_trader_quality_check(
+            service,
+            signal=signal,
+            selected_option_contract=selected_option_contract,
+            premium_guard=premium_guard,
+            risk_profile=risk_profile,
+            elasticity=elasticity,
+            entry_phase=entry_phase,
+        )
         small_size_price_led_entry = (
             strong_price_action_watch
             and signal_family == "IMPULSE_BREAKOUT"
@@ -297,6 +440,7 @@ class OptionSignalGuard:
                 "initiative_strength_score": initiative_strength_score,
                 "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
                 "elasticity": elasticity,
+                "pro_check": pro_check,
                 "reasons": reasons,
             }
 
@@ -320,6 +464,7 @@ class OptionSignalGuard:
                 "initiative_strength_score": initiative_strength_score,
                 "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
                 "elasticity": elasticity,
+                "pro_check": pro_check,
                 "reasons": reasons,
             }
 
@@ -344,6 +489,7 @@ class OptionSignalGuard:
                 "initiative_strength_score": initiative_strength_score,
                 "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
                 "elasticity": elasticity,
+                "pro_check": pro_check,
                 "reasons": reasons,
             }
 
@@ -367,6 +513,11 @@ class OptionSignalGuard:
                     reasons.append("reversal_needs_runner_premium_confirmation")
             else:
                 reasons.append("reversal_not_elite_enough")
+            if allow_trade and pro_check["label"] != "PRO_PASS":
+                allow_trade = False
+                watch_only = pro_check["label"] == "PRO_WATCH"
+                likely_runner = False
+                reasons.extend(["pro_trader_check_watch_only", *pro_check["reasons"]])
             return {
                 "quality_tag": quality_tag,
                 "allow_trade": allow_trade,
@@ -381,6 +532,7 @@ class OptionSignalGuard:
                 "initiative_strength_score": initiative_strength_score,
                 "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
                 "elasticity": elasticity,
+                "pro_check": pro_check,
                 "reasons": reasons,
             }
 
@@ -400,6 +552,26 @@ class OptionSignalGuard:
                 "initiative_strength_score": initiative_strength_score,
                 "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
                 "elasticity": elasticity,
+                "pro_check": pro_check,
+                "reasons": reasons,
+            }
+        if pro_check["label"] == "PRO_REJECT":
+            reasons.extend(pro_check["reasons"])
+            return {
+                "quality_tag": "AVOID",
+                "allow_trade": False,
+                "watch_only": False,
+                "entry_phase": entry_phase,
+                "premium_confirmed": premium_confirmed,
+                "path_quality": "POOR_CONTRACT",
+                "likely_runner": False,
+                "signal_family": signal_family,
+                "session_map_phase": session_map_phase,
+                "price_action_watch_ready": strong_price_action_watch,
+                "initiative_strength_score": initiative_strength_score,
+                "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
+                "elasticity": elasticity,
+                "pro_check": pro_check,
                 "reasons": reasons,
             }
 
@@ -420,6 +592,11 @@ class OptionSignalGuard:
                 path_quality = "TACTICAL_PATH"
             watch_only = not allow_trade
             reasons.append("premium_confirmation_pending")
+            if allow_trade and pro_check["label"] != "PRO_PASS":
+                allow_trade = False
+                watch_only = pro_check["label"] == "PRO_WATCH"
+                likely_runner = False
+                reasons.extend(["pro_trader_check_watch_only", *pro_check["reasons"]])
             return {
                 "quality_tag": quality_tag,
                 "allow_trade": allow_trade,
@@ -434,6 +611,7 @@ class OptionSignalGuard:
                 "initiative_strength_score": initiative_strength_score,
                 "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
                 "elasticity": elasticity,
+                "pro_check": pro_check,
                 "reasons": reasons,
             }
 
@@ -493,6 +671,12 @@ class OptionSignalGuard:
             likely_runner = False
             if "volatile_tactical_watch_only" not in reasons:
                 reasons.append("volatile_tactical_watch_only")
+        if allow_trade and pro_check["label"] == "PRO_WATCH":
+            allow_trade = False
+            watch_only = True
+            likely_runner = False
+            if "pro_trader_check_watch_only" not in reasons:
+                reasons.extend(["pro_trader_check_watch_only", *pro_check["reasons"]])
 
         return {
             "quality_tag": quality_tag,
@@ -508,6 +692,7 @@ class OptionSignalGuard:
             "initiative_strength_score": initiative_strength_score,
             "futures_acceptance_score": float(futures_acceptance.get("score") or 0),
             "elasticity": elasticity,
+            "pro_check": pro_check,
             "reasons": reasons,
         }
 

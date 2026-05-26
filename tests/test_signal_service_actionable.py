@@ -264,6 +264,42 @@ def test_high_expectancy_marks_volatile_tactical_when_conflicts_exist():
     assert profile["quality_tag"] == "TQ_VOLATILE"
 
 
+def test_pro_trader_check_blocks_lottery_contract_even_when_setup_is_good():
+    service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
+    service.instrument = "BANKNIFTY"
+    service.strategy.last_score = 92
+    service.strategy.last_entry_score = 94
+    service.strategy.last_entry_plan = {"entry_below": 55000.0}
+    service.strategy.last_active_day_state = "BEAR_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "PE"
+    service.strategy.last_trend_leg_stage = "FIRST_IMPULSE"
+    service.strategy.last_pressure_conflict_level = "NONE"
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "PE",
+        datetime(2026, 5, 26, 12, 5),
+        selected_option_contract={"ltp": 16.05, "spread": 0.8, "distance_from_atm": 4, "theta": -2.2},
+        premium_guard={
+            "label": "PREMIUM_OK",
+            "premium_momentum_pct": 1.4,
+            "spread_pct": 2.0,
+            "volume_supporting": True,
+            "clean_breakout_premium": True,
+            "current_ltp": 16.05,
+            "previous_ltp": 15.8,
+        },
+        risk_profile={"target_pct": 28, "hard_premium_stop_pct": 17},
+        price=54980.0,
+    )
+
+    assert profile["allow_trade"] is False
+    assert profile["pro_check"]["label"] in {"PRO_REJECT", "PRO_WATCH"}
+    assert any(reason in profile["reasons"] for reason in {"cheap_lottery_premium", "too_far_from_atm"})
+
+
 def test_high_expectancy_promotes_clean_retest_to_tq_clean():
     service = build_service("RETEST", "B", "MEDIUM")
     service.instrument = "BANKNIFTY"
@@ -444,6 +480,31 @@ def test_sensex_allows_clean_b_grade_continuation_even_when_global_continuation_
     service.strategy.last_entry_score = 74
     service.strategy.last_pressure_conflict_level = "NONE"
     assert service._is_option_buyer_actionable("CE", candle_time=datetime(2026, 4, 16, 11, 40)) is True
+
+
+def test_institutional_gate_allows_neutral_15m_when_option_sweep_sponsors_move():
+    service = build_service("BREAKOUT_CONFIRM", "B", "MEDIUM")
+    service.strategy.last_context_score = 94
+    service.strategy.last_entry_score = 90
+
+    allowed, reason = service._institutional_confluence_gate(
+        signal="PE",
+        trend_15m="NEUTRAL",
+        pressure_metrics={"pressure_bias": "BEARISH", "smoothed_flow_edge": 12.0},
+        oi_ladder_data={"trend": "BEARISH", "build_up": "NO_CLEAR_SIGNAL", "wall_break_alert": "SUPPORT_BREAK_RISK"},
+        participation_metrics={
+            "PE": {
+                "quality": "WEAK",
+                "same_side_weighted_delta": 100.0,
+                "opposite_side_weighted_delta": 60.0,
+                "same_side_weighted_breadth": 1.4,
+            }
+        },
+        option_sweep_context={"quality": "STRONG"},
+    )
+
+    assert allowed is True
+    assert "institutional confluence ok" in reason
 
 
 def test_sensex_blocks_b_grade_breakout():
@@ -1659,3 +1720,30 @@ def test_structure_suggestion_uses_wider_spread_when_target_move_is_bigger():
     assert suggestion["type"] == "BULL_CALL_SPREAD"
     assert suggestion["short_strike"] == 24100
     assert suggestion["width_steps"] == 2
+
+
+def test_trend_day_context_detects_failed_pullback_breakdown():
+    service = SignalService.__new__(SignalService)
+    service.vwap = type("VWAPStub", (), {"get_vwap": staticmethod(lambda: 24047.0)})()
+    recent_5m = [
+        {"high": 24043.65, "low": 24028.05, "close": 24029.00},
+        {"high": 24033.85, "low": 24019.80, "close": 24021.90},
+        {"high": 24037.45, "low": 24019.00, "close": 24033.85},
+        {"high": 24040.80, "low": 24028.10, "close": 24029.15},
+        {"high": 24032.10, "low": 24017.45, "close": 24021.55},
+        {"high": 24036.40, "low": 24020.05, "close": 24023.55},
+        {"high": 24026.30, "low": 24013.55, "close": 24022.25},
+        {"high": 24025.35, "low": 24006.05, "close": 24009.55},
+        {"high": 24012.30, "low": 23985.30, "close": 23997.85},
+    ]
+    recent_1m = [
+        {"close": 24023.55, "high": 24026.30, "low": 24013.55, "open": 24022.75},
+        {"close": 24009.55, "high": 24025.35, "low": 24006.05, "open": 24021.85},
+        {"close": 23997.85, "high": 24012.30, "low": 23985.30, "open": 24010.15},
+    ]
+
+    context = service._trend_day_regime_context(recent_1m, recent_5m, "PE")
+
+    assert context["active"] is True
+    assert context["direction"] == "PE"
+    assert context["invalidation"] == 24026.3

@@ -81,6 +81,12 @@ def start_trade_monitor(service, signal, candle_5m, price, balanced_pro, selecte
         "runner_trail_bonus": risk_profile.get("runner_trail_bonus"),
         "allow_endgame_runner": bool(risk_profile.get("allow_endgame_runner")),
         "time_extension_minutes": risk_profile.get("time_extension_minutes"),
+        "trend_day_context": (balanced_pro or {}).get("trend_day_context"),
+        "max_monitor_minutes": (
+            int(getattr(service.config, "TREND_DAY_RUNNER_MAX_MINUTES", 150))
+            if ((balanced_pro or {}).get("trend_day_context") or {}).get("active")
+            else 20
+        ),
         "expiry_fast_decay": bool(risk_profile.get("expiry_fast_decay")),
         "stop_loss_option_price": stop_loss_price,
         "first_target_option_price": first_target_option_price,

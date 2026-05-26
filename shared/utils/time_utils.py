@@ -41,6 +41,16 @@ class TimeUtils:
     def current_time_str(self):
         return self.now_ist().time()
 
+    def format_time(self, value):
+        """Format epoch seconds or datetime for compact service status logs."""
+        if not value:
+            return None
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, self.ist).strftime("%H:%M:%S")
+        if hasattr(value, "strftime"):
+            return value.strftime("%H:%M:%S")
+        return str(value)
+
     def is_market_open(self):
         """Check if market is open (weekday, not holiday, market hours)"""
         if not self.is_trading_day():

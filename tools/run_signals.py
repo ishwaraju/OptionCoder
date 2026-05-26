@@ -103,6 +103,41 @@ class SignalServiceManager:
                 self._clear_state()
         return loaded
 
+    def _start_one(self, instrument):
+        command = [
+            self.python_executable,
+            "-u",
+            str(self._service_path()),
+            "--instrument",
+            instrument,
+        ]
+        print(f"[Signal Manager] Command: {' '.join(command)}")
+        log_path = build_instrument_log_path("signal_service", instrument)
+        log_handle = open(log_path, "a", encoding="utf-8")
+        process = subprocess.Popen(
+            command,
+            cwd=str(REPO_ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            close_fds=True,
+            start_new_session=True,
+        )
+        log_handle.close()
+        entry = {
+            "instrument": instrument,
+            "process": process,
+            "pid": process.pid,
+            "restarts": 0,
+        }
+        self.processes.append(entry)
+        print(
+            f"[Signal Manager] Signal service started for {instrument} "
+            f"(pid={process.pid}) | log={log_path}"
+        )
+        return entry
+
     def _service_path(self):
         return REPO_ROOT / "services" / "signal_service.py"
 
@@ -150,38 +185,7 @@ class SignalServiceManager:
         )
 
         for instrument in normalized_instruments:
-            command = [
-                self.python_executable,
-                "-u",
-                str(self._service_path()),
-                "--instrument",
-                instrument,
-            ]
-            print(f"[Signal Manager] Command: {' '.join(command)}")
-            log_path = build_instrument_log_path("signal_service", instrument)
-            log_handle = open(log_path, "a", encoding="utf-8")
-            process = subprocess.Popen(
-                command,
-                cwd=str(REPO_ROOT),
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},
-                close_fds=True,
-                start_new_session=True,
-            )
-            log_handle.close()
-            self.processes.append(
-                {
-                    "instrument": instrument,
-                    "process": process,
-                    "pid": process.pid,
-                }
-            )
-            print(
-                f"[Signal Manager] Signal service started for {instrument} "
-                f"(pid={process.pid}) | log={log_path}"
-            )
+            self._start_one(instrument)
 
         healthy, missing = self._verify_started_processes()
         if not healthy:
@@ -323,11 +327,17 @@ class SignalServiceManager:
                         f"[Signal Manager] {entry['instrument']} signal service "
                         f"exited with code {return_code}"
                     )
+                    instrument = entry["instrument"]
+                    restarts = int(entry.get("restarts") or 0)
                     self.processes = [
                         active_entry
                         for active_entry in self.processes
                         if active_entry is not entry
                     ]
+                    if restarts < 3:
+                        print(f"[Signal Manager] Restarting {instrument} after unexpected exit")
+                        restarted = self._start_one(instrument)
+                        restarted["restarts"] = restarts + 1
                     self._save_state()
                     if not self.processes:
                         print("[Signal Manager] No signal services still running")

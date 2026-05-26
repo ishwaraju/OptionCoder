@@ -36,6 +36,12 @@ class ExpirySessionContext:
     def session_mode(self):
         if self.expiry_date and self.expiry_date == self.current_date:
             return "EXPIRY_DAY"
+        adjusted_dates = {
+            date.fromisoformat(str(item))
+            for item in (self.profile.get("holiday_adjusted_expiry_dates") or [])
+        }
+        if self.current_date in adjusted_dates:
+            return "EXPIRY_DAY"
 
         # Skip weekly expiry logic for instruments without weekly expiry
         if not self.profile.get("has_weekly_expiry", True):

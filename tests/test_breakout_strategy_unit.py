@@ -829,6 +829,15 @@ def test_expiry_session_context_uses_tuesday_for_nifty_and_thursday_for_sensex()
     assert sensex_ctx.session_mode() == "PRE_EXPIRY_POSITIONING"
 
 
+def test_sensex_holiday_adjusted_expiry_uses_profile_date():
+    ctx = ExpirySessionContext(
+        current_date=datetime(2026, 5, 27).date(),
+        instrument="SENSEX",
+    )
+
+    assert ctx.session_mode() == "EXPIRY_DAY"
+
+
 def test_sensex_pre_expiry_weak_volume_stays_watch_like_without_nifty_special_flag():
     rules = ExpiryDayRules(type("TU", (), {})(), instrument="SENSEX")
     rules.time_utils.now_ist = lambda: datetime(2026, 5, 6, 10, 0)

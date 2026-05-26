@@ -140,6 +140,22 @@ def test_expiry_reversal_banknifty_keeps_wider_stop_but_tightens_time_window():
     assert profile["trail_from_peak_pct"] == 8.0
 
 
+def test_sensex_expiry_spike_mode_books_partial_early():
+    service = build_monitor_service()
+    service.instrument = "SENSEX"
+    profile = service._resolve_trade_risk_profile(
+        setup_type="BREAKOUT_CONFIRM",
+        quality="A",
+        confidence="HIGH",
+        cautions=["expiry_day_mode", "expiry_fast_decay"],
+    )
+
+    assert profile["session_bucket"] == "EXPIRY"
+    assert profile["partial_trigger_pct"] == 16.0
+    assert profile["runner_trigger_pct"] == 26.0
+    assert "SENSEX expiry spike mode" in profile["risk_note"]
+
+
 def test_non_expiry_breakout_iv_rich_compresses_stop_and_target():
     service = build_monitor_service()
     service._current_risk_option_contract = {"iv": 25.0}

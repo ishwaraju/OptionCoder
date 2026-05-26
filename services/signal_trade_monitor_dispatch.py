@@ -88,6 +88,7 @@ def maybe_send_trade_monitor_update(service, latest_5m_candle):
         service.active_trade_monitor["partial_booked"] = True
 
     exit_guidances = {"EXIT_BIAS", "EXIT_STOPLOSS", "EXIT_TRAIL", "EXIT_TIMESTOP", "EXIT_PROFIT_PROTECT", "EXIT_PROTECT", "THESIS_BROKEN"}
-    if monitor_data["guidance"] in exit_guidances or service.active_trade_monitor["minutes_active"] >= 20:
+    max_monitor_minutes = int(service.active_trade_monitor.get("max_monitor_minutes") or 20)
+    if monitor_data["guidance"] in exit_guidances or service.active_trade_monitor["minutes_active"] >= max_monitor_minutes:
         service._sync_ml_outcome_from_monitor()
         service.active_trade_monitor = None

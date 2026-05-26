@@ -196,9 +196,26 @@ def evaluate_trade_monitor(service, recent_1m_candles, recent_5m_candles):
         session_bucket=service.active_trade_monitor.get("session_bucket"),
     )
     runner_mode = run_profile == "RUNNER"
+    trend_day_context = service.active_trade_monitor.get("trend_day_context") or {}
+    trend_day_runner = bool(
+        trend_day_context.get("active")
+        and trend_day_context.get("direction") == signal
+        and pnl_percent is not None
+        and pnl_percent > 0
+    )
     if runner_mode:
         time_stop_exit_minutes += time_extension_minutes
         dynamic_trail_pct = min(16.0, dynamic_trail_pct + runner_trail_bonus)
+    if trend_day_runner and partial_booked:
+        dynamic_trail_pct = max(
+            dynamic_trail_pct,
+            float(getattr(service.config, "TREND_DAY_RUNNER_TRAIL_PCT", Config.TREND_DAY_RUNNER_TRAIL_PCT)),
+        )
+        runner_mode = True
+        time_stop_exit_minutes = max(
+            time_stop_exit_minutes,
+            int(getattr(service.config, "TREND_DAY_RUNNER_MAX_MINUTES", Config.TREND_DAY_RUNNER_MAX_MINUTES)),
+        )
     break_even_underlying_exit = bool(profit_lock_armed and invalidate_underlying_price is not None and ((signal == "CE" and latest_1m["close"] <= float(invalidate_underlying_price)) or (signal == "PE" and latest_1m["close"] >= float(invalidate_underlying_price))))
     trail_active_without_partial = bool(profit_lock_armed and not partial_booked and drawdown_from_peak_pct is not None and drawdown_from_peak_pct >= max(dynamic_trail_pct, 8.0))
     slow_positive_theta_risk = bool(theta_risk_high and pnl_percent is not None and pnl_percent > 0 and pnl_percent < max(target_pct, profit_lock_trigger_pct) and minutes_active >= time_stop_warn_minutes and (no_expansion or (not momentum_strong and not structure_improving and (drawdown_from_peak_pct is None or drawdown_from_peak_pct < max(dynamic_trail_pct, 8.0)))))
@@ -272,6 +289,7 @@ def evaluate_trade_monitor(service, recent_1m_candles, recent_5m_candles):
         "profit_lock_armed": profit_lock_armed, "profit_lock_trigger_pct": profit_lock_trigger_pct, "psar_style_level": psar_style_level,
         "live_atr": live_atr, "expiry_fast_decay": expiry_fast_decay, "theta_risk_high": theta_risk_high, "run_profile": run_profile,
         "runner_mode": runner_mode, "partial_trigger_pct": partial_trigger_pct, "runner_trigger_pct": runner_trigger_pct,
+        "trend_day_runner": trend_day_runner,
         "quality": service.active_trade_monitor["quality"], "time_regime": time_regime, "heikin_ashi": (service.strategy.last_heikin_ashi or {}).get("bias"),
         "risk_note": risk_note, "entry_pressure_bias": entry_pressure_bias, "live_pressure_bias": live_pressure_bias,
         "exit_if": exit_if,

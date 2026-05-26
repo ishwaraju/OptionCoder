@@ -1867,7 +1867,15 @@ class SignalService:
         )
         neutral_trend = trend_text in {"NEUTRAL", "UNKNOWN", "INSUFFICIENT_DATA", "NONE"}
         reversal_setup = setup in {"REVERSAL", "TRAP_REVERSAL"}
-        if not aligned_trend and not (neutral_trend and reversal_setup):
+        strong_sweep_context = (
+            sweep_quality == "STRONG"
+            and pressure_bias == expected_bias
+            and oi_trend == expected_bias
+            and flow_edge >= float(getattr(Config, "INSTITUTIONAL_MIN_FLOW_EDGE", 8.0) or 8.0)
+            and setup in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION", "OPENING_DRIVE"}
+            and entry_score >= 88
+        )
+        if not aligned_trend and not (neutral_trend and (reversal_setup or strong_sweep_context)):
             return False, f"15m context not aligned ({trend_text} vs {signal})"
 
         if context_score < float(getattr(Config, "INSTITUTIONAL_MIN_CONTEXT_SCORE", 88.0) or 88.0):
@@ -1896,7 +1904,13 @@ class SignalService:
             and oi_trend == expected_bias
             and wall_alert in {"RESISTANCE_BREAK_RISK", "SUPPORT_BREAK_RISK"}
         )
-        if build_up not in supportive_build_ups and not squeeze_ok:
+        sweep_continuation_ok = (
+            build_up == "NO_CLEAR_SIGNAL"
+            and strong_sweep_context
+            and participation_quality in {"STRONG", "MODERATE", "WEAK"}
+            and participation_breadth >= 1.0
+        )
+        if build_up not in supportive_build_ups and not squeeze_ok and not sweep_continuation_ok:
             return False, f"build-up not supportive ({build_up})"
 
         wall_ok = (
@@ -3238,6 +3252,13 @@ class SignalService:
             oi_ladder_data=oi_ladder_data,
         )
         if not spike:
+            spike = self._detect_option_momentum_reentry(
+                recent_1m_candles=recent_1m_candles,
+                snapshot_groups=snapshot_groups,
+                recent_5m=recent_5m,
+                oi_ladder_data=oi_ladder_data,
+            )
+        if not spike:
             return None
 
         direction = spike["direction"]
@@ -3310,12 +3331,231 @@ class SignalService:
             },
         }
 
+    def _detect_option_momentum_reentry(self, recent_1m_candles, snapshot_groups, recent_5m=None, oi_ladder_data=None):
+        if not bool(getattr(Config, "ENABLE_OPTION_MOMENTUM_REENTRY", True)):
+            return None
+        if len(recent_1m_candles or []) < 4 or len(snapshot_groups or []) < 3:
+            return None
+
+        latest = recent_1m_candles[-1]
+        previous = recent_1m_candles[-2]
+        prior_window = recent_1m_candles[-5:-1]
+        latest_close = float(latest.get("close") or 0.0)
+        previous_close = float(previous.get("close") or latest_close)
+        latest_high = float(latest.get("high") or latest_close)
+        latest_low = float(latest.get("low") or latest_close)
+        body = abs(latest_close - float(latest.get("open") or latest_close))
+        candle_range = max(latest_high - latest_low, 0.01)
+        body_ratio = body / candle_range
+        break_points = float(getattr(Config, "OPTION_REENTRY_MIN_UNDERLYING_BREAK", 4.0) or 4.0)
+        prior_high = max(float(c.get("high") or latest_high) for c in prior_window)
+        prior_low = min(float(c.get("low") or latest_low) for c in prior_window)
+
+        direction = None
+        if latest_close <= prior_low - break_points and latest_close < previous_close and body_ratio >= 0.35:
+            direction = "PE"
+        elif latest_close >= prior_high + break_points and latest_close > previous_close and body_ratio >= 0.35:
+            direction = "CE"
+        if direction is None:
+            return None
+        trend_context = self._trend_day_regime_context(recent_1m_candles, recent_5m, direction)
+
+        latest_rows = snapshot_groups[-1]
+        previous_rows = snapshot_groups[-2]
+        older_rows = snapshot_groups[0]
+        latest_map = {(row.get("strike"), row.get("option_type")): row for row in latest_rows}
+        previous_map = {(row.get("strike"), row.get("option_type")): row for row in previous_rows}
+        older_map = {(row.get("strike"), row.get("option_type")): row for row in older_rows}
+
+        min_1m_pct = float(getattr(Config, "OPTION_REENTRY_MIN_1M_PREMIUM_PCT", 7.0) or 7.0)
+        min_3m_pct = float(getattr(Config, "OPTION_REENTRY_MIN_3M_PREMIUM_PCT", 12.0) or 12.0)
+        min_premium = float(
+            getattr(
+                Config,
+                "OPTION_REENTRY_MIN_PREMIUM",
+                getattr(Config, "PRO_TRADER_MIN_PREMIUM", 25.0),
+            )
+            or 50.0
+        )
+        max_spread = float(getattr(Config, "PRO_TRADER_MAX_ACTION_SPREAD_PCT", 3.8) or 3.8)
+        max_otm_distance = int(getattr(Config, "PRO_TRADER_MAX_OTM_DISTANCE", 2) or 2)
+        max_itm_distance = int(getattr(Config, "PRO_TRADER_MAX_ITM_DISTANCE", 5) or 5)
+        leader = None
+
+        for row in latest_rows:
+            if (row.get("option_type") or "").upper() != direction:
+                continue
+            distance = row.get("distance_from_atm")
+            distance = int(distance) if distance not in {None, ""} else 0
+            otm_distance = max(distance, 0) if direction == "CE" else max(-distance, 0)
+            itm_distance = max(-distance, 0) if direction == "CE" else max(distance, 0)
+            if otm_distance > max_otm_distance or itm_distance > max_itm_distance:
+                continue
+            key = (row.get("strike"), row.get("option_type"))
+            prev = previous_map.get(key)
+            older = older_map.get(key)
+            if not prev or not older:
+                continue
+            ltp = float(row.get("ltp") or 0.0)
+            prev_ltp = float(prev.get("ltp") or 0.0)
+            older_ltp = float(older.get("ltp") or 0.0)
+            if ltp < min_premium or prev_ltp <= 0 or older_ltp <= 0:
+                continue
+            spread_pct = self._spread_percent(row)
+            if spread_pct is not None and float(spread_pct) > max_spread:
+                continue
+            premium_1m_pct = ((ltp - prev_ltp) / prev_ltp) * 100.0
+            premium_3m_pct = ((ltp - older_ltp) / older_ltp) * 100.0
+            volume_delta = int(row.get("volume") or 0) - int(prev.get("volume") or 0)
+            if volume_delta <= 0:
+                continue
+            if premium_1m_pct < min_1m_pct and premium_3m_pct < min_3m_pct:
+                continue
+            distance_penalty = (otm_distance * 5.0) + max(itm_distance - 2, 0) * 1.5
+            premium_quality = min(ltp / 10.0, 14.0)
+            score = premium_1m_pct + (premium_3m_pct * 0.6) + min(volume_delta / 100000.0, 12.0) + premium_quality - distance_penalty
+            if trend_context.get("active"):
+                score += 8.0
+            if leader is None or score > leader["score"]:
+                leader = {
+                    "row": row,
+                    "premium_1m_pct": premium_1m_pct,
+                    "premium_3m_pct": premium_3m_pct,
+                    "volume_delta": volume_delta,
+                    "spread_pct": spread_pct,
+                    "score": score,
+                }
+
+        if not leader:
+            return None
+
+        recent_5m = recent_5m or []
+        if len(recent_5m) >= 3:
+            last_5m = recent_5m[-1]
+            prev_5m = recent_5m[-2]
+            if direction == "PE" and not (
+                float(last_5m.get("close") or 0.0) <= float(prev_5m.get("close") or 0.0)
+                or float(last_5m.get("low") or 0.0) <= float(prev_5m.get("low") or 0.0)
+            ):
+                return None
+            if direction == "CE" and not (
+                float(last_5m.get("close") or 0.0) >= float(prev_5m.get("close") or 0.0)
+                or float(last_5m.get("high") or 0.0) >= float(prev_5m.get("high") or 0.0)
+            ):
+                return None
+
+        row = leader["row"]
+        strike = row.get("strike")
+        trigger_price = latest_low if direction == "PE" else latest_high
+        invalidate_price = trend_context.get("invalidation") or (latest_high if direction == "PE" else latest_low)
+        structure = self.option_spike_detector._derive_structure_context(
+            direction=direction,
+            recent_candles_5m=recent_5m,
+            oi_ladder_data=oi_ladder_data,
+        )
+        if structure.get("alignment") == "AGAINST" and not trend_context.get("active"):
+            return None
+
+        return {
+            "direction": direction,
+            "quality": "STRONG",
+            "stage": "OPTION_LEADER_REENTRY",
+            "leader_momentum": True,
+            "leader_strike": strike,
+            "price_breadth": 1,
+            "volume_breadth": 1,
+            "opposite_collapse": 0,
+            "same_volume_total": leader["volume_delta"],
+            "underlying_volume_ratio": 1.0,
+            "trend_day_context": trend_context,
+            "trigger_price": trigger_price,
+            "invalidate_price": invalidate_price,
+            "entry_reference": latest_close,
+            "summary": (
+                f"{direction} leader re-entry | {strike}{direction} "
+                f"1m +{leader['premium_1m_pct']:.1f}% | 3m +{leader['premium_3m_pct']:.1f}% "
+                f"| vol +{leader['volume_delta']} | spread {float(leader['spread_pct'] or 0):.2f}%"
+                f"{' | ' + trend_context.get('summary') if trend_context.get('active') else ''}"
+            ),
+            "examples": [
+                f"{strike}{direction}:1m+{leader['premium_1m_pct']:.1f}%/3m+{leader['premium_3m_pct']:.1f}%"
+            ],
+            "structure": structure,
+        }
+
+    def _trend_day_regime_context(self, recent_1m_candles, recent_5m, direction):
+        context = {"active": False, "direction": None}
+        if direction not in {"CE", "PE"} or len(recent_5m or []) < 6:
+            return context
+        latest_1m = recent_1m_candles[-1]
+        latest_close = float(latest_1m.get("close") or 0.0)
+        vwap_value = None
+        if getattr(self, "vwap", None):
+            try:
+                vwap_value = self.vwap.get_vwap()
+            except Exception:
+                vwap_value = None
+        if vwap_value is None:
+            typicals = [
+                (float(c.get("high") or 0.0) + float(c.get("low") or 0.0) + float(c.get("close") or 0.0)) / 3.0
+                for c in recent_5m
+            ]
+            vwap_value = sum(typicals) / max(len(typicals), 1)
+
+        window = recent_5m[-7:]
+        highs = [float(c.get("high") or 0.0) for c in window]
+        lows = [float(c.get("low") or 0.0) for c in window]
+        closes = [float(c.get("close") or 0.0) for c in window]
+        lower_high_count = sum(1 for left, right in zip(highs, highs[1:]) if right <= left)
+        lower_low_count = sum(1 for left, right in zip(lows, lows[1:]) if right <= left)
+        higher_low_count = sum(1 for left, right in zip(lows, lows[1:]) if right >= left)
+        higher_high_count = sum(1 for left, right in zip(highs, highs[1:]) if right >= left)
+        min_vwap_distance = float(getattr(Config, "TREND_DAY_MIN_VWAP_DISTANCE", 18.0) or 18.0)
+        min_lh = int(getattr(Config, "TREND_DAY_MIN_LOWER_HIGH_COUNT", 3) or 3)
+        min_ll = int(getattr(Config, "TREND_DAY_MIN_LOWER_LOW_COUNT", 2) or 2)
+
+        if direction == "PE":
+            below_vwap = latest_close <= float(vwap_value) - min_vwap_distance
+            failed_pullback = max(highs[-4:-1]) < float(vwap_value) and closes[-1] <= min(lows[-4:-1])
+            if below_vwap and lower_high_count >= min_lh and lower_low_count >= min_ll and failed_pullback:
+                return {
+                    "active": True,
+                    "direction": "PE",
+                    "vwap": round(float(vwap_value), 2),
+                    "breakdown_level": round(min(lows[-4:-1]), 2),
+                    "invalidation": round(max(highs[-3:]), 2),
+                    "summary": f"bear trend-day | below VWAP {round(float(vwap_value), 2)} | failed pullback",
+                }
+        else:
+            above_vwap = latest_close >= float(vwap_value) + min_vwap_distance
+            failed_pullback = min(lows[-4:-1]) > float(vwap_value) and closes[-1] >= max(highs[-4:-1])
+            if above_vwap and higher_high_count >= min_lh and higher_low_count >= min_ll and failed_pullback:
+                return {
+                    "active": True,
+                    "direction": "CE",
+                    "vwap": round(float(vwap_value), 2),
+                    "breakout_level": round(max(highs[-4:-1]), 2),
+                    "invalidation": round(min(lows[-3:]), 2),
+                    "summary": f"bull trend-day | above VWAP {round(float(vwap_value), 2)} | failed pullback",
+                }
+        return context
+
     def _fast_spike_action_ready(self, watch_payload):
         if not bool(getattr(Config, "ENABLE_FAST_SPIKE_ACTION", True)):
             return False
         spike = watch_payload.get("spike_context") or {}
         direction = (watch_payload.get("direction") or "").upper()
         structure = spike.get("structure") or {}
+        if spike.get("leader_momentum"):
+            trend_context = spike.get("trend_day_context") or {}
+            return (
+                direction in {"CE", "PE"}
+                and (spike.get("quality") or "").upper() == "STRONG"
+                and (structure.get("alignment") or "NEUTRAL").upper() != "AGAINST"
+                and (bool(structure.get("five_min_ready")) or bool(trend_context.get("active")))
+                and (watch_payload.get("signal_grade") or "").upper() in {"A", "A+"}
+                and (watch_payload.get("confidence") or "").upper() == "HIGH"
+            )
         oi_ladder_data = spike.get("oi_ladder_data") or {}
         pressure_metrics = spike.get("pressure_metrics") or {}
         min_breadth = int(getattr(Config, "FAST_SPIKE_ACTION_MIN_BREADTH", 8) or 8)
@@ -3367,14 +3607,20 @@ class SignalService:
             return False
 
         price = float(latest_1m.get("close") or watch_payload.get("price") or 0.0)
-        strike, strike_reason = self.strike_selector.select_strike_with_reason(
-            price=price,
-            signal=signal,
-            volume_signal="SPIKE",
-            strategy_score=watch_payload.get("score"),
-            pressure_metrics=None,
-            candle_time=latest_1m["time"],
-        )
+        spike_context = watch_payload.get("spike_context") or {}
+        leader_strike = spike_context.get("leader_strike")
+        if leader_strike is not None:
+            strike = int(leader_strike)
+            strike_reason = "option_leader_reentry"
+        else:
+            strike, strike_reason = self.strike_selector.select_strike_with_reason(
+                price=price,
+                signal=signal,
+                volume_signal="SPIKE",
+                strategy_score=watch_payload.get("score"),
+                pressure_metrics=None,
+                candle_time=latest_1m["time"],
+            )
         option_contract = self._get_option_contract_snapshot(strike, signal, before_ts=latest_1m["time"])
         option_contract = self._greek_enriched_option_contract(
             option_contract,
@@ -3410,6 +3656,7 @@ class SignalService:
             "setup": watch_payload.get("setup") or "BREAKOUT_CONFIRM",
             "tradability": "ACTION",
             "time_regime": "FAST_1M_SPIKE",
+            "trend_day_context": spike_context.get("trend_day_context"),
         }
         self.strategy.last_entry_plan = {
             "entry_above": watch_payload.get("trigger_price") if signal == "CE" else None,
@@ -3499,6 +3746,7 @@ class SignalService:
         recent_1m_candles = self.db_reader.fetch_recent_candles_1m(self.instrument, limit=6)
         if len(recent_1m_candles) < 3:
             return
+        recent_5m = self.db_reader.fetch_recent_candles_5m(self.instrument, limit=9)
 
         latest_1m = recent_1m_candles[-1]
         minute_key = latest_1m["time"]
@@ -4247,6 +4495,7 @@ class SignalService:
                 "path_quality": expectancy_profile.get("path_quality"),
                 "likely_runner": expectancy_profile.get("likely_runner"),
                 "signal_family": expectancy_profile.get("signal_family"),
+                "pro_check": expectancy_profile.get("pro_check"),
                 "session_map_phase": expectancy_profile.get("session_map_phase"),
                 "trade_thesis": self._build_trade_thesis(signal, balanced_pro=balanced_pro, premium_guard=premium_guard),
                 "trade_type": trade_type,

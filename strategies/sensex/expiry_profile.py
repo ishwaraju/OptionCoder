@@ -1,6 +1,7 @@
 EXPIRY_PROFILE = {
     "instrument": "SENSEX",
     "weekly_expiry_weekday": 3,
+    "holiday_adjusted_expiry_dates": ["2026-05-27"],
     "post_expiry_score_floor": 66,
     "pre_expiry_score_floor": 70,
     "expiry_vwap_distance_limit": 140,

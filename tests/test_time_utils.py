@@ -10,3 +10,10 @@ def test_floor_to_minute_zeroes_seconds_and_microseconds():
     floored = TimeUtils.floor_to_minute(dt)
 
     assert floored == datetime(2026, 5, 6, 14, 20, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+
+def test_format_time_handles_epoch_seconds_for_heartbeat():
+    formatted = TimeUtils().format_time(1787133600)
+
+    assert isinstance(formatted, str)
+    assert formatted.count(":") == 2

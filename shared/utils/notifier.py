@@ -436,6 +436,7 @@ class Notifier:
         premium_confirmed = trade_data.get("premium_confirmed")
         path_quality = trade_data.get("path_quality")
         signal_family = trade_data.get("signal_family")
+        pro_check = trade_data.get("pro_check") or {}
         session_map_phase = trade_data.get("session_map_phase")
         trade_thesis = trade_data.get("trade_thesis")
         trade_type = trade_data.get("trade_type")
@@ -500,6 +501,8 @@ class Notifier:
             state_bits.append(path_quality)
         if state_bits:
             lines.append(" | ".join(state_bits[:3]))
+        if pro_check.get("summary"):
+            lines.append("Pro check: " + pro_check["summary"])
         tf_bits = []
         if trend_15m:
             tf_bits.append(f"15m {trend_15m}")

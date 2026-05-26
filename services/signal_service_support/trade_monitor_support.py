@@ -126,6 +126,12 @@ class TradeMonitorSupport:
             profit_lock_trigger_pct = max(6.0, profit_lock_trigger_pct - 2.0)
 
         runner_profile = TradeMonitorSupport.runner_profile_for_setup(setup_bucket, session_bucket)
+        if service.instrument == "SENSEX" and session_bucket == "EXPIRY":
+            runner_profile["partial_trigger_pct"] = min(runner_profile["partial_trigger_pct"], 16.0)
+            runner_profile["runner_trigger_pct"] = min(runner_profile["runner_trigger_pct"], 26.0)
+            runner_profile["runner_trail_bonus"] = max(runner_profile["runner_trail_bonus"], 1.0)
+            runner_profile["time_extension_minutes"] = min(int(runner_profile["time_extension_minutes"] or 0), 2)
+            risk_note += " SENSEX expiry spike mode: partial jaldi book karo; runner sirf momentum/pressure support ke saath."
         return {
             "setup_bucket": setup_bucket,
             "hard_premium_stop_pct": hard_stop,
