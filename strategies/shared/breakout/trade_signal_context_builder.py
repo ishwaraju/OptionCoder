@@ -72,6 +72,7 @@ class TradeSignalContextBuilder:
         strategy.last_day_state_detail = ""
         strategy.last_session_map_phase = "UNKNOWN"
         strategy.last_futures_acceptance = None
+        strategy.last_ict_context = None
         strategy.last_futures_acceptance_score = 0.0
         strategy.last_initiative_strength_score = 0.0
         strategy.last_price_action_watch_ready = False
@@ -241,6 +242,29 @@ class TradeSignalContextBuilder:
         prev_high = previous_candle.get("high") if previous_candle else None
         prev_low = previous_candle.get("low") if previous_candle else None
         prev_close = previous_candle.get("close") if previous_candle else None
+        ict_context = strategy._analyze_ict_structure(
+            recent_candles_5m,
+            direction=scored_direction,
+            atr=atr,
+            buffer=buffer,
+        )
+        strategy.last_ict_context = ict_context
+        if ict_context.get("direction") == scored_direction and ict_context.get("ready"):
+            ict_boost = 8 if ict_context.get("quality") == "A" else 5
+            score = min(100, score + ict_boost)
+            components.append(f"ict_{ict_context.get('quality', 'b').lower()}_confluence")
+            if ict_context.get("action_ready"):
+                components.append("ict_fvg_retest_ready")
+            cautions = [
+                caution
+                for caution in cautions
+                if caution not in {"far_from_vwap", "futures_acceptance_building"}
+            ]
+        elif ict_context.get("score", 0) >= 50 and scored_direction in {"CE", "PE"}:
+            cautions = strategy._append_cautions(cautions, "ict_context_building")
+        strategy.last_score = score
+        strategy.last_context_score = score
+        strategy.last_score_components = components
         futures_acceptance = FuturesAcceptanceEngine.evaluate(
             direction=scored_direction,
             price=price,

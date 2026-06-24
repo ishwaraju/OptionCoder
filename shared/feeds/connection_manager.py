@@ -36,8 +36,14 @@ class ConnectionManager:
                 self.last_stale_log = time.time()
 
             if time.time() - self.last_stale_force_reconnect > Config.STALE_FEED_FORCE_RECONNECT_SECONDS:
-                print("Feed stale for too long. Forcing reconnection...")
-                self.live_feed.force_reconnect()
+                remaining = 0
+                if hasattr(self.live_feed, "rate_limit_remaining_seconds"):
+                    remaining = self.live_feed.rate_limit_remaining_seconds()
+                if remaining > 0:
+                    print(f"Feed stale, but Dhan rate-limit cooldown is active. Retry reconnect in {remaining}s")
+                else:
+                    print("Feed stale for too long. Forcing reconnection...")
+                    self.live_feed.force_reconnect()
                 self.last_stale_force_reconnect = time.time()
 
             return {

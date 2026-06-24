@@ -45,6 +45,7 @@ class WatchEngine:
         strong_sweep_trade_ready = ctx.get("strong_sweep_trade_ready", False)
         prev_high = ctx.get("prev_high")
         prev_low = ctx.get("prev_low")
+        ict_context = ctx.get("ict_context") or {}
 
         if not (scored_direction and score >= Config.MIN_SCORE_THRESHOLD):
             return None
@@ -100,6 +101,53 @@ class WatchEngine:
         strong_sweep_breakout_now = strong_sweep_trade_ready and sweep_trigger_level is not None and not opening_session and score >= max(time_thresholds["confirm_min_score"], 78) and breakout_structure_ok and (((scored_direction == "CE" and price > max(vwap, sweep_trigger_level)) or (scored_direction == "PE" and price < min(vwap, sweep_trigger_level))) and ((scored_direction == "CE" and candle_high is not None and candle_high >= sweep_trigger_level + max(buffer * 0.2, 3)) or (scored_direction == "PE" and candle_low is not None and candle_low <= sweep_trigger_level - max(buffer * 0.2, 3))))
         if strong_sweep_breakout_now:
             return strategy._emit_trade_signal(scored_direction, "BREAKOUT_CONFIRM", score, volume_signal, pressure_metrics, strategy._append_cautions(cautions, "option_sweep_breakout_override"), blockers=blockers, regime=strategy._effective_signal_regime(expiry_eval, regime), candle_time=candle_time, message=f"Option sweep breakout confirmation {'above' if scored_direction == 'CE' else 'below'} {sweep_trigger_level}", trigger_price=sweep_trigger_level, invalidate_price=orb_low if scored_direction == "CE" else orb_high, atr=atr, support=support if scored_direction == "CE" else None, resistance=resistance if scored_direction == "PE" else None, remember_level=sweep_trigger_level, emitted_level=sweep_trigger_level, buffer=buffer, reset_retest=True, reset_confirmation=True, mark_emitted=True)
+
+        ict_action_ready = (
+            getattr(Config, "ICT_FVG_ENABLED", True)
+            and ict_context.get("direction") == scored_direction
+            and ict_context.get("action_ready")
+            and scored_direction in {"CE", "PE"}
+            and not opening_session
+            and score >= max(time_thresholds["confirm_min_score"], getattr(Config, "ICT_FVG_MIN_CONTEXT_SCORE", 76))
+            and strategy.last_entry_score >= getattr(Config, "ICT_FVG_MIN_ENTRY_SCORE", 66)
+            and volume_signal in {"NORMAL", "STRONG"}
+            and candle_liquidity_ok
+            and pressure_conflict_level in {"NONE", "MILD"}
+            and not late_confirmation_extension
+        )
+        if ict_action_ready:
+            zone = ict_context.get("entry_zone") or {}
+            zone_text = (
+                f"{zone.get('low')}-{zone.get('high')}"
+                if zone.get("low") is not None and zone.get("high") is not None
+                else "active FVG"
+            )
+            trigger_level = zone.get("high") if scored_direction == "CE" else zone.get("low")
+            trigger_level = trigger_level if trigger_level is not None else sweep_trigger_level
+            invalidate = ict_context.get("invalidation")
+            return strategy._emit_trade_signal(
+                scored_direction,
+                "ICT_FVG_RETEST",
+                score,
+                volume_signal,
+                pressure_metrics,
+                strategy._append_cautions(cautions, "ict_liquidity_mss_fvg"),
+                blockers=blockers,
+                regime=strategy._effective_signal_regime(expiry_eval, regime),
+                candle_time=candle_time,
+                message=f"ICT liquidity sweep + MSS FVG retest at {zone_text}",
+                trigger_price=trigger_level,
+                invalidate_price=invalidate,
+                atr=atr,
+                support=support,
+                resistance=resistance,
+                remember_level=trigger_level,
+                emitted_level=trigger_level,
+                buffer=buffer,
+                reset_retest=True,
+                reset_confirmation=True,
+                mark_emitted=True,
+            )
 
         blockers.append("direction_present_but_filters_incomplete")
         if strong_sweep_trade_ready and confirmation_level is not None:

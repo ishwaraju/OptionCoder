@@ -201,11 +201,13 @@ def test_no_valid_setup_is_split_into_specific_blockers():
         "no_valid_setup" in strategy.last_blockers
         or "direction_present_but_filters_incomplete" in strategy.last_blockers
         or "pre_expiry_requires_medium_plus_confidence" in strategy.last_blockers
+        or "expiry_requires_medium_plus_confidence" in strategy.last_blockers
     )
     assert (
         "volume_weak" in strategy.last_blockers
         or "low_tick_density" in strategy.last_blockers
         or "pre_expiry_weak_volume" in strategy.last_blockers
+        or "expiry_weak_volume" in strategy.last_blockers
     )
 
 

@@ -35,13 +35,23 @@ def set_pending_entry_watch(service, watch_payload, balanced_pro, candle_5m):
     strong_watch_setup = (
         score >= 76
         and entry_score >= 70
-        and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP"}
+        and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP", "WAIT_PULLBACK"}
+    )
+    starter_entry_ready = _starter_entry_ready(
+        watch_payload=watch_payload,
+        score=score,
+        entry_score=entry_score,
+        watch_bucket=watch_bucket,
+        signal_grade=signal_grade,
+        confidence=confidence,
+        setup=setup,
+        balanced_pro=balanced_pro,
     )
     if hybrid_mode:
         strong_watch_setup = strong_watch_setup or (
             score >= 70
             and entry_score >= 60
-            and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP", "WATCH_CONTEXT"}
+            and watch_bucket in {"WATCH_CONFIRMATION_PENDING", "WATCH_SETUP", "WATCH_CONTEXT", "WAIT_PULLBACK"}
             and setup in {"BREAKOUT_CONFIRM", "RETEST", "REVERSAL", "TRAP_REVERSAL"}
         )
 
@@ -82,6 +92,10 @@ def set_pending_entry_watch(service, watch_payload, balanced_pro, candle_5m):
         "option_target_pct": watch_payload.get("option_target_pct"),
         "option_trail_pct": watch_payload.get("option_trail_pct"),
         "risk_note": watch_payload.get("risk_note"),
+        "selected_strike": watch_payload.get("selected_strike"),
+        "wait_pullback": bool(watch_payload.get("wait_pullback")),
+        "premium_pullback_entry_max": watch_payload.get("premium_pullback_entry_max"),
+        "premium_chase_ltp": watch_payload.get("premium_chase_ltp"),
         "context": watch_payload.get("context"),
         "score": score,
         "entry_score": entry_score,
@@ -96,6 +110,7 @@ def set_pending_entry_watch(service, watch_payload, balanced_pro, candle_5m):
         "reason": watch_payload.get("reason"),
         "fast_track_ready": fast_track_ready,
         "strong_watch_setup": strong_watch_setup,
+        "starter_entry_ready": starter_entry_ready,
         "elite_watch_ready": service._pending_watch_elite_ready(
             {
                 "signal_grade": signal_grade,
@@ -119,3 +134,35 @@ def set_pending_entry_watch(service, watch_payload, balanced_pro, candle_5m):
         "retrigger_reason": None,
     }
     service.pending_entry_watch = service._rebalance_pending_watch_plan(service.pending_entry_watch, candle_5m)
+
+
+def _starter_entry_ready(watch_payload, score, entry_score, watch_bucket, signal_grade, confidence, setup, balanced_pro):
+    if not bool(getattr(Config, "ENABLE_STARTER_ENTRY", True)):
+        return False
+    pressure_conflict = (
+        watch_payload.get("pressure_conflict_level")
+        or (balanced_pro or {}).get("pressure_conflict_level")
+        or "NONE"
+    )
+    blockers = set(watch_payload.get("blockers") or [])
+    cautions = set(watch_payload.get("cautions") or [])
+    hard_blockers = {
+        "time_filter",
+        "institutional_confluence_reject",
+        "feed_quality_reject",
+        "pre_expiry_requires_medium_plus_confidence",
+        "sensex_late_day_requires_elite_score",
+    }
+
+    return (
+        watch_bucket == "WATCH_CONFIRMATION_PENDING"
+        and setup in {"BREAKOUT_CONFIRM", "BREAKOUT", "RETEST", "CONTINUATION", "TRAP_REVERSAL"}
+        and signal_grade in {"A", "A+"}
+        and confidence in {"MEDIUM", "HIGH"}
+        and float(score or 0) >= float(getattr(Config, "STARTER_ENTRY_MIN_CONTEXT_SCORE", 84.0) or 84.0)
+        and float(entry_score or 0) >= float(getattr(Config, "STARTER_ENTRY_MIN_ENTRY_SCORE", 78.0) or 78.0)
+        and (pressure_conflict or "NONE").upper() in {"NONE", "MILD", ""}
+        and not hard_blockers.intersection(blockers)
+        and "participation_weak" not in cautions
+        and "participation_baseline_weak" not in cautions
+    )

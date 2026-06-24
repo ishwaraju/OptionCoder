@@ -17,6 +17,7 @@ from pathlib import Path
 # Add current directory to Python path (same as other services)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import Config
 from shared.utils.time_utils import TimeUtils
 from shared.utils.log_utils import build_instrument_log_path, cleanup_old_logs
 
@@ -24,6 +25,7 @@ from shared.utils.log_utils import build_instrument_log_path, cleanup_old_logs
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INSTRUMENTS = ["NIFTY", "BANKNIFTY", "SENSEX"]
 STATE_FILE = REPO_ROOT / "data" / "run_collectors_state.json"
+HEARTBEAT_DIR = REPO_ROOT / "data" / "heartbeat"
 
 
 class CollectorLauncher:
@@ -87,6 +89,49 @@ class CollectorLauncher:
         except OSError:
             return False
 
+    def _heartbeat_paths(self, service_name, instrument):
+        if service_name == "data_collector":
+            return [
+                HEARTBEAT_DIR / f"data_collector_{name.lower()}.json"
+                for name in self.instruments
+            ]
+        if service_name == "oi_collector" and instrument:
+            return [HEARTBEAT_DIR / f"oi_collector_{instrument.lower()}.json"]
+        return []
+
+    def _heartbeat_is_fresh(self, service_name, instrument):
+        if not self.time_utils.is_market_open():
+            return True
+
+        threshold = max(float(getattr(Config, "WATCHDOG_STALE_SECONDS", 120) or 120) * 2, 180.0)
+        now = time.time()
+        ages = []
+        for heartbeat_path in self._heartbeat_paths(service_name, instrument):
+            if not heartbeat_path.exists():
+                continue
+            try:
+                with heartbeat_path.open("r", encoding="utf-8") as f:
+                    heartbeat = json.load(f)
+                epoch = heartbeat.get("epoch")
+                if epoch is not None:
+                    ages.append(max(0.0, now - float(epoch)))
+            except Exception:
+                continue
+
+        if not ages:
+            return False
+        return min(ages) <= threshold
+
+    def _terminate_stale_pid(self, service_name, instrument, pid):
+        try:
+            print(
+                f"[Launcher] Stale heartbeat for {service_name}:{instrument}; "
+                f"terminating pid={pid}"
+            )
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
     def _load_processes_from_state(self):
         state = self._load_state()
         loaded = []
@@ -100,6 +145,10 @@ class CollectorLauncher:
                 continue
             if not self._pid_is_running(pid):
                 stale_found = True
+                continue
+            if not self._heartbeat_is_fresh(service_name, instrument):
+                stale_found = True
+                self._terminate_stale_pid(service_name, instrument, pid)
                 continue
             loaded.append(
                 {
@@ -525,6 +574,11 @@ def parse_args():
         action="store_true",
         help="Start collectors immediately without waiting for market open.",
     )
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Start child services and exit instead of monitoring them.",
+    )
     return parser.parse_args()
 
 
@@ -545,7 +599,8 @@ def main():
     try:
         if args.action == "start":
             launcher.start()
-            launcher.monitor()
+            if not args.detach:
+                launcher.monitor()
         elif args.action == "stop":
             launcher.stop()
         elif args.action == "status":

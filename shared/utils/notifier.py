@@ -57,6 +57,7 @@ def _watch_bucket_label(bucket):
         "WATCH_SETUP": "Setup Watch",
         "WATCH_CONFIRMATION_PENDING": "Confirmation Watch",
         "PA_STRONG_WAIT_PREMIUM": "Price-Action Watch",
+        "WAIT_PULLBACK": "Pullback Watch",
         "WATCH_CONTEXT": "Context Watch",
         "NONE": "Watch",
     }
@@ -87,6 +88,8 @@ def _decision_label_text(label):
     mapping = {
         "CONFIRMED_CE_ENTRY": "Confirmed CE Entry",
         "CONFIRMED_PE_ENTRY": "Confirmed PE Entry",
+        "STARTER_CE_ENTRY": "Starter CE Entry",
+        "STARTER_PE_ENTRY": "Starter PE Entry",
         "WATCH_CE_SETUP": "Watch CE Setup",
         "WATCH_PE_SETUP": "Watch PE Setup",
         "WATCH_CE_FLIP": "Watch CE Flip",
@@ -395,6 +398,31 @@ class Notifier:
             print("\a", end="")
         print(f"[ALERT] {message}")
         return self._send_telegram(message)
+
+    def send_data_health_alert(self, instrument, reason=None, status="DOWN"):
+        """Send a compact alert when live signal generation is blocked by data health."""
+        if not bool(getattr(Config, "ENABLE_DATA_HEALTH_TELEGRAM_ALERTS", False)):
+            return False
+        if isinstance(instrument, dict):
+            payload = instrument
+            instrument = payload.get("instrument")
+            reason = payload.get("reason")
+            status = payload.get("status", status)
+        status = (status or "DOWN").upper()
+        ist_label = _ist_now_label()
+        header = "DATA FEED DOWN" if status != "RECOVERED" else "DATA FEED RECOVERED"
+        if status == "RECOVERED":
+            action = "Live signal generation resumed."
+        else:
+            action = "No live action signal possible until candles/OI become fresh."
+
+        lines = [f"{header} - {instrument}"]
+        if ist_label:
+            lines.append(ist_label)
+        if reason:
+            lines.append(f"Reason: {reason}")
+        lines.append(action)
+        return self.send_alert("\n".join(lines))
     
     def send_trade_notification(self, trade_data):
         """Send trade notification"""
@@ -533,7 +561,7 @@ class Notifier:
     def send_watch_notification(self, watch_data):
         """Send a curated watch alert for manual traders."""
         if not self.enabled:
-            return
+            return False
 
         instrument = watch_data.get("instrument")
         direction = watch_data.get("direction")
@@ -693,12 +721,12 @@ class Notifier:
 
         message = "\n".join(lines)
 
-        self.send_alert(message)
+        return self.send_alert(message)
 
     def send_entry_trigger_notification(self, trigger_data):
         """Send immediate 1-minute entry trigger notification"""
         if not self.enabled:
-            return
+            return False
 
         signal = trigger_data.get("signal")
         strike = trigger_data.get("strike")
@@ -777,13 +805,13 @@ class Notifier:
 
         message = "\n".join(lines)
 
-        self.send_alert(message)
+        return self.send_alert(message)
     
     def send_error_alert(self, error_message):
         """Send error alert"""
         if not self.enabled:
-            return
-        self.send_alert(f"ERROR: {error_message}")
+            return False
+        return self.send_alert(f"ERROR: {error_message}")
     
     def send_trade_monitor_update(self, monitor_data):
         """Send manual trade monitor guidance update."""

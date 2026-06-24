@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OptionCoder Monitor</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-row">
+          <h1>OptionCoder Live Desk</h1>
+          <span class="live-dot">LIVE</span>
+        </div>
+        <p id="subtitle">Option buyer cockpit for NIFTY, BANKNIFTY, and SENSEX</p>
+      </div>
+      <div class="controls">
+        <div class="refresh-meter">
+          <span id="refresh-state">Auto refresh</span>
+          <strong id="refresh-countdown">15s</strong>
+        </div>
+        <div class="segmented" id="instrument-tabs"></div>
+        <button id="refresh" title="Refresh now">Refresh</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="status-strip" id="mode-strip"></section>
+
+      <section class="gamma-overview" id="gamma-overview"></section>
+
+      <section class="manual-layout">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Manual Trader Focus</h2>
+            <span>Signal only · you execute manually</span>
+          </div>
+          <div class="focus-list" id="manual-focus"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Risk Calculator</h2>
+            <span id="risk-calc-status"></span>
+          </div>
+          <div class="risk-calc">
+            <label>
+              Risk budget
+              <input id="risk-budget" type="number" min="0" step="100" value="3000" />
+            </label>
+            <label>
+              Stop points
+              <input id="risk-stop" type="number" min="0" step="1" />
+            </label>
+            <label>
+              Lot size
+              <input id="risk-lot" type="number" min="1" step="1" />
+            </label>
+            <div class="risk-answer" id="risk-answer"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="buyer-layout">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Pro Buyer Discipline</h2>
+            <span id="discipline-state"></span>
+          </div>
+          <div class="smart-grid" id="discipline-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>A+ Setup Rules</h2>
+          </div>
+          <div class="guardrail-list" id="discipline-rules"></div>
+        </div>
+      </section>
+
+      <section class="buyer-layout">
+        <div class="panel coach-panel">
+          <div class="panel-head">
+            <h2>Assumed Trade Coach</h2>
+            <span id="coach-state"></span>
+          </div>
+          <div class="coach-hero" id="trade-coach"></div>
+          <div class="buyer-plan" id="coach-plan"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Hold / Exit Rules</h2>
+          </div>
+          <div class="guardrail-list" id="coach-rules"></div>
+        </div>
+      </section>
+
+      <div class="trade-alert hidden" id="trade-alert">
+        <button id="alert-close" title="Dismiss alert">×</button>
+        <strong id="alert-title">Trade Alert</strong>
+        <p id="alert-text"></p>
+      </div>
+
+      <section class="buyer-layout">
+        <div class="panel buyer-panel">
+          <div class="panel-head">
+            <h2>Buyer Cockpit</h2>
+            <span id="buyer-state"></span>
+          </div>
+          <div class="buyer-hero" id="buyer-hero"></div>
+          <div class="buyer-plan" id="buyer-plan"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Buyer Guardrails</h2>
+          </div>
+          <div class="guardrail-list" id="buyer-guardrails"></div>
+        </div>
+      </section>
+
+      <section class="buyer-layout">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Smart Money Trap Guard</h2>
+            <span id="smart-money-state"></span>
+          </div>
+          <div class="smart-grid" id="smart-money-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Institutional Clues</h2>
+          </div>
+          <div class="guardrail-list" id="smart-money-flags"></div>
+        </div>
+      </section>
+
+      <section class="grid-3">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Premium State</h2>
+          </div>
+          <div class="pressure-grid" id="premium-state"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Risk Plan</h2>
+          </div>
+          <div class="risk-plan" id="risk-plan"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Trade Checklist</h2>
+          </div>
+          <div class="checklist" id="buyer-checklist"></div>
+        </div>
+      </section>
+
+      <section class="buyer-layout">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Gamma Blast Radar</h2>
+            <span id="gamma-state"></span>
+          </div>
+          <div class="gamma-grid" id="gamma-radar"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Sweep Signals</h2>
+          </div>
+          <div class="guardrail-list" id="sweep-signals"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Market News Feed</h2>
+          <span id="news-status"></span>
+        </div>
+        <div class="news-grid" id="news-feed"></div>
+      </section>
+
+      <section class="market-layout">
+        <div class="panel market-panel">
+          <div class="panel-head">
+            <h2>Market Pulse</h2>
+            <span id="generated-at"></span>
+          </div>
+          <div class="metrics" id="market-metrics"></div>
+          <div class="sparkline-wrap">
+            <canvas id="price-chart" width="900" height="220"></canvas>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>OI Pressure</h2>
+          </div>
+          <div class="pressure-grid" id="oi-pressure"></div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Signal Tape</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Signal</th>
+                  <th>Strike</th>
+                  <th>Premium</th>
+                  <th>Score</th>
+                  <th>Quality</th>
+                </tr>
+              </thead>
+              <tbody id="signals-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Strategy Decisions</h2>
+          </div>
+          <div class="decision-list" id="decision-list"></div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Option Candidates</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Side</th>
+                  <th>Strike</th>
+                  <th>LTP</th>
+                  <th>Spread</th>
+                  <th>Edge</th>
+                </tr>
+              </thead>
+              <tbody id="candidates-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Entry Watch</h2>
+          </div>
+          <div class="decision-list compact" id="entry-list"></div>
+        </div>
+      </section>
+
+      <section class="grid-3">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Runtime</h2>
+          </div>
+          <div class="service-list" id="runtime-list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Monitor Events</h2>
+          </div>
+          <div class="decision-list compact" id="monitor-list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>30D Outcomes</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Min</th>
+                  <th>Win%</th>
+                  <th>Avg</th>
+                  <th>MFE</th>
+                  <th>MAE</th>
+                </tr>
+              </thead>
+              <tbody id="outcomes-table"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

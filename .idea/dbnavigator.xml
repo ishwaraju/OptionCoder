@@ -56,9 +56,16 @@
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
     <open-files>
-      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/entry_decisions_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/instrument_profiles" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/signals_issued" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/candles_5m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/trade_monitor_events_1m" />
       <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/oi_snapshots_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/ml_features_log" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/strategy_decisions_5m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/entry_decisions_1m" />
       <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/candles_1m" />
+      <object connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" object-ref="schemas/public/tables/option_signal_horizon_outcomes" />
     </open-files>
   </component>
   <component name="DBNavigator.Project.DatabasePrerequisiteManager">
@@ -136,7 +143,7 @@
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.instrument_profiles" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.candles_5m" active-filter-id="e9ea98dd-612d-4da1-9042-38779418f003">
       <filter id="e9ea98dd-612d-4da1-9042-38779418f003" name="Filter" temporary="false" custom-name="false" type="custom">
-        <condition><![CDATA[<br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
+        <condition><![CDATA[<br><br><br>-- enter your custom conditions here<br>ts >= CURRENT_DATE<br>and ts < CURRENT_DATE + interval '1 day';]]></condition>
       </filter>
     </filter-actions>
     <filter-actions connection-id="a84c16fc-100f-42ab-b88a-35746d584b15" dataset="public.strategy_decisions_5m" active-filter-id="53268176-290c-4186-98f8-14920c68c2c2">

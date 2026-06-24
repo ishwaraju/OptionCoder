@@ -57,6 +57,8 @@ def maybe_fire_pending_entry_watch(service, latest_5m_candle):
     pending = service.pending_entry_watch
     signal = pending["direction"]
     trigger_price = pending["trigger_price"]
+    entry_mode = (evaluation.get("entry_mode") or "CONFIRMED").upper()
+    is_starter = entry_mode == "STARTER"
     strike = evaluation.get("selected_strike")
     option_contract = None
     if service.option_data:
@@ -91,13 +93,16 @@ def maybe_fire_pending_entry_watch(service, latest_5m_candle):
     option_price = (option_contract or {}).get("ltp")
     stop_loss_option_price = None
     first_target_option_price = None
+    notification_sl_pct = pending.get("option_stop_loss_pct")
+    notification_t1_pct = pending.get("option_target_pct")
+    if evaluation.get("entry_mode") == "STARTER":
+        notification_sl_pct = min(float(notification_sl_pct or 20), 16.0)
+        notification_t1_pct = max(float(notification_t1_pct or 28), 28.0)
     if option_price is not None:
-        sl_pct = pending.get("option_stop_loss_pct")
-        t1_pct = pending.get("option_target_pct")
-        if sl_pct is not None:
-            stop_loss_option_price = round(float(option_price) * (1 - float(sl_pct) / 100.0), 2)
-        if t1_pct is not None:
-            first_target_option_price = round(float(option_price) * (1 + float(t1_pct) / 100.0), 2)
+        if notification_sl_pct is not None:
+            stop_loss_option_price = round(float(option_price) * (1 - float(notification_sl_pct) / 100.0), 2)
+        if notification_t1_pct is not None:
+            first_target_option_price = round(float(option_price) * (1 + float(notification_t1_pct) / 100.0), 2)
 
     balanced_pro = {
         "quality": pending.get("quality"),
@@ -126,12 +131,15 @@ def maybe_fire_pending_entry_watch(service, latest_5m_candle):
         "first_target_price": pending.get("first_target_price"),
         "stop_loss_option_price": stop_loss_option_price,
         "first_target_option_price": first_target_option_price,
-        "option_stop_loss_pct": pending.get("option_stop_loss_pct"),
-        "option_target_pct": pending.get("option_target_pct"),
+        "option_stop_loss_pct": notification_sl_pct,
+        "option_target_pct": notification_t1_pct,
         "entry_bid": option_contract.get("top_bid_price") if option_contract else None,
         "entry_ask": option_contract.get("top_ask_price") if option_contract else None,
         "entry_spread": option_contract.get("spread") if option_contract else None,
-        "execution_model": "15m context | 5m setup | 1m execution",
+        "execution_model": (
+            "15m context | 5m A-grade setup | 1m starter execution"
+            if is_starter else "15m context | 5m setup | 1m execution"
+        ),
         "trade_type": service._classify_action_trade_type(
             setup_type=pending.get("signal_type"),
             high_expectancy_profile={
@@ -148,12 +156,19 @@ def maybe_fire_pending_entry_watch(service, latest_5m_candle):
             premium_sl=stop_loss_option_price,
         ),
         "context": pending.get("context"),
-        "risk_note": pending.get("risk_note"),
+        "risk_note": (
+            "STARTER only: small size lo. Full size sirf next 1m follow-through ke baad; trigger reclaim fail ho to exit."
+            if is_starter else pending.get("risk_note")
+        ),
         "greek_summary": format_greek_summary(option_contract),
-        "decision_label": f"CONFIRMED_{signal}_ENTRY",
+        "decision_label": f"STARTER_{signal}_ENTRY" if is_starter else f"CONFIRMED_{signal}_ENTRY",
         "reason": f"{evaluation.get('reason')} | {evaluation.get('micro_reason') or 'micro confirmed'}",
     }
-    service._run_async_notification(service.notifier.send_entry_trigger_notification, entry_notification)
+    telegram_sent = service._send_action_notification(
+        service.notifier.send_entry_trigger_notification,
+        entry_notification,
+        label=f"{service.instrument} watched {signal} entry",
+    )
 
     signal_saved = service._safe_save_signal_issued(
         ts=evaluation["time"],
@@ -162,11 +177,11 @@ def maybe_fire_pending_entry_watch(service, latest_5m_candle):
         strike=strike,
         reason=(
             f"1m entry trigger after 5m watch | setup={pending.get('signal_type')} "
-            f"| watch_bucket={pending.get('watch_bucket')} | base_reason={pending.get('reason')}"
+            f"| entry_mode={entry_mode} | watch_bucket={pending.get('watch_bucket')} | base_reason={pending.get('reason')}"
         ),
         balanced_pro=balanced_pro,
         oi_mode="WATCH_TO_1M_TRIGGER",
-        telegram_sent=Config.ENABLE_ALERTS,
+        telegram_sent=telegram_sent,
         monitor_started=True,
         entry_window_end=evaluation["time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES),
         underlying_price=evaluation["price"],

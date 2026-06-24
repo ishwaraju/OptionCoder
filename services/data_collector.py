@@ -143,8 +143,11 @@ class DataCollector:
         # Reset connection state
         self._log("   Reconnecting WebSocket...")
         try:
-            self.live_feed.force_reconnect()
-            self._log("   ✅ WebSocket reconnected")
+            reconnected = self.live_feed.force_reconnect()
+            if reconnected:
+                self._log("   ✅ WebSocket reconnect requested")
+            else:
+                self._log("   ⏳ WebSocket reconnect skipped; waiting for broker cooldown/market open")
         except Exception as e:
             self._log(f"   ⚠️  Reconnect failed: {e}")
         

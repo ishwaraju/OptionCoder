@@ -23,6 +23,7 @@ from pathlib import Path
 # Add current directory to Python path (same as other tools)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import Config
 from shared.utils.time_utils import TimeUtils
 from shared.utils.log_utils import build_instrument_log_path, cleanup_old_logs
 
@@ -74,6 +75,35 @@ class SignalServiceManager:
         except OSError:
             return False
 
+    def _heartbeat_is_fresh(self, instrument):
+        if not self.time_utils.is_market_open():
+            return True
+
+        heartbeat = self._load_heartbeat(instrument)
+        if not heartbeat:
+            return False
+
+        try:
+            epoch = heartbeat.get("epoch")
+            if epoch is None:
+                return False
+            age = max(0.0, time.time() - float(epoch))
+        except Exception:
+            return False
+
+        threshold = max(float(getattr(Config, "WATCHDOG_STALE_SECONDS", 120) or 120) * 2, 180.0)
+        return age <= threshold
+
+    def _terminate_stale_pid(self, instrument, pid):
+        try:
+            print(
+                f"[Signal Manager] Stale heartbeat for {instrument}; "
+                f"terminating pid={pid}"
+            )
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
     def _load_processes_from_state(self):
         state = self._load_state()
         loaded = []
@@ -86,6 +116,10 @@ class SignalServiceManager:
                 continue
             if not self._pid_is_running(pid):
                 stale_found = True
+                continue
+            if not self._heartbeat_is_fresh(instrument):
+                stale_found = True
+                self._terminate_stale_pid(instrument, pid)
                 continue
             loaded.append(
                 {
@@ -380,6 +414,11 @@ def parse_args():
         default=sys.executable,
         help="Python executable to use"
     )
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Start child services and exit instead of monitoring them.",
+    )
     return parser.parse_args()
 
 
@@ -396,7 +435,8 @@ def main():
     if args.action == "start":
         instruments = args.instruments or ([args.instrument] if args.instrument else DEFAULT_INSTRUMENTS)
         manager.start(instruments)
-        manager.monitor()
+        if not args.detach:
+            manager.monitor()
     elif args.action == "stop":
         manager.stop()
     elif args.action == "status":

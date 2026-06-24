@@ -19,6 +19,7 @@ class AutoScheduler:
     def __init__(self):
         self.time_utils = TimeUtils()
         self.instruments = ["NIFTY", "BANKNIFTY", "SENSEX"]
+        self.python_executable = sys.executable
 
     def _log(self, message):
         """Log with HH:mm:ss IST timestamp prefix"""
@@ -121,8 +122,8 @@ class AutoScheduler:
 
     def _log_start_snapshot(self):
         self._log("🔎 Startup Status Snapshot")
-        self._log_service_snapshot("Collectors", ["python3", "tools/run_collectors.py", "status"])
-        self._log_service_snapshot("Signals", ["python3", "tools/run_signals.py", "status"])
+        self._log_service_snapshot("Collectors", [self.python_executable, "tools/run_collectors.py", "status"])
+        self._log_service_snapshot("Signals", [self.python_executable, "tools/run_signals.py", "status"])
         telegram_pids = self._find_running_pids("services/telegram_bot_service.py")
         if telegram_pids:
             self._log(f"📋 Telegram:")
@@ -135,7 +136,16 @@ class AutoScheduler:
         """Start data collectors (non-blocking)"""
         try:
             self._log("🚀 Starting Data Collectors")
-            cmd = ["python3", "tools/run_collectors.py", "start", "--instruments"] + self.instruments
+            cmd = [
+                self.python_executable,
+                "tools/run_collectors.py",
+                "start",
+                "--detach",
+                "--instruments",
+                *self.instruments,
+                "--python",
+                self.python_executable,
+            ]
             log_file = build_log_path("run_collectors")
             log_fh = open(log_file, "a")
             subprocess.Popen(
@@ -152,6 +162,7 @@ class AutoScheduler:
                     f"✅ Collectors started: data_collector={data_pids[0]} | "
                     f"{', '.join(f'{k}={v[0]}' for k, v in oi_started.items())} | log={log_file}"
                 )
+                return True
             else:
                 self._log(
                     f"⚠️ Collectors start incomplete. data_collector="
@@ -159,14 +170,25 @@ class AutoScheduler:
                     f"OI running: {', '.join(f'{k}={v[0]}' for k, v in oi_started.items()) or 'none'} | "
                     f"Missing OI: {', '.join(missing_oi) or 'none'} | log={log_file}"
                 )
+                return False
         except Exception as e:
             self._log(f"❌ Error starting collectors: {e}")
+            return False
     
     def start_signals(self):
         """Start signal services (non-blocking)"""
         try:
             self._log("🚀 Starting Signal Services")
-            cmd = ["python3", "tools/run_signals.py", "start", "--instruments"] + self.instruments
+            cmd = [
+                self.python_executable,
+                "tools/run_signals.py",
+                "start",
+                "--detach",
+                "--instruments",
+                *self.instruments,
+                "--python",
+                self.python_executable,
+            ]
             log_file = build_log_path("run_signals")
             log_fh = open(log_file, "a")
             subprocess.Popen(
@@ -182,13 +204,16 @@ class AutoScheduler:
                 self._log(
                     f"✅ Signal services started: {', '.join(f'{k}={v[0]}' for k, v in started.items())} | log={log_file}"
                 )
+                return True
             else:
                 self._log(
                     f"⚠️ Signal start incomplete. Running: {', '.join(f'{k}={v[0]}' for k, v in started.items()) or 'none'} | "
                     f"Missing: {', '.join(missing)} | log={log_file}"
                 )
+                return False
         except Exception as e:
             self._log(f"❌ Error starting signals: {e}")
+            return False
     
     def start_telegram_bot(self):
         """Start telegram bot (non-blocking)"""
@@ -197,7 +222,7 @@ class AutoScheduler:
             # Use unbuffered output (-u) and proper log file
             from shared.utils.log_utils import build_log_path
             log_file = build_log_path("telegram_bot_service")
-            cmd = ["python3", "-u", "services/telegram_bot_service.py"]
+            cmd = [self.python_executable, "-u", "services/telegram_bot_service.py"]
             # Open log file for appending
             with open(log_file, 'a') as f:
                 f.write(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Telegram Bot Started\n")
@@ -209,7 +234,10 @@ class AutoScheduler:
                 cwd=os.getcwd(),
                 stdout=log_fh,
                 stderr=subprocess.STDOUT,
-                bufsize=1
+                bufsize=1,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                close_fds=True,
+                start_new_session=True,
             )
             pids = self._verify_telegram_started()
             if pids:
@@ -228,7 +256,7 @@ class AutoScheduler:
         try:
             # Stop collectors
             self._log("🛑 Stopping Data Collectors...")
-            cmd = ["python3", "tools/run_collectors.py", "stop"]
+            cmd = [self.python_executable, "tools/run_collectors.py", "stop"]
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
             self._log(f"✅ Collectors stopped: {result.stdout}")
         except Exception as e:
@@ -237,7 +265,7 @@ class AutoScheduler:
         try:
             # Stop signals
             self._log("🛑 Stopping Signal Services...")
-            cmd = ["python3", "tools/run_signals.py", "stop"]
+            cmd = [self.python_executable, "tools/run_signals.py", "stop"]
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
             self._log(f"✅ Signals stopped: {result.stdout}")
         except Exception as e:
@@ -253,8 +281,8 @@ class AutoScheduler:
             self._log(f"❌ Error stopping telegram bot: {e}")
 
         self._log("🔎 Post-stop Status Snapshot")
-        self._log_service_snapshot("Collectors", ["python3", "tools/run_collectors.py", "status"])
-        self._log_service_snapshot("Signals", ["python3", "tools/run_signals.py", "status"])
+        self._log_service_snapshot("Collectors", [self.python_executable, "tools/run_collectors.py", "status"])
+        self._log_service_snapshot("Signals", [self.python_executable, "tools/run_signals.py", "status"])
         telegram_pids = self._find_running_pids("services/telegram_bot_service.py")
         self._log("📋 Telegram:")
         if telegram_pids:
@@ -314,10 +342,14 @@ class AutoScheduler:
         self._log("=" * 50)
 
         # Start in order
-        self.start_collectors()
+        if not self.start_collectors():
+            self._log("🛑 Collectors failed - not starting signal services")
+            return
         time.sleep(5)  # Wait for collectors to initialize
 
-        self.start_signals()
+        if not self.start_signals():
+            self._log("🛑 Signals failed - not starting telegram bot")
+            return
         time.sleep(4 * 60)  # Wait 4 minutes until 9:18 AM IST
 
         self.start_telegram_bot()
@@ -356,8 +388,8 @@ class AutoScheduler:
         self._check_timezone()
         self._log(f"⏰ Current IST Time: {ist_now.strftime('%Y-%m-%d %H:%M:%S')}")
         self._log("⏰ Services will auto-start at 9:14 AM IST on weekdays")
-        self._log("🛑 Services will auto-stop at 3:40 PM IST on weekdays")
-        self._log("📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST")
+        self._log("🛑 Services will auto-stop at 3:31 PM IST on weekdays")
+        self._log("📝 Schedule: Monday-Friday, 9:14 AM IST - 3:31 PM IST")
         self._log("🛑 Press Ctrl+C to stop scheduler")
         
         # Schedule daily at 9:14 AM IST (start)
@@ -367,17 +399,17 @@ class AutoScheduler:
         schedule.every().thursday.at("09:14").do(self.start_all_services)
         schedule.every().friday.at("09:14").do(self.start_all_services)
         
-        # Schedule daily at 3:40 PM IST (stop)
-        schedule.every().monday.at("15:40").do(self.stop_all_services)
-        schedule.every().tuesday.at("15:40").do(self.stop_all_services)
-        schedule.every().wednesday.at("15:40").do(self.stop_all_services)
-        schedule.every().thursday.at("15:40").do(self.stop_all_services)
-        schedule.every().friday.at("15:40").do(self.stop_all_services)
+        # Schedule daily at 3:31 PM IST (stop)
+        schedule.every().monday.at("15:31").do(self.stop_all_services)
+        schedule.every().tuesday.at("15:31").do(self.stop_all_services)
+        schedule.every().wednesday.at("15:31").do(self.stop_all_services)
+        schedule.every().thursday.at("15:31").do(self.stop_all_services)
+        schedule.every().friday.at("15:31").do(self.stop_all_services)
         
         # Also start immediately if it's past 9:14 AM IST on weekday
         if (ist_now.weekday() < 5 and ist_now.hour >= 9 and (ist_now.hour > 9 or ist_now.minute >= 14)):
-            if ist_now.hour < 15 or (ist_now.hour == 15 and ist_now.minute < 40):
-                self._log("🚀 Current IST time is past 9:14 AM and before 3:40 PM - Starting services now!")
+            if ist_now.hour < 15 or (ist_now.hour == 15 and ist_now.minute < 31):
+                self._log("🚀 Current IST time is past 9:14 AM and before 3:31 PM - Starting services now!")
                 self.start_all_services()
         
         # Track last run dates to prevent duplicate runs
@@ -397,11 +429,11 @@ class AutoScheduler:
                 self.start_all_services()
                 last_start_date = current_date
             
-            # Check for 3:40 PM IST stop (Monday-Friday)
+            # Check for 3:31 PM IST stop (Monday-Friday)
             if (ist_now.weekday() < 5 and 
-                ist_now.hour == 15 and ist_now.minute == 40 and
+                ist_now.hour == 15 and ist_now.minute == 31 and
                 current_date != last_stop_date):
-                self._log("🛑 Trigger: 3:40 PM IST - Stopping services...")
+                self._log("🛑 Trigger: 3:31 PM IST - Stopping services...")
                 self.stop_all_services()
                 last_stop_date = current_date
             

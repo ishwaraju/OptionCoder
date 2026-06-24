@@ -4,9 +4,14 @@ from shared.feeds.connection_manager import ConnectionManager
 class _DummyFeed:
     def __init__(self):
         self.force_reconnect_calls = 0
+        self.rate_limit_remaining = 0
 
     def force_reconnect(self):
         self.force_reconnect_calls += 1
+        return True
+
+    def rate_limit_remaining_seconds(self):
+        return self.rate_limit_remaining
 
 
 class _DummyCandleManager:
@@ -76,3 +81,24 @@ def test_high_quality_breakout_bypasses_reconnect_cooldown():
     assert signal == "CE"
     assert reason == "original"
     assert manager.reconnect_cooldown_remaining == 2
+
+
+def test_stale_feed_does_not_force_reconnect_during_rate_limit(monkeypatch):
+    feed = _DummyFeed()
+    feed.rate_limit_remaining = 120
+    candle_manager = _DummyCandleManager()
+    manager = ConnectionManager(
+        live_feed=feed,
+        candle_manager=candle_manager,
+        historical_backfill=_DummyBackfill(),
+    )
+    manager.feed_stale = True
+    manager.last_stale_log = 1_000
+    manager.last_stale_force_reconnect = 1_000
+
+    monkeypatch.setattr("shared.feeds.connection_manager.time.time", lambda: 2_000)
+
+    state = manager.evaluate_feed_health(feed_connected=False, effective_data_age_seconds=None)
+
+    assert state["skip_processing"] is True
+    assert feed.force_reconnect_calls == 0

@@ -109,6 +109,17 @@ class SignalService:
         thread.start()
         return thread
 
+    def _send_action_notification(self, callback, payload, label="action signal"):
+        """Send trade-critical notifications synchronously so DB delivery state is real."""
+        try:
+            delivered = bool(callback(payload))
+            if Config.ENABLE_ALERTS and not delivered:
+                self._log(f"Telegram delivery failed for {label}")
+            return delivered
+        except Exception as e:
+            self._log(f"Telegram delivery exception for {label}: {e}")
+            return False
+
     def __init__(self, instrument=None):
         self.time_utils = TimeUtils()
         self.profile = get_instrument_profile(instrument)
@@ -198,7 +209,11 @@ class SignalService:
         self.data_pause_active = False
         self.last_data_pause_reason = None
         self.last_data_health = None
+        self.last_data_health_alert_time = 0
+        self.last_data_health_alert_reason = None
+        self.pending_pullback_watch_plan = None
         self._suppress_live_actions = False
+        self._stale_backlog_replay = False
         
         # Runtime gap detection
         self.runtime_gap_detector = RuntimeGapDetector(
@@ -598,6 +613,72 @@ class SignalService:
             risk_profile=risk_profile,
             price=price,
         )
+
+    def _high_probability_action_gate(self, signal, expectancy_profile, premium_guard, feed_health, selected_option_contract=None):
+        if not bool(getattr(Config, "HIGH_PROB_ACTION_ONLY", True)):
+            return True, "high_probability_gate_disabled"
+        signal = (signal or "").upper()
+        if signal not in {"CE", "PE"}:
+            return False, "invalid_signal"
+
+        profile = expectancy_profile or {}
+        premium_guard = premium_guard or {}
+        feed_label = ((feed_health or {}).get("label") or "GOOD").upper()
+        pro_check = profile.get("pro_check") or {}
+        quality_tag = (profile.get("quality_tag") or "").upper()
+        signal_family = (profile.get("signal_family") or "").upper()
+        confidence = (getattr(self.strategy, "last_confidence", "") or "").upper()
+        signal_grade = (getattr(self.strategy, "last_signal_grade", "") or "").upper()
+        pressure_conflict = (getattr(self.strategy, "last_pressure_conflict_level", "NONE") or "NONE").upper()
+        cautions = set(getattr(self.strategy, "last_cautions", []) or [])
+        blockers = set(getattr(self.strategy, "last_blockers", []) or [])
+        score = float(getattr(self.strategy, "last_score", 0) or 0)
+        entry_score = float(getattr(self.strategy, "last_entry_score", score) or score)
+        min_score = float(getattr(Config, "HIGH_PROB_MIN_CONTEXT_SCORE", 88.0) or 88.0)
+        min_entry = float(getattr(Config, "HIGH_PROB_MIN_ENTRY_SCORE", 86.0) or 86.0)
+        min_pro = float(getattr(Config, "HIGH_PROB_MIN_PRO_SCORE", 75.0) or 75.0)
+        starter_profile = quality_tag == "PA_STRONG_ENTER_SMALL"
+        spread_pct = premium_guard.get("spread_pct")
+        if spread_pct is None and selected_option_contract:
+            spread_pct = self._spread_percent(selected_option_contract)
+
+        reasons = []
+        if feed_label == "REJECT":
+            reasons.append("feed_reject")
+        if feed_label == "RISKY":
+            reasons.append("feed_risky")
+        if signal_grade not in {"A", "A+"} and not (starter_profile and signal_grade == "B" and score >= 96 and entry_score >= 92):
+            reasons.append(f"grade_{signal_grade or 'missing'}")
+        if confidence not in {"HIGH", "MEDIUM"}:
+            reasons.append(f"confidence_{confidence or 'missing'}")
+        if score < min_score:
+            reasons.append(f"context_score<{min_score:.0f}")
+        if entry_score < min_entry:
+            reasons.append(f"entry_score<{min_entry:.0f}")
+        if pressure_conflict not in {"NONE", "MILD", ""}:
+            reasons.append(f"pressure_conflict_{pressure_conflict}")
+        if blockers.intersection({"time_filter", "institutional_confluence_reject", "feed_quality_reject"}):
+            reasons.append("hard_blocker_present")
+        if cautions.intersection({"participation_weak", "participation_delta_missing"}):
+            reasons.append("participation_not_clean")
+        if quality_tag not in {"HQ", "TQ_CLEAN", "RQ", "PA_STRONG_ENTER_SMALL"}:
+            reasons.append(f"quality_{quality_tag or 'missing'}")
+        if signal_family == "LATE_EXTENSION":
+            reasons.append("late_extension")
+        if bool(getattr(Config, "HIGH_PROB_REQUIRE_PREMIUM_CONFIRMED", True)) and not profile.get("premium_confirmed") and not starter_profile:
+            reasons.append("premium_not_confirmed")
+        if (premium_guard.get("label") or "").upper() != "PREMIUM_OK":
+            reasons.append(f"premium_{premium_guard.get('label') or 'missing'}")
+        if spread_pct is not None and float(spread_pct) > float(getattr(Config, "PRO_TRADER_MAX_ACTION_SPREAD_PCT", 3.8) or 3.8):
+            reasons.append("spread_too_wide")
+        if (pro_check.get("label") or "").upper() != "PRO_PASS":
+            reasons.append(f"pro_{pro_check.get('label') or 'missing'}")
+        if float(pro_check.get("score") or 0.0) < min_pro:
+            reasons.append(f"pro_score<{min_pro:.0f}")
+
+        if reasons:
+            return False, ";".join(reasons)
+        return True, "high_probability_pass"
 
     def _compute_flip_score(self, direction, structure_break, vwap_break, latest_1m=None, previous_1m=None):
         return OptionSignalGuard.compute_flip_score(self, direction, structure_break, vwap_break, latest_1m, previous_1m)
@@ -1858,6 +1939,13 @@ class SignalService:
         participation_breadth = float(directional.get("same_side_weighted_breadth") or 0.0)
         opposite_delta = float(directional.get("opposite_side_weighted_delta") or 0.0)
         sweep_quality = ((option_sweep_context or {}).get("quality") or "").upper()
+        ict_context = getattr(self.strategy, "last_ict_context", None) or {}
+        ict_quality = (ict_context.get("quality") or "NONE").upper()
+        ict_action_ready = bool(
+            ict_context.get("direction") == signal
+            and ict_context.get("action_ready")
+            and ict_quality in {"A", "B"}
+        )
 
         trend_text = (trend_15m or "UNKNOWN").upper()
         aligned_trend = (
@@ -1875,7 +1963,7 @@ class SignalService:
             and setup in {"BREAKOUT", "BREAKOUT_CONFIRM", "RETEST", "CONTINUATION", "OPENING_DRIVE"}
             and entry_score >= 88
         )
-        if not aligned_trend and not (neutral_trend and (reversal_setup or strong_sweep_context)):
+        if not aligned_trend and not (neutral_trend and (reversal_setup or strong_sweep_context or ict_action_ready)):
             return False, f"15m context not aligned ({trend_text} vs {signal})"
 
         if context_score < float(getattr(Config, "INSTITUTIONAL_MIN_CONTEXT_SCORE", 88.0) or 88.0):
@@ -1910,7 +1998,14 @@ class SignalService:
             and participation_quality in {"STRONG", "MODERATE", "WEAK"}
             and participation_breadth >= 1.0
         )
-        if build_up not in supportive_build_ups and not squeeze_ok and not sweep_continuation_ok:
+        ict_continuation_ok = (
+            build_up == "NO_CLEAR_SIGNAL"
+            and ict_action_ready
+            and pressure_bias == expected_bias
+            and oi_trend in {expected_bias, "NEUTRAL"}
+            and participation_breadth >= 1.0
+        )
+        if build_up not in supportive_build_ups and not squeeze_ok and not sweep_continuation_ok and not ict_continuation_ok:
             return False, f"build-up not supportive ({build_up})"
 
         wall_ok = (
@@ -1932,6 +2027,7 @@ class SignalService:
         return True, (
             f"institutional confluence ok | 15m={trend_text} | pressure={pressure_bias} "
             f"| oi={oi_trend}/{build_up} | participation={participation_quality}"
+            + (f" | {ict_context.get('summary')}" if ict_action_ready else "")
         )
 
     def _restore_indicator_state(self):
@@ -2984,7 +3080,19 @@ class SignalService:
         )
         pressure_summary = (balanced_pro or {}).get("pressure_summary")
         expectancy_profile = self.current_expectancy_profile or {}
+        pullback_plan = self.pending_pullback_watch_plan or {}
         trade_thesis = self._build_trade_thesis(direction, balanced_pro=balanced_pro, premium_guard=None)
+        if watch_bucket == "WAIT_PULLBACK" and pullback_plan:
+            action_hint = (
+                f"Move chase mat karo. {pullback_plan.get('strike')} {direction} premium "
+                f"{pullback_plan.get('entry_max')} ke paas/cooldown ke baad hi entry consider karo."
+            )
+            entry_if = (
+                f"Premium <= {pullback_plan.get('entry_max')} ke baad 1m reclaim/follow-through confirm ho"
+            )
+            avoid_if = (
+                f"Skip if premium {pullback_plan.get('current_ltp')} se upar hi bhaagta rahe ya spread wide ho"
+            )
 
         return {
             "instrument": self.instrument,
@@ -3006,6 +3114,10 @@ class SignalService:
             "time_stop_warn_minutes": risk_profile["time_stop_warn_minutes"],
             "time_stop_exit_minutes": risk_profile["time_stop_exit_minutes"],
             "risk_note": risk_profile["risk_note"],
+            "selected_strike": pullback_plan.get("strike"),
+            "wait_pullback": watch_bucket == "WAIT_PULLBACK",
+            "premium_pullback_entry_max": pullback_plan.get("entry_max"),
+            "premium_chase_ltp": pullback_plan.get("current_ltp"),
             "no_trade_zone": no_trade_zone,
             "structure_suggestion": structure_suggestion,
             "blockers": blockers,
@@ -3214,6 +3326,13 @@ class SignalService:
                 and score >= 78
                 and entry_score >= 74
                 and "participation_delta_missing" not in cautions
+            )
+        if watch_bucket == "WAIT_PULLBACK":
+            return (
+                signal_grade in {"A", "A+", "B"}
+                and score >= 76
+                and entry_score >= 68
+                and "participation_weak" not in cautions
             )
         if watch_bucket == "WATCH_SETUP":
             return (
@@ -3548,6 +3667,8 @@ class SignalService:
         structure = spike.get("structure") or {}
         if spike.get("leader_momentum"):
             trend_context = spike.get("trend_day_context") or {}
+            min_context_score = float(getattr(Config, "FAST_SPIKE_ACTION_MIN_CONTEXT_SCORE", 84.0) or 84.0)
+            min_entry_score = float(getattr(Config, "FAST_SPIKE_ACTION_MIN_ENTRY_SCORE", 78.0) or 78.0)
             return (
                 direction in {"CE", "PE"}
                 and (spike.get("quality") or "").upper() == "STRONG"
@@ -3555,6 +3676,8 @@ class SignalService:
                 and (bool(structure.get("five_min_ready")) or bool(trend_context.get("active")))
                 and (watch_payload.get("signal_grade") or "").upper() in {"A", "A+"}
                 and (watch_payload.get("confidence") or "").upper() == "HIGH"
+                and float(watch_payload.get("score") or 0) >= min_context_score
+                and float(watch_payload.get("entry_score") or 0) >= min_entry_score
             )
         oi_ladder_data = spike.get("oi_ladder_data") or {}
         pressure_metrics = spike.get("pressure_metrics") or {}
@@ -3577,6 +3700,8 @@ class SignalService:
             if direction == "CE"
             else wall_alert in {"SUPPORT_BREAK_RISK", "NONE", ""}
         )
+        min_context_score = float(getattr(Config, "FAST_SPIKE_ACTION_MIN_CONTEXT_SCORE", 84.0) or 84.0)
+        min_entry_score = float(getattr(Config, "FAST_SPIKE_ACTION_MIN_ENTRY_SCORE", 78.0) or 78.0)
         squeeze_ok = (
             build_up == "NO_CLEAR_SIGNAL"
             and sweep_quality == "STRONG"
@@ -3599,6 +3724,8 @@ class SignalService:
             and wall_ok
             and (watch_payload.get("signal_grade") or "").upper() in {"A", "A+"}
             and (watch_payload.get("confidence") or "").upper() == "HIGH"
+            and float(watch_payload.get("score") or 0) >= min_context_score
+            and float(watch_payload.get("entry_score") or 0) >= min_entry_score
         )
 
     def _fire_fast_spike_action(self, watch_payload, latest_1m, latest_5m):
@@ -3703,7 +3830,11 @@ class SignalService:
             "decision_label": f"CONFIRMED_{signal}_ENTRY",
             "reason": f"FAST_1M_SPIKE_ACTION | {watch_payload.get('reason')}",
         }
-        self._run_async_notification(self.notifier.send_entry_trigger_notification, entry_notification)
+        telegram_sent = self._send_action_notification(
+            self.notifier.send_entry_trigger_notification,
+            entry_notification,
+            label=f"{self.instrument} fast 1m {signal} entry",
+        )
         self._safe_save_entry_decision_1m(
             ts=latest_1m["time"],
             pending=self.pending_entry_watch or watch_payload,
@@ -3728,7 +3859,7 @@ class SignalService:
             reason=f"FAST_1M_SPIKE_ACTION | {watch_payload.get('reason')}",
             balanced_pro=balanced_pro,
             oi_mode="FAST_1M_SPIKE",
-            telegram_sent=Config.ENABLE_ALERTS,
+            telegram_sent=telegram_sent,
             monitor_started=True,
             entry_window_end=latest_1m["time"] + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES),
             underlying_price=price,
@@ -3786,6 +3917,13 @@ class SignalService:
             "reason": watch_payload["reason"],
             "fast_track_ready": True,
             "strong_watch_setup": True,
+            "starter_entry_ready": (
+                bool(getattr(Config, "ENABLE_STARTER_ENTRY", True))
+                and (watch_payload.get("signal_grade") or "").upper() in {"A", "A+"}
+                and (watch_payload.get("confidence") or "").upper() in {"MEDIUM", "HIGH"}
+                and float(watch_payload.get("score") or 0) >= float(getattr(Config, "STARTER_ENTRY_MIN_CONTEXT_SCORE", 84.0) or 84.0)
+                and float(watch_payload.get("entry_score") or 0) >= float(getattr(Config, "STARTER_ENTRY_MIN_ENTRY_SCORE", 78.0) or 78.0)
+            ),
             "hybrid_mode": True,
             "cautions": list(watch_payload.get("cautions") or []),
             "blockers": [],
@@ -3949,6 +4087,7 @@ class SignalService:
         candidate_signal = signal
         candidate_reason = reason
         self.current_expectancy_profile = None
+        self.pending_pullback_watch_plan = None
         self._current_candle_time = candle_5m["time"]
         pre_ml_balanced_pro = self._build_balanced_pro_summary(
             base_bias,
@@ -4142,6 +4281,23 @@ class SignalService:
                 signal = None
                 reason = f"OI wall filtered ({wall_guard['label']}: {wall_guard['reason']})"
             elif premium_guard and premium_guard.get("label") not in {"PREMIUM_OK"}:
+                if premium_guard.get("label") in {"PREMIUM_CHASED", "PREMIUM_CHASED_3M"}:
+                    pullback_plan = self._build_no_chase_pullback_plan(
+                        signal,
+                        selected_strike,
+                        selected_option_contract,
+                        premium_guard,
+                    )
+                    if pullback_plan:
+                        self.pending_pullback_watch_plan = pullback_plan
+                        candidate_signal = signal
+                        candidate_reason = (
+                            f"{reason} | no_chase_wait_pullback={premium_guard['label']} "
+                            f"| {premium_guard['reason']}"
+                        )
+                        balanced_pro["tradability"] = "WATCH"
+                        balanced_pro["decision_state"] = "WATCH"
+                        balanced_pro["watch_bucket"] = "WAIT_PULLBACK"
                 signal = None
                 reason = f"Premium quality filtered ({premium_guard['label']}: {premium_guard['reason']})"
 
@@ -4219,6 +4375,24 @@ class SignalService:
                             f"({expectancy_profile.get('quality_tag')} / {expectancy_profile.get('entry_phase')} | "
                             f"{'; '.join(expectancy_profile.get('reasons') or ['not_high_expectancy'])})"
                         )
+                if signal:
+                    high_prob_ok, high_prob_reason = self._high_probability_action_gate(
+                        signal=signal,
+                        expectancy_profile=expectancy_profile,
+                        premium_guard=premium_guard,
+                        feed_health=feed_health,
+                        selected_option_contract=selected_option_contract,
+                    )
+                    if high_prob_ok:
+                        reason = f"{reason} | high_probability={high_prob_reason}"
+                    else:
+                        candidate_signal = signal
+                        candidate_reason = f"{reason} | high_probability_block={high_prob_reason}"
+                        balanced_pro["tradability"] = "WATCH"
+                        balanced_pro["decision_state"] = "WATCH"
+                        balanced_pro["watch_bucket"] = "WATCH_CONFIRMATION_PENDING"
+                        signal = None
+                        reason = f"High probability gate blocked ({high_prob_reason})"
                 if signal:
                     trigger_price = (
                         self.strategy.last_entry_plan.get("entry_above")
@@ -4507,7 +4681,11 @@ class SignalService:
                     f"Signal {signal} detected but live dispatch suppressed"
                 )
             else:
-                self._run_async_notification(self.notifier.send_trade_notification, trade_notification)
+                telegram_sent = self._send_action_notification(
+                    self.notifier.send_trade_notification,
+                    trade_notification,
+                    label=f"{self.instrument} {signal} trade signal",
+                )
 
                 signal_saved = self._safe_save_signal_issued(
                     ts=signal_entry_time,
@@ -4517,7 +4695,7 @@ class SignalService:
                     reason=enriched_reason,
                     balanced_pro=balanced_pro,
                     oi_mode=oi_mode,
-                    telegram_sent=Config.ENABLE_ALERTS,
+                    telegram_sent=telegram_sent,
                     monitor_started=True,
                     entry_window_end=(
                         signal_entry_time + timedelta(minutes=Config.SIGNAL_VALIDITY_MINUTES)
@@ -4598,7 +4776,17 @@ class SignalService:
         
         candle_age = max(0.0, (now - candle_time).total_seconds())
         if not Config.TEST_MODE and candle_age > 8 * 60:
+            recent_candles = self.db_reader.fetch_recent_candles_5m(
+                instrument=self.instrument,
+                limit=24,
+            )
+            pending = self._collect_unprocessed_5m_candles(recent_candles, now)
+            if pending:
+                self._stale_backlog_replay = True
+                return True, None
+            self._stale_backlog_replay = False
             return False, f"Latest 5m candle is stale ({int(candle_age)}s old)"
+        self._stale_backlog_replay = False
 
         latest_oi_snapshot = self.db_reader.fetch_latest_oi_snapshot(self.instrument)
         if latest_oi_snapshot:
@@ -4616,6 +4804,69 @@ class SignalService:
                 return False, f"Latest OI snapshot is stale ({int(oi_age)}s old)"
 
         return True, None
+
+    def _build_no_chase_pullback_plan(self, signal, selected_strike, selected_option_contract, premium_guard):
+        if not bool(getattr(Config, "NO_CHASE_PULLBACK_WATCH_ENABLED", True)):
+            return None
+        if signal not in {"CE", "PE"} or not selected_option_contract or not premium_guard:
+            return None
+        current_ltp = selected_option_contract.get("ltp") or premium_guard.get("current_ltp")
+        try:
+            current_ltp = float(current_ltp)
+        except Exception:
+            return None
+        if current_ltp <= 0:
+            return None
+        retrace_pct = float(getattr(Config, "PREMIUM_PULLBACK_ENTRY_RETRACE_PCT", 8.0) or 8.0)
+        entry_max = round(current_ltp * (1.0 - retrace_pct / 100.0), 2)
+        return {
+            "direction": signal,
+            "strike": selected_strike or selected_option_contract.get("strike"),
+            "current_ltp": round(current_ltp, 2),
+            "entry_max": entry_max,
+            "retrace_pct": retrace_pct,
+            "label": premium_guard.get("label"),
+            "reason": premium_guard.get("reason"),
+        }
+
+    def _maybe_send_data_health_alert(self, reason):
+        if Config.TEST_MODE or not bool(getattr(Config, "ENABLE_DATA_HEALTH_TELEGRAM_ALERTS", False)):
+            return
+        now = time_module.time()
+        cooldown = max(60, int(getattr(Config, "DATA_HEALTH_ALERT_COOLDOWN_SECONDS", 900)))
+        reason_changed = reason != self.last_data_health_alert_reason
+        cooldown_elapsed = now - float(self.last_data_health_alert_time or 0) >= cooldown
+        if not reason_changed and not cooldown_elapsed:
+            return
+        self.last_data_health_alert_time = now
+        self.last_data_health_alert_reason = reason
+        self._run_async_notification(
+            self.notifier.send_data_health_alert,
+            {
+                "instrument": self.instrument,
+                "reason": reason,
+                "status": "DOWN",
+            },
+        )
+
+    def _send_data_recovered_alert(self):
+        if (
+            Config.TEST_MODE
+            or not bool(getattr(Config, "ENABLE_DATA_HEALTH_TELEGRAM_ALERTS", False))
+            or not self.last_data_health_alert_reason
+        ):
+            return
+        recovered_from = self.last_data_health_alert_reason
+        self.last_data_health_alert_reason = None
+        self.last_data_health_alert_time = 0
+        self._run_async_notification(
+            self.notifier.send_data_health_alert,
+            {
+                "instrument": self.instrument,
+                "reason": f"Recovered from: {recovered_from}",
+                "status": "RECOVERED",
+            },
+        )
 
     def run(self):
         """Main signal service loop"""
@@ -4643,11 +4894,13 @@ class SignalService:
                         self.last_data_pause_reason = pause_reason
                     self.data_pause_active = True
                     self.watchdog.touch({"phase": "data_pause", "reason": pause_reason})
+                    self._maybe_send_data_health_alert(pause_reason)
                     time_module.sleep(30)
                     continue
 
                 if self.data_pause_active:
                     self._log("Data stream healthy again. Resuming signal generation.")
+                    self._send_data_recovered_alert()
                     self.data_pause_active = False
                     self.last_data_pause_reason = None
                     self.watchdog.touch({"phase": "resumed"})
@@ -4687,9 +4940,10 @@ class SignalService:
                             f"from {candles_to_process[0]['time']} to {candles_to_process[-1]['time']}"
                         )
                     self._refresh_option_data_if_due()
+                    replaying_stale_backlog = bool(self._stale_backlog_replay)
                     for idx, candle_5m in enumerate(candles_to_process):
                         candle_time = candle_5m["time"]
-                        self._suppress_live_actions = idx < (len(candles_to_process) - 1)
+                        self._suppress_live_actions = replaying_stale_backlog or idx < (len(candles_to_process) - 1)
                         self._log(
                             f"Processing 5m candle | Time: {candle_time} | Price: {candle_5m['close']} | "
                             f"Mode: {'BACKFILL' if self._suppress_live_actions else 'LIVE'}"
@@ -4698,6 +4952,7 @@ class SignalService:
                         self._process_5m_candle(candle_5m)
                         self.last_processed_5m_ts = candle_time
                     self._suppress_live_actions = False
+                    self._stale_backlog_replay = False
                     latest_candle = candles_to_process[-1]
 
                 current_minute = current_time.replace(second=0, microsecond=0)

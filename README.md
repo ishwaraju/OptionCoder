@@ -76,6 +76,19 @@ Check service heartbeat/watchdog status:
 python3 /Users/ishwar/Documents/OptionCoder/tools/runtime_status.py
 ```
 
+Run the local read-only dashboard:
+```bash
+.venv/bin/python /Users/ishwar/Documents/OptionCoder/ui/server.py --host 127.0.0.1 --port 8765
+```
+
+Open `http://127.0.0.1:8765` to monitor NIFTY, BANKNIFTY, and SENSEX runtime health, buyer cockpit, gamma blast radar, market news RSS feed, OI pressure, strategy decisions, signals, entry watch state, monitor events, and recent outcome summaries.
+
+Dashboard refresh cadence:
+- Browser dashboard refreshes every 15 seconds.
+- 1-minute candles, OI snapshots, option-band snapshots, liquidity sweep, gamma radar, and entry watch update when collectors/services write fresh rows.
+- Strategy decisions and issued signals are 5-minute/event driven.
+- News RSS feed is cached for 3 minutes to avoid hammering free sources.
+
 Compact one-line status:
 ```bash
 python3 /Users/ishwar/Documents/OptionCoder/tools/runtime_status.py --one-line

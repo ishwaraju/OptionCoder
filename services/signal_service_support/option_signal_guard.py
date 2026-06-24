@@ -393,6 +393,21 @@ class OptionSignalGuard:
             elasticity=elasticity,
             entry_phase=entry_phase,
         )
+        option_sweep_starter = (
+            signal in {"CE", "PE"}
+            and bool(getattr(service, "option_sweep_context", None))
+            and service._should_soften_option_sweep_filters(signal)
+            and premium_label == "PREMIUM_OK"
+            and clean_spread
+            and pressure_conflict in {"NONE", "MILD"}
+            and participation_hard_count == 0
+            and late_risk_count <= 1
+            and signal_type in breakout_family
+            and signal_family in {"IMPULSE_BREAKOUT", "RETEST_CONTINUATION"}
+            and entry_score >= 88
+            and score >= 88
+            and not dead_premium_risk
+        )
         small_size_price_led_entry = (
             strong_price_action_watch
             and signal_family == "IMPULSE_BREAKOUT"
@@ -577,7 +592,13 @@ class OptionSignalGuard:
 
         if not premium_confirmed and signal_type in breakout_family:
             clean_tactical = clean_tactical_context and entry_score >= 82 and score >= 78
-            if small_size_price_led_entry:
+            if option_sweep_starter:
+                quality_tag = "PA_STRONG_ENTER_SMALL"
+                allow_trade = True
+                path_quality = "OPTION_SWEEP_PATH"
+                likely_runner = True
+                reasons.append("option_sweep_strong_small_size_entry")
+            elif small_size_price_led_entry:
                 quality_tag = "PA_STRONG_ENTER_SMALL"
                 allow_trade = True
                 path_quality = "PRICE_LED_PATH"
@@ -1166,15 +1187,26 @@ class OptionSignalGuard:
         bid_qty = int(row.get("top_bid_quantity") or 0)
         ask_qty = int(row.get("top_ask_quantity") or 0)
         volume = int(row.get("volume") or 0)
+        previous_volume = int(row.get("previous_volume") or 0) if row.get("previous_volume") is not None else None
+        volume_delta = max(volume - previous_volume, 0) if previous_volume is not None else 0
         oi = int(row.get("oi") or 0)
+        previous_oi = int(row.get("previous_oi") or 0) if row.get("previous_oi") is not None else None
+        oi_delta = oi - previous_oi if previous_oi is not None else 0
         delta_abs = abs(float(row.get("delta") or 0))
         theta_abs = abs(float(row.get("theta") or 0))
         distance = abs(int(row.get("strike") or 0) - int(preferred_strike or row.get("strike") or 0))
         strike_gap = service.profile["strike_step"] or Config.STRIKE_STEP.get(service.instrument, 50)
+        distance_from_atm = int(row.get("distance_from_atm") or 0)
         target_delta = 0.5 if service.strategy.last_score >= 75 else 0.62
         spread_score = max(0.0, 30.0 - min(spread_percent, 10.0) * 4.0)
         depth_score = min(15.0, min(bid_qty, ask_qty) / 20.0)
         volume_score = min(18.0, volume / 300.0)
+        leader_volume_score = min(
+            14.0,
+            volume_delta / max(float(getattr(Config, "PREMIUM_LEADER_VOLUME_DELTA_DIVISOR", 50000.0) or 50000.0), 1.0),
+        )
+        oi_support_score = 4.0 if oi_delta >= 0 else -2.0
+        atm_distance_score = max(0.0, 10.0 - abs(distance_from_atm) * 2.5)
         oi_score = min(10.0, oi / 20000.0)
         delta_score = max(0.0, 15.0 * (1.0 - min(abs(delta_abs - target_delta) / 0.45, 1.0)))
         proximity_score = max(0.0, 12.0 - (distance / max(strike_gap, 1)) * 4.0)
@@ -1199,12 +1231,46 @@ class OptionSignalGuard:
             max(0.0, spread_score + depth_score + delta_score + max(0.0, 10.0 - theta_penalty) - iv_penalty),
             2,
         )
-        candidate_score = round(spread_score + depth_score + volume_score + oi_score + delta_score + proximity_score + edge_score - iv_penalty, 2)
-        reason_parts = [f"spread={float(row.get('spread') or 0):.2f} ({spread_percent:.2f}%)", f"delta={delta_abs:.2f}", f"vol={volume}", f"oi={oi}", f"edge={expected_edge:.2f}"]
+        leader_score = round(leader_volume_score + oi_support_score + atm_distance_score + max(0.0, 8.0 - min(spread_percent, 8.0)), 2)
+        candidate_score = round(
+            spread_score
+            + depth_score
+            + volume_score
+            + leader_volume_score
+            + oi_score
+            + oi_support_score
+            + atm_distance_score
+            + delta_score
+            + proximity_score
+            + edge_score
+            - iv_penalty,
+            2,
+        )
+        reason_parts = [
+            f"spread={float(row.get('spread') or 0):.2f} ({spread_percent:.2f}%)",
+            f"delta={delta_abs:.2f}",
+            f"vol={volume}",
+            f"vol_delta={volume_delta}",
+            f"oi={oi}",
+            f"oi_delta={oi_delta}",
+            f"edge={expected_edge:.2f}",
+            f"leader={leader_score:.1f}",
+        ]
         if iv_penalty > 0:
             reason_parts.append("iv_rich")
         reason_parts.append(f"contract_eff={contract_efficiency_score:.1f}")
-        return {**dict(row), "candidate_direction": direction, "candidate_score": candidate_score, "expected_edge": expected_edge, "spread_percent": spread_percent, "contract_efficiency_score": contract_efficiency_score, "reason": " | ".join(reason_parts)}
+        return {
+            **dict(row),
+            "candidate_direction": direction,
+            "candidate_score": candidate_score,
+            "expected_edge": expected_edge,
+            "spread_percent": spread_percent,
+            "contract_efficiency_score": contract_efficiency_score,
+            "leader_score": leader_score,
+            "volume_delta": volume_delta,
+            "oi_delta": oi_delta,
+            "reason": " | ".join(reason_parts),
+        }
 
     @staticmethod
     def build_option_candidates(service, underlying_price, preferred_strikes=None, signal_direction=None, balanced_pro=None):

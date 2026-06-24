@@ -1,4 +1,5 @@
 from datetime import time
+import time as time_module
 
 from config import Config
 from shared.feeds.live_feed import LiveFeed
@@ -85,3 +86,25 @@ def test_market_open_waiter_calls_connect_once_market_opens():
         Config.TEST_MODE = original_test_mode
         live_feed_module.threading.Thread = original_thread
         live_feed_module.time.sleep = original_sleep
+
+
+def test_force_reconnect_respects_rate_limit_cooldown():
+    feed = LiveFeed([])
+    feed.time_utils = _DummyTimeUtils([time(10, 0)], market_open=True)
+    feed.rate_limited_until = time_module.time() + 120
+
+    called = {"connect": 0}
+    feed.connect = lambda: called.__setitem__("connect", called["connect"] + 1)
+
+    assert feed.force_reconnect() is False
+    assert called["connect"] == 0
+
+
+def test_connect_respects_rate_limit_cooldown():
+    feed = LiveFeed([])
+    feed.time_utils = _DummyTimeUtils([time(10, 0)], market_open=True)
+    feed.rate_limited_until = time_module.time() + 120
+
+    feed.connect()
+
+    assert feed.ws is None

@@ -3,6 +3,7 @@ import json
 import threading
 import time
 import ssl
+import os
 from threading import Lock
 
 from config import Config
@@ -39,6 +40,13 @@ class LiveFeed:
         self.connection_stability_score = 100
         self.last_successful_connect_time = 0
         self.rate_limited_until = None  # Circuit breaker for 429 errors
+        self.current_connection_open_epoch = None
+        self.successful_live_tick_seen = False
+        self.rapid_disconnect_epochs = []
+        self.min_stable_connection_seconds = int(os.getenv("DHAN_MIN_STABLE_WS_SECONDS", "20"))
+        self.rapid_disconnect_window_seconds = int(os.getenv("DHAN_RAPID_DROP_WINDOW_SECONDS", "120"))
+        self.rapid_disconnect_threshold = int(os.getenv("DHAN_RAPID_DROP_THRESHOLD", "3"))
+        self.rapid_disconnect_cooldown_seconds = int(os.getenv("DHAN_RAPID_DROP_COOLDOWN_SECONDS", "300"))
 
         self.force_reconnect_enabled = True
         self.reconnect_lock = Lock()
@@ -89,6 +97,15 @@ class LiveFeed:
         if self._is_debug_enabled():
             print(*args, **kwargs)
 
+    def rate_limit_remaining_seconds(self):
+        """Return active broker rate-limit cooldown, if any."""
+        if not self.rate_limited_until:
+            return 0
+        return max(0, int(self.rate_limited_until - time.time()))
+
+    def is_rate_limited(self):
+        return self.rate_limit_remaining_seconds() > 0
+
     # =========================
     # WebSocket Open
     # =========================
@@ -98,9 +115,10 @@ class LiveFeed:
         self.is_connected = True
         self.market_open_wait_scheduled = False
         self.last_successful_connect_time = connect_time
+        self.current_connection_open_epoch = time.time()
+        self.successful_live_tick_seen = False
         self.reconnect_attempts = 0
         self.reconnect_delay = self.min_reconnect_delay
-        self.rate_limited_until = None  # Reset circuit breaker on success
         
         # Update diagnostics
         self.connection_diagnostics['total_connections'] += 1
@@ -218,6 +236,9 @@ class LiveFeed:
 
         security_id = data["security_id"]
         self.last_tick_epoch = time.time()
+        self.successful_live_tick_seen = True
+        self.rate_limited_until = None
+        self.rapid_disconnect_epochs = []
 
         # INDEX
         if security_id in self.index_security_map:
@@ -342,8 +363,45 @@ class LiveFeed:
     # =========================
     def on_close(self, ws, close_status_code, close_msg):
         self.is_connected = False
+        now = time.time()
+        connection_duration = None
+        if self.current_connection_open_epoch is not None:
+            connection_duration = max(0, now - self.current_connection_open_epoch)
+        self.current_connection_open_epoch = None
         self.connection_stability_score = max(0, self.connection_stability_score - 3)
         self.connection_diagnostics['connection_drops'] += 1
+
+        if (
+            not self.successful_live_tick_seen
+            and connection_duration is not None
+            and connection_duration < self.min_stable_connection_seconds
+            and self.time_utils.is_market_open()
+        ):
+            window_start = now - self.rapid_disconnect_window_seconds
+            self.rapid_disconnect_epochs = [
+                epoch for epoch in self.rapid_disconnect_epochs
+                if epoch >= window_start
+            ]
+            self.rapid_disconnect_epochs.append(now)
+            print(
+                "WebSocket closed before any live tick "
+                f"({connection_duration:.1f}s). Rapid drops: "
+                f"{len(self.rapid_disconnect_epochs)}/{self.rapid_disconnect_threshold}"
+            )
+            if len(self.rapid_disconnect_epochs) >= self.rapid_disconnect_threshold:
+                self.rate_limited_until = max(
+                    self.rate_limited_until or 0,
+                    now + self.rapid_disconnect_cooldown_seconds,
+                )
+                self.reconnect_delay = max(
+                    self.reconnect_delay,
+                    self.rapid_disconnect_cooldown_seconds,
+                )
+                print(
+                    "🚫 Rapid WebSocket disconnect guard active. "
+                    f"Cooling down for {self.rapid_disconnect_cooldown_seconds}s before reconnect."
+                )
+        self.successful_live_tick_seen = False
         
         # Enhanced reconnection logic
         if self.reconnect_attempts < self.max_reconnect_attempts:
@@ -432,8 +490,13 @@ class LiveFeed:
     def force_reconnect(self):
         """Force websocket reconnection when feed is stale"""
         if not self.force_reconnect_enabled:
-            return
-            
+            return False
+
+        remaining = self.rate_limit_remaining_seconds()
+        if remaining > 0:
+            print(f"Force reconnect skipped: Dhan rate-limit cooldown active. Retry in {remaining}s")
+            return False
+
         print("Force reconnecting due to stale feed...")
         
         # Close existing connection if it exists
@@ -455,8 +518,10 @@ class LiveFeed:
         
         if self.time_utils.is_market_open():
             self.connect()
+            return True
         else:
             print("Market closed - not reconnecting")
+            return False
 
     # =========================
     # Connect
@@ -469,6 +534,11 @@ class LiveFeed:
         if Config.TEST_MODE:
             print("Running in MOCK Live Feed Mode")
             self.start_mock_feed()
+            return
+
+        remaining = self.rate_limit_remaining_seconds()
+        if remaining > 0:
+            print(f"Live feed connect skipped: Dhan rate-limit cooldown active. Retry in {remaining}s")
             return
 
         if not self.time_utils.is_market_open():

@@ -204,6 +204,111 @@ def test_price_action_strong_can_enter_small_when_sponsorship_is_clean():
     assert profile["quality_tag"] == "PA_STRONG_ENTER_SMALL"
 
 
+def test_strong_option_sweep_can_enter_small_even_when_premium_confirmation_pending():
+    service = build_service("BREAKOUT_CONFIRM", "B", "MEDIUM")
+    service.instrument = "BANKNIFTY"
+    service.option_sweep_context = {
+        "direction": "PE",
+        "quality": "STRONG",
+        "micro_confirmed": True,
+        "persistence_pairs": 8,
+    }
+    service.strategy.last_score = 100
+    service.strategy.last_entry_score = 100
+    service.strategy.last_cautions = ["option_sweep_breakout_override"]
+    service.strategy.last_pressure_conflict_level = "NONE"
+    service.strategy.last_entry_plan = {"entry_below": 54640.0}
+    service.strategy.last_active_day_state = "BEAR_TREND_ACTIVE"
+    service.strategy.last_day_state_direction = "PE"
+    service.strategy.last_trend_leg_stage = "NEUTRAL"
+    service.strategy.last_futures_acceptance = {"accepted": False, "score": 40}
+    service.strategy.last_initiative_strength_score = 18
+    service._entry_too_extended = lambda *_args, **_kwargs: False
+    service.atr = type("ATRStub", (), {"get_buffer": staticmethod(lambda: 10.0), "atr": 20.0})()
+
+    profile = OptionSignalGuard.assess_high_expectancy(
+        service,
+        "PE",
+        datetime(2026, 6, 9, 9, 55),
+        premium_guard={
+            "label": "PREMIUM_OK",
+            "premium_momentum_pct": 0.0,
+            "spread_pct": 0.34,
+            "volume_supporting": False,
+            "current_ltp": 1000.0,
+        },
+        selected_option_contract={
+            "ltp": 1000.0,
+            "distance_from_atm": 1,
+            "spread": 3.4,
+            "top_bid_price": 998.3,
+            "top_ask_price": 1001.7,
+        },
+        price=54640.0,
+    )
+
+    assert profile["allow_trade"] is True
+    assert profile["watch_only"] is False
+    assert profile["quality_tag"] == "PA_STRONG_ENTER_SMALL"
+    assert profile["path_quality"] == "OPTION_SWEEP_PATH"
+
+
+def test_high_probability_gate_allows_b_grade_option_sweep_starter_profile():
+    service = build_service("BREAKOUT_CONFIRM", "B", "MEDIUM")
+    service.instrument = "BANKNIFTY"
+    service.strategy.last_score = 100
+    service.strategy.last_entry_score = 100
+    service.strategy.last_cautions = ["option_sweep_breakout_override"]
+    service.strategy.last_blockers = []
+    service.strategy.last_pressure_conflict_level = "NONE"
+
+    ok, reason = service._high_probability_action_gate(
+        signal="PE",
+        expectancy_profile={
+            "quality_tag": "PA_STRONG_ENTER_SMALL",
+            "premium_confirmed": False,
+            "signal_family": "IMPULSE_BREAKOUT",
+            "pro_check": {"label": "PRO_PASS", "score": 92},
+        },
+        premium_guard={"label": "PREMIUM_OK", "spread_pct": 0.34},
+        feed_health={"label": "GOOD"},
+        selected_option_contract={"ltp": 1000.0, "spread": 3.4},
+    )
+
+    assert ok is True
+    assert reason == "high_probability_pass"
+
+
+def test_fast_spike_action_ready_uses_fast_spike_thresholds_for_strong_spike():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "BANKNIFTY"
+
+    payload = {
+        "direction": "CE",
+        "score": 86,
+        "entry_score": 80,
+        "confidence": "HIGH",
+        "signal_grade": "A",
+        "spike_context": {
+            "quality": "STRONG",
+            "price_breadth": 9,
+            "volume_breadth": 9,
+            "structure": {"alignment": "SUPPORTIVE", "five_min_ready": True},
+            "oi_ladder_data": {
+                "trend": "BULLISH",
+                "build_up": "LONG_BUILDUP",
+                "wall_break_alert": "RESISTANCE_BREAK_RISK",
+            },
+            "pressure_metrics": {
+                "pressure_bias": "BULLISH",
+                "flow_edge": 14.0,
+            },
+        },
+    }
+
+    assert service._fast_spike_action_ready(payload) is True
+
+
 def test_high_expectancy_gate_promotes_clean_first_signal_to_hq():
     service = build_service("BREAKOUT_CONFIRM", "A", "HIGH")
     service.instrument = "NIFTY"
@@ -1160,6 +1265,58 @@ def test_elite_manual_watch_can_trigger_on_clean_reclaim_without_extra_buffer():
 
     assert result is not None
     assert result["status"] == "TRIGGERED"
+
+
+def test_a_grade_watch_can_fire_starter_entry_before_full_followthrough():
+    service = SignalService.__new__(SignalService)
+    service.instrument = "NIFTY"
+    service.pending_entry_watch = {
+        "instrument": "NIFTY",
+        "direction": "CE",
+        "trigger_price": 24220.0,
+        "invalidate_price": 24198.0,
+        "first_target_price": 24270.0,
+        "score": 86,
+        "entry_score": 80,
+        "confidence": "HIGH",
+        "signal_type": "BREAKOUT_CONFIRM",
+        "signal_grade": "A",
+        "watch_bucket": "WATCH_CONFIRMATION_PENDING",
+        "quality": "A",
+        "time_regime": "MID_MORNING",
+        "created_at": datetime(2026, 5, 6, 14, 22),
+        "last_checked_minute": None,
+        "reason": "manual breakout confirm watch",
+        "fast_track_ready": False,
+        "strong_watch_setup": True,
+        "starter_entry_ready": True,
+        "elite_watch_ready": False,
+        "hybrid_mode": False,
+        "cautions": [],
+        "blockers": [],
+        "pressure_conflict_level": "NONE",
+    }
+    service.option_data = {"atm": 24200}
+    service.strike_selector = type(
+        "StrikeSelectorStub",
+        (),
+        {"select_strike_with_reason": lambda *args, **kwargs: (24200, "test")},
+    )()
+    service._pending_watch_risk_reward_ok = lambda pending: True
+    service._pending_watch_quality_ok = lambda pending, latest, previous: (True, "ok")
+    service._confirm_signal_microstructure = lambda **kwargs: (False, "Microstructure data unavailable", None, None)
+
+    recent_1m = [
+        {"time": datetime(2026, 5, 6, 14, 22), "open": 24210.0, "high": 24225.0, "low": 24206.0, "close": 24214.0, "volume": 900},
+        {"time": datetime(2026, 5, 6, 14, 23), "open": 24216.0, "high": 24222.0, "low": 24215.0, "close": 24220.0, "volume": 700},
+    ]
+
+    result = service._evaluate_pending_entry_watch(recent_1m)
+
+    assert result is not None
+    assert result["status"] == "TRIGGERED"
+    assert result["entry_mode"] == "STARTER"
+    assert "STARTER_ENTRY" in result["reason"]
 
 
 def test_entry_decision_1m_audit_row_is_written_for_wait_state():

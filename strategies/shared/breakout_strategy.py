@@ -10,6 +10,7 @@ from shared.indicators.oi_buildup_analyzer import OIBuildupAnalyzer, is_oi_confi
 from shared.indicators.multi_timeframe_trend import MultiTimeframeTrend, quick_trend_alignment_check
 from strategies.shared.confirmation_retest_evaluator import confirmation_ready, retest_ready
 from strategies.shared.continuation_evaluator import fallback_continuation_ready, high_score_continuation_ready
+from strategies.shared.ict_structure import analyze_ict_structure
 from strategies.shared.breakout import (
     apply_day_state_adjustment,
     apply_option_buyer_filters,
@@ -106,6 +107,7 @@ class BreakoutSignalStrategy:
         self.last_trend_leg_stage = "NEUTRAL"
         self.last_session_map_phase = "UNKNOWN"
         self.last_futures_acceptance = None
+        self.last_ict_context = None
         self.last_futures_acceptance_score = 0.0
         self.last_initiative_strength_score = 0.0
         self.last_price_action_watch_ready = False
@@ -1283,6 +1285,14 @@ class BreakoutSignalStrategy:
 
     def _build_trade_signal_context(self, **kwargs):
         return build_trade_signal_context(self, **kwargs)
+
+    def _analyze_ict_structure(self, recent_candles_5m, direction=None, atr=None, buffer=0):
+        return analyze_ict_structure(
+            recent_candles_5m,
+            direction=direction,
+            atr=atr,
+            buffer=buffer,
+        )
 
     def _finalize_no_setup(self, ctx):
         return finalize_no_setup(self, ctx)

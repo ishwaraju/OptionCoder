@@ -155,8 +155,22 @@ class OICollector:
         )
 
     def _fetch_option_chain_payload(self):
+        self.watchdog.touch(
+            {
+                "phase": "fetching_option_chain",
+                "dhan_connected": self.dhan_client.connected,
+                "pid": self.pid,
+            }
+        )
         option_data = self.option_chain.fetch_option_chain()
         if not option_data:
+            self.watchdog.touch(
+                {
+                    "phase": "option_chain_empty",
+                    "dhan_connected": self.dhan_client.connected,
+                    "pid": self.pid,
+                }
+            )
             return None
 
         self.option_data_cache.set(self.instrument, option_data, timestamp=self.time_utils.now_ist())
@@ -164,8 +178,22 @@ class OICollector:
         band_snapshots = option_data.get("band_snapshots") or []
         if not band_snapshots:
             self._log("No option band snapshots available")
+            self.watchdog.touch(
+                {
+                    "phase": "option_chain_no_bands",
+                    "dhan_connected": self.dhan_client.connected,
+                    "pid": self.pid,
+                }
+            )
             return None
 
+        self.watchdog.touch(
+            {
+                "phase": "option_chain_fetched",
+                "dhan_connected": self.dhan_client.connected,
+                "pid": self.pid,
+            }
+        )
         return option_data
 
     @staticmethod
@@ -419,6 +447,13 @@ class OICollector:
                 return False
 
             current_time = self._snapshot_minute()
+            self.watchdog.touch(
+                {
+                    "phase": "collecting_oi_snapshot",
+                    "dhan_connected": self.dhan_client.connected,
+                    "pid": self.pid,
+                }
+            )
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:
@@ -485,6 +520,13 @@ class OICollector:
                 return False
 
             current_time = self._snapshot_minute()
+            self.watchdog.touch(
+                {
+                    "phase": "collecting_option_bands",
+                    "dhan_connected": self.dhan_client.connected,
+                    "pid": self.pid,
+                }
+            )
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:
@@ -540,6 +582,13 @@ class OICollector:
                 return False
 
             current_time = self._snapshot_minute()
+            self.watchdog.touch(
+                {
+                    "phase": "tracking_oi_changes",
+                    "dhan_connected": self.dhan_client.connected,
+                    "pid": self.pid,
+                }
+            )
 
             option_data = self._fetch_option_chain_payload()
             if not option_data:

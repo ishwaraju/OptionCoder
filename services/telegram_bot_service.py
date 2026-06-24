@@ -1115,6 +1115,9 @@ class TelegramCommandService:
 
     def _handle_command(self, text):
         command = (text or "").strip().split()[0].lower()
+        command = command.split("@", 1)[0]
+        if command in {"status", "health", "signals", "start_signal", "stop_signal", "start_data", "stop_data", "stop", "shutdown"}:
+            command = f"/{command}"
         command_args = self._parse_command_args(text)
         
         # Log command received
@@ -1200,11 +1203,22 @@ class TelegramCommandService:
             self._send_message(chat_id, reply)
             return
 
-        self._send_message(chat_id, result["reply"])
         if post_action == "stop":
+            try:
+                self._send_message(chat_id, result["reply"])
+            except Exception as exc:
+                self._log(f"⚠️  Stop reply failed, executing stop anyway: {exc}", level="WARNING")
             self._execute_stop()
+            return
         elif post_action == "shutdown":
+            try:
+                self._send_message(chat_id, result["reply"])
+            except Exception as exc:
+                self._log(f"⚠️  Shutdown reply failed, executing shutdown anyway: {exc}", level="WARNING")
             self._execute_shutdown()
+            return
+
+        self._send_message(chat_id, result["reply"])
 
     def run_forever(self):
         self._validate()

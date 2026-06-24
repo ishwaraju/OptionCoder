@@ -46,3 +46,1991 @@
 [02:42:07] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST
 [02:42:07] 🛑 Press Ctrl+C to stop scheduler
 [02:42:07] 🛑 Press Ctrl+C to stop scheduler
+[04:08:05] 🤖 Auto Scheduler Started
+[04:08:05] 🤖 Auto Scheduler Started
+[04:08:05] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[04:08:05] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[04:08:05]    Current offset: -3600 seconds
+[04:08:05]    Current offset: -3600 seconds
+[04:08:05]    IST offset should be: -19800 seconds (-05:30)
+[04:08:05]    IST offset should be: -19800 seconds (-05:30)
+[04:08:05]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[04:08:05]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[04:08:05]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[04:08:05]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[04:08:05] 
+[04:08:05] 
+[04:08:05] ⏰ Current IST Time: 2026-05-27 04:08:05
+[04:08:05] ⏰ Current IST Time: 2026-05-27 04:08:05
+[04:08:05] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[04:08:05] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[04:08:05] 🛑 Services will auto-stop at 3:40 PM IST on weekdays
+[04:08:05] 🛑 Services will auto-stop at 3:40 PM IST on weekdays
+[04:08:05] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST
+[04:08:05] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:40 PM IST
+[04:08:05] 🛑 Press Ctrl+C to stop scheduler
+[04:08:05] 🛑 Press Ctrl+C to stop scheduler
+[09:14:18] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:18] 🚀 Trigger: 9:14 AM IST - Starting services...
+DB pool initialized successfully
+DB pool initialized successfully
+[09:14:18] 🔍 Pre-flight Checks:
+[09:14:18] 🔍 Pre-flight Checks:
+[09:14:18]    ✅ Database connected
+[09:14:18]    ✅ Database connected
+[09:14:18]    ✅ NIFTY future ID: 66688
+[09:14:18]    ✅ NIFTY future ID: 66688
+[09:14:18]    ✅ BANKNIFTY future ID: 66689
+[09:14:18]    ✅ BANKNIFTY future ID: 66689
+[09:14:18]    ✅ SENSEX future ID: 1105863
+[09:14:18]    ✅ SENSEX future ID: 1105863
+[09:14:18] 
+[09:14:18] 
+[09:14:18] 🌅 Auto Starting All Services
+[09:14:18] 🌅 Auto Starting All Services
+[09:14:18] ==================================================
+[09:14:18] ==================================================
+[09:14:18] 🚀 Starting Data Collectors
+[09:14:18] 🚀 Starting Data Collectors
+[09:14:21] ✅ Collectors started: data_collector=5844 | SENSEX=5866, BANKNIFTY=5860, NIFTY=5853 | log=/Users/ishwar/Documents/OptionCoder/logs/20260527/run_collectors.log
+[09:14:21] ✅ Collectors started: data_collector=5844 | SENSEX=5866, BANKNIFTY=5860, NIFTY=5853 | log=/Users/ishwar/Documents/OptionCoder/logs/20260527/run_collectors.log
+[09:14:26] 🚀 Starting Signal Services
+[09:14:26] 🚀 Starting Signal Services
+[09:14:28] ✅ Signal services started: SENSEX=5880, BANKNIFTY=5879, NIFTY=5878 | log=/Users/ishwar/Documents/OptionCoder/logs/20260527/run_signals.log
+[09:14:28] ✅ Signal services started: SENSEX=5880, BANKNIFTY=5879, NIFTY=5878 | log=/Users/ishwar/Documents/OptionCoder/logs/20260527/run_signals.log
+[09:18:28] 🚀 Starting Telegram Bot
+[09:18:28] 🚀 Starting Telegram Bot
+[09:18:28] ✅ Telegram Bot started: pid=6016 | log=/Users/ishwar/Documents/OptionCoder/logs/20260527/telegram_bot_service.log
+[09:18:28] ✅ Telegram Bot started: pid=6016 | log=/Users/ishwar/Documents/OptionCoder/logs/20260527/telegram_bot_service.log
+[09:18:28] 🔎 Startup Status Snapshot
+[09:18:28] 🔎 Startup Status Snapshot
+[09:18:28] 📋 Collectors:
+[09:18:28] 📋 Collectors:
+[09:18:28]    stderr: Traceback (most recent call last):
+[09:18:28]    stderr: Traceback (most recent call last):
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:28]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:28]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:28]    stderr:     from .logger import TradeLogger
+[09:18:28]    stderr:     from .logger import TradeLogger
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:28]    stderr:     import pytz
+[09:18:28]    stderr:     import pytz
+[09:18:28]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:28]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:28] 📋 Signals:
+[09:18:28] 📋 Signals:
+[09:18:28]    stderr: Traceback (most recent call last):
+[09:18:28]    stderr: Traceback (most recent call last):
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:28]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:28]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:28]    stderr:     from .logger import TradeLogger
+[09:18:28]    stderr:     from .logger import TradeLogger
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:28]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:28]    stderr:     import pytz
+[09:18:28]    stderr:     import pytz
+[09:18:28]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:28]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:28] 📋 Telegram:
+[09:18:28] 📋 Telegram:
+[09:18:28]    running pid=6016
+[09:18:28]    running pid=6016
+[09:18:28] ==================================================
+[09:18:28] ==================================================
+[09:18:28] 🎉 All services started successfully!
+[09:18:28] 🎉 All services started successfully!
+[09:14:11] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:11] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:11] 🔍 Pre-flight Checks:
+[09:14:11] 🔍 Pre-flight Checks:
+[09:14:11]    ✅ Database connected
+[09:14:11]    ✅ Database connected
+[09:14:11]    ✅ NIFTY future ID: 66688
+[09:14:11]    ✅ NIFTY future ID: 66688
+[09:14:11]    ✅ BANKNIFTY future ID: 66689
+[09:14:11]    ✅ BANKNIFTY future ID: 66689
+[09:14:11]    ✅ SENSEX future ID: 1105863
+[09:14:11]    ✅ SENSEX future ID: 1105863
+[09:14:11] 
+[09:14:11] 
+[09:14:11] 🌅 Auto Starting All Services
+[09:14:11] 🌅 Auto Starting All Services
+[09:14:11] ==================================================
+[09:14:11] ==================================================
+[09:14:11] 🚀 Starting Data Collectors
+[09:14:11] 🚀 Starting Data Collectors
+[09:14:13] ✅ Collectors started: data_collector=5844 | SENSEX=5866, BANKNIFTY=5860, NIFTY=5853 | log=/Users/ishwar/Documents/OptionCoder/logs/20260529/run_collectors.log
+[09:14:13] ✅ Collectors started: data_collector=5844 | SENSEX=5866, BANKNIFTY=5860, NIFTY=5853 | log=/Users/ishwar/Documents/OptionCoder/logs/20260529/run_collectors.log
+[09:14:18] 🚀 Starting Signal Services
+[09:14:18] 🚀 Starting Signal Services
+[09:14:20] ✅ Signal services started: SENSEX=5880, BANKNIFTY=5879, NIFTY=5878 | log=/Users/ishwar/Documents/OptionCoder/logs/20260529/run_signals.log
+[09:14:20] ✅ Signal services started: SENSEX=5880, BANKNIFTY=5879, NIFTY=5878 | log=/Users/ishwar/Documents/OptionCoder/logs/20260529/run_signals.log
+[09:18:20] 🚀 Starting Telegram Bot
+[09:18:20] 🚀 Starting Telegram Bot
+[09:18:20] ✅ Telegram Bot started: pid=6016 | log=/Users/ishwar/Documents/OptionCoder/logs/20260529/telegram_bot_service.log
+[09:18:20] ✅ Telegram Bot started: pid=6016 | log=/Users/ishwar/Documents/OptionCoder/logs/20260529/telegram_bot_service.log
+[09:18:20] 🔎 Startup Status Snapshot
+[09:18:20] 🔎 Startup Status Snapshot
+[09:18:20] 📋 Collectors:
+[09:18:20] 📋 Collectors:
+[09:18:20]    stderr: Traceback (most recent call last):
+[09:18:20]    stderr: Traceback (most recent call last):
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:20]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:20]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:20]    stderr:     from .logger import TradeLogger
+[09:18:20]    stderr:     from .logger import TradeLogger
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:20]    stderr:     import pytz
+[09:18:20]    stderr:     import pytz
+[09:18:20]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:20]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:20] 📋 Signals:
+[09:18:20] 📋 Signals:
+[09:18:20]    stderr: Traceback (most recent call last):
+[09:18:20]    stderr: Traceback (most recent call last):
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:20]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:20]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:20]    stderr:     from .logger import TradeLogger
+[09:18:20]    stderr:     from .logger import TradeLogger
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:20]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:20]    stderr:     import pytz
+[09:18:20]    stderr:     import pytz
+[09:18:20]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:20]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:20] 📋 Telegram:
+[09:18:20] 📋 Telegram:
+[09:18:20]    running pid=6016
+[09:18:20]    running pid=6016
+[09:18:20] ==================================================
+[09:18:20] ==================================================
+[09:18:20] 🎉 All services started successfully!
+[09:18:20] 🎉 All services started successfully!
+[15:40:06] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:06] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:06] 🌅 Auto Stopping All Services
+[15:40:06] 🌅 Auto Stopping All Services
+[15:40:06] ==================================================
+[15:40:06] ==================================================
+[15:40:06] 🛑 Stopping Data Collectors...
+[15:40:06] 🛑 Stopping Data Collectors...
+[15:40:06] ✅ Collectors stopped: 
+[15:40:06] ✅ Collectors stopped: 
+[15:40:06] 🛑 Stopping Signal Services...
+[15:40:06] 🛑 Stopping Signal Services...
+[15:40:06] ✅ Signals stopped: 
+[15:40:06] ✅ Signals stopped: 
+[15:40:06] 🛑 Stopping Telegram Bot...
+[15:40:06] 🛑 Stopping Telegram Bot...
+[15:40:06] ✅ Telegram Bot stopped
+[15:40:06] ✅ Telegram Bot stopped
+[15:40:06] 🔎 Post-stop Status Snapshot
+[15:40:06] 🔎 Post-stop Status Snapshot
+[15:40:07] 📋 Collectors:
+[15:40:07] 📋 Collectors:
+[15:40:07]    stderr: Traceback (most recent call last):
+[15:40:07]    stderr: Traceback (most recent call last):
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:07]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:07]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:07]    stderr:     from .logger import TradeLogger
+[15:40:07]    stderr:     from .logger import TradeLogger
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:07]    stderr:     import pytz
+[15:40:07]    stderr:     import pytz
+[15:40:07]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:07]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:07] 📋 Signals:
+[15:40:07] 📋 Signals:
+[15:40:07]    stderr: Traceback (most recent call last):
+[15:40:07]    stderr: Traceback (most recent call last):
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:07]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:07]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:07]    stderr:     from .logger import TradeLogger
+[15:40:07]    stderr:     from .logger import TradeLogger
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:07]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:07]    stderr:     import pytz
+[15:40:07]    stderr:     import pytz
+[15:40:07]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:07]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:07] 📋 Telegram:
+[15:40:07] 📋 Telegram:
+[15:40:07]    not running
+[15:40:07]    not running
+[15:40:07] ==================================================
+[15:40:07] ==================================================
+[15:40:07] 🎉 All services stopped successfully!
+[15:40:07] 🎉 All services stopped successfully!
+[09:14:24] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:24] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:24] 🔍 Pre-flight Checks:
+[09:14:24] 🔍 Pre-flight Checks:
+[09:14:24]    ✅ Database connected
+[09:14:24]    ✅ Database connected
+[09:14:24]    ✅ NIFTY future ID: 66688
+[09:14:24]    ✅ NIFTY future ID: 66688
+[09:14:24]    ✅ BANKNIFTY future ID: 66689
+[09:14:24]    ✅ BANKNIFTY future ID: 66689
+[09:14:24]    ✅ SENSEX future ID: 1105863
+[09:14:24]    ✅ SENSEX future ID: 1105863
+[09:14:24] 
+[09:14:24] 
+[09:14:24] 🌅 Auto Starting All Services
+[09:14:24] 🌅 Auto Starting All Services
+[09:14:24] ==================================================
+[09:14:24] ==================================================
+[09:14:24] 🚀 Starting Data Collectors
+[09:14:24] 🚀 Starting Data Collectors
+[09:14:26] ✅ Collectors started: data_collector=92129 | SENSEX=92154, BANKNIFTY=92145, NIFTY=92138 | log=/Users/ishwar/Documents/OptionCoder/logs/20260601/run_collectors.log
+[09:14:26] ✅ Collectors started: data_collector=92129 | SENSEX=92154, BANKNIFTY=92145, NIFTY=92138 | log=/Users/ishwar/Documents/OptionCoder/logs/20260601/run_collectors.log
+[09:14:31] 🚀 Starting Signal Services
+[09:14:31] 🚀 Starting Signal Services
+[09:14:33] ✅ Signal services started: SENSEX=92172, BANKNIFTY=92171, NIFTY=92170 | log=/Users/ishwar/Documents/OptionCoder/logs/20260601/run_signals.log
+[09:14:33] ✅ Signal services started: SENSEX=92172, BANKNIFTY=92171, NIFTY=92170 | log=/Users/ishwar/Documents/OptionCoder/logs/20260601/run_signals.log
+[09:18:33] 🚀 Starting Telegram Bot
+[09:18:33] 🚀 Starting Telegram Bot
+[09:18:33] ✅ Telegram Bot started: pid=92300 | log=/Users/ishwar/Documents/OptionCoder/logs/20260601/telegram_bot_service.log
+[09:18:33] ✅ Telegram Bot started: pid=92300 | log=/Users/ishwar/Documents/OptionCoder/logs/20260601/telegram_bot_service.log
+[09:18:33] 🔎 Startup Status Snapshot
+[09:18:33] 🔎 Startup Status Snapshot
+[09:18:33] 📋 Collectors:
+[09:18:33] 📋 Collectors:
+[09:18:33]    stderr: Traceback (most recent call last):
+[09:18:33]    stderr: Traceback (most recent call last):
+[09:18:33]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:33]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:33]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:33]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:33]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:33]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:33]    stderr:     from .logger import TradeLogger
+[09:18:33]    stderr:     from .logger import TradeLogger
+[09:18:33]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:33]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:33]    stderr:     import pytz
+[09:18:33]    stderr:     import pytz
+[09:18:33]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:33]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:34] 📋 Signals:
+[09:18:34] 📋 Signals:
+[09:18:34]    stderr: Traceback (most recent call last):
+[09:18:34]    stderr: Traceback (most recent call last):
+[09:18:34]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:34]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:34]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:34]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:34]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:34]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:34]    stderr:     from .logger import TradeLogger
+[09:18:34]    stderr:     from .logger import TradeLogger
+[09:18:34]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:34]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:34]    stderr:     import pytz
+[09:18:34]    stderr:     import pytz
+[09:18:34]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:34]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:34] 📋 Telegram:
+[09:18:34] 📋 Telegram:
+[09:18:34]    running pid=92300
+[09:18:34]    running pid=92300
+[09:18:34] ==================================================
+[09:18:34] ==================================================
+[09:18:34] 🎉 All services started successfully!
+[09:18:34] 🎉 All services started successfully!
+[15:40:11] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:11] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:11] 🌅 Auto Stopping All Services
+[15:40:11] 🌅 Auto Stopping All Services
+[15:40:11] ==================================================
+[15:40:11] ==================================================
+[15:40:11] 🛑 Stopping Data Collectors...
+[15:40:11] 🛑 Stopping Data Collectors...
+[15:40:11] ✅ Collectors stopped: 
+[15:40:11] ✅ Collectors stopped: 
+[15:40:11] 🛑 Stopping Signal Services...
+[15:40:11] 🛑 Stopping Signal Services...
+[15:40:11] ✅ Signals stopped: 
+[15:40:11] ✅ Signals stopped: 
+[15:40:11] 🛑 Stopping Telegram Bot...
+[15:40:11] 🛑 Stopping Telegram Bot...
+[15:40:11] ✅ Telegram Bot stopped
+[15:40:11] ✅ Telegram Bot stopped
+[15:40:11] 🔎 Post-stop Status Snapshot
+[15:40:11] 🔎 Post-stop Status Snapshot
+[15:40:11] 📋 Collectors:
+[15:40:11] 📋 Collectors:
+[15:40:11]    stderr: Traceback (most recent call last):
+[15:40:11]    stderr: Traceback (most recent call last):
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:11]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:11]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:11]    stderr:     from .logger import TradeLogger
+[15:40:11]    stderr:     from .logger import TradeLogger
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:11]    stderr:     import pytz
+[15:40:11]    stderr:     import pytz
+[15:40:11]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:11]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:11] 📋 Signals:
+[15:40:11] 📋 Signals:
+[15:40:11]    stderr: Traceback (most recent call last):
+[15:40:11]    stderr: Traceback (most recent call last):
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:11]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:11]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:11]    stderr:     from .logger import TradeLogger
+[15:40:11]    stderr:     from .logger import TradeLogger
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:11]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:11]    stderr:     import pytz
+[15:40:11]    stderr:     import pytz
+[15:40:11]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:11]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:11] 📋 Telegram:
+[15:40:11] 📋 Telegram:
+[15:40:11]    not running
+[15:40:11]    not running
+[15:40:11] ==================================================
+[15:40:11] ==================================================
+[15:40:11] 🎉 All services stopped successfully!
+[15:40:11] 🎉 All services stopped successfully!
+[09:14:05] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:05] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:05] 🔍 Pre-flight Checks:
+[09:14:05] 🔍 Pre-flight Checks:
+[09:14:05]    ✅ Database connected
+[09:14:05]    ✅ Database connected
+[09:14:05]    ✅ NIFTY future ID: 66688
+[09:14:05]    ✅ NIFTY future ID: 66688
+[09:14:05]    ✅ BANKNIFTY future ID: 66689
+[09:14:05]    ✅ BANKNIFTY future ID: 66689
+[09:14:05]    ✅ SENSEX future ID: 1105863
+[09:14:05]    ✅ SENSEX future ID: 1105863
+[09:14:05] 
+[09:14:05] 
+[09:14:05] 🌅 Auto Starting All Services
+[09:14:05] 🌅 Auto Starting All Services
+[09:14:05] ==================================================
+[09:14:05] ==================================================
+[09:14:05] 🚀 Starting Data Collectors
+[09:14:05] 🚀 Starting Data Collectors
+[09:14:15] ⚠️ Collectors start incomplete. data_collector=missing | OI running: none | Missing OI: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260602/run_collectors.log
+[09:14:15] ⚠️ Collectors start incomplete. data_collector=missing | OI running: none | Missing OI: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260602/run_collectors.log
+[09:14:20] 🚀 Starting Signal Services
+[09:14:20] 🚀 Starting Signal Services
+[09:14:30] ⚠️ Signal start incomplete. Running: none | Missing: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260602/run_signals.log
+[09:14:30] ⚠️ Signal start incomplete. Running: none | Missing: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260602/run_signals.log
+[09:18:30] 🚀 Starting Telegram Bot
+[09:18:30] 🚀 Starting Telegram Bot
+[09:18:30] ✅ Telegram Bot started: pid=34554 | log=/Users/ishwar/Documents/OptionCoder/logs/20260602/telegram_bot_service.log
+[09:18:30] ✅ Telegram Bot started: pid=34554 | log=/Users/ishwar/Documents/OptionCoder/logs/20260602/telegram_bot_service.log
+[09:18:30] 🔎 Startup Status Snapshot
+[09:18:30] 🔎 Startup Status Snapshot
+[09:18:30] 📋 Collectors:
+[09:18:30] 📋 Collectors:
+[09:18:30]    stderr: Traceback (most recent call last):
+[09:18:30]    stderr: Traceback (most recent call last):
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:30]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:30]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:30]    stderr:     from .logger import TradeLogger
+[09:18:30]    stderr:     from .logger import TradeLogger
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:30]    stderr:     import pytz
+[09:18:30]    stderr:     import pytz
+[09:18:30]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:30]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:30] 📋 Signals:
+[09:18:30] 📋 Signals:
+[09:18:30]    stderr: Traceback (most recent call last):
+[09:18:30]    stderr: Traceback (most recent call last):
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:30]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:30]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:30]    stderr:     from .logger import TradeLogger
+[09:18:30]    stderr:     from .logger import TradeLogger
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:30]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:30]    stderr:     import pytz
+[09:18:30]    stderr:     import pytz
+[09:18:30]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:30]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:30] 📋 Telegram:
+[09:18:30] 📋 Telegram:
+[09:18:30]    not running
+[09:18:30]    not running
+[09:18:30] ==================================================
+[09:18:30] ==================================================
+[09:18:30] 🎉 All services started successfully!
+[09:18:30] 🎉 All services started successfully!
+[15:40:15] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:15] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:15] 🌅 Auto Stopping All Services
+[15:40:15] 🌅 Auto Stopping All Services
+[15:40:15] ==================================================
+[15:40:15] ==================================================
+[15:40:15] 🛑 Stopping Data Collectors...
+[15:40:15] 🛑 Stopping Data Collectors...
+[15:40:15] ✅ Collectors stopped: 
+[15:40:15] ✅ Collectors stopped: 
+[15:40:15] 🛑 Stopping Signal Services...
+[15:40:15] 🛑 Stopping Signal Services...
+[15:40:16] ✅ Signals stopped: 
+[15:40:16] ✅ Signals stopped: 
+[15:40:16] 🛑 Stopping Telegram Bot...
+[15:40:16] 🛑 Stopping Telegram Bot...
+[15:40:16] ✅ Telegram Bot stopped
+[15:40:16] ✅ Telegram Bot stopped
+[15:40:16] 🔎 Post-stop Status Snapshot
+[15:40:16] 🔎 Post-stop Status Snapshot
+[15:40:16] 📋 Collectors:
+[15:40:16] 📋 Collectors:
+[15:40:16]    stderr: Traceback (most recent call last):
+[15:40:16]    stderr: Traceback (most recent call last):
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:16]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:16]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:16]    stderr:     from .logger import TradeLogger
+[15:40:16]    stderr:     from .logger import TradeLogger
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:16]    stderr:     import pytz
+[15:40:16]    stderr:     import pytz
+[15:40:16]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:16]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:16] 📋 Signals:
+[15:40:16] 📋 Signals:
+[15:40:16]    stderr: Traceback (most recent call last):
+[15:40:16]    stderr: Traceback (most recent call last):
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:16]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:16]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:16]    stderr:     from .logger import TradeLogger
+[15:40:16]    stderr:     from .logger import TradeLogger
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:16]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:16]    stderr:     import pytz
+[15:40:16]    stderr:     import pytz
+[15:40:16]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:16]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:16] 📋 Telegram:
+[15:40:16] 📋 Telegram:
+[15:40:16]    not running
+[15:40:16]    not running
+[15:40:16] ==================================================
+[15:40:16] ==================================================
+[15:40:16] 🎉 All services stopped successfully!
+[15:40:16] 🎉 All services stopped successfully!
+[09:14:20] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:20] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:20] 🔍 Pre-flight Checks:
+[09:14:20] 🔍 Pre-flight Checks:
+[09:14:20]    ✅ Database connected
+[09:14:20]    ✅ Database connected
+[09:14:20]    ✅ NIFTY future ID: 66688
+[09:14:20]    ✅ NIFTY future ID: 66688
+[09:14:20]    ✅ BANKNIFTY future ID: 66689
+[09:14:20]    ✅ BANKNIFTY future ID: 66689
+[09:14:20]    ✅ SENSEX future ID: 1105863
+[09:14:20]    ✅ SENSEX future ID: 1105863
+[09:14:20] 
+[09:14:20] 
+[09:14:20] 🌅 Auto Starting All Services
+[09:14:20] 🌅 Auto Starting All Services
+[09:14:20] ==================================================
+[09:14:20] ==================================================
+[09:14:20] 🚀 Starting Data Collectors
+[09:14:20] 🚀 Starting Data Collectors
+[09:14:30] ⚠️ Collectors start incomplete. data_collector=46885 | OI running: NIFTY=46902, BANKNIFTY=46915 | Missing OI: SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260603/run_collectors.log
+[09:14:30] ⚠️ Collectors start incomplete. data_collector=46885 | OI running: NIFTY=46902, BANKNIFTY=46915 | Missing OI: SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260603/run_collectors.log
+[09:14:35] 🚀 Starting Signal Services
+[09:14:35] 🚀 Starting Signal Services
+[09:14:37] ✅ Signal services started: SENSEX=46932, BANKNIFTY=46931, NIFTY=46930 | log=/Users/ishwar/Documents/OptionCoder/logs/20260603/run_signals.log
+[09:14:37] ✅ Signal services started: SENSEX=46932, BANKNIFTY=46931, NIFTY=46930 | log=/Users/ishwar/Documents/OptionCoder/logs/20260603/run_signals.log
+[09:18:37] 🚀 Starting Telegram Bot
+[09:18:37] 🚀 Starting Telegram Bot
+[09:18:38] ✅ Telegram Bot started: pid=47021 | log=/Users/ishwar/Documents/OptionCoder/logs/20260603/telegram_bot_service.log
+[09:18:38] ✅ Telegram Bot started: pid=47021 | log=/Users/ishwar/Documents/OptionCoder/logs/20260603/telegram_bot_service.log
+[09:18:38] 🔎 Startup Status Snapshot
+[09:18:38] 🔎 Startup Status Snapshot
+[09:18:38] 📋 Collectors:
+[09:18:38] 📋 Collectors:
+[09:18:38]    stderr: Traceback (most recent call last):
+[09:18:38]    stderr: Traceback (most recent call last):
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:38]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:38]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:38]    stderr:     from .logger import TradeLogger
+[09:18:38]    stderr:     from .logger import TradeLogger
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:38]    stderr:     import pytz
+[09:18:38]    stderr:     import pytz
+[09:18:38]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:38]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:38] 📋 Signals:
+[09:18:38] 📋 Signals:
+[09:18:38]    stderr: Traceback (most recent call last):
+[09:18:38]    stderr: Traceback (most recent call last):
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:38]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:38]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:38]    stderr:     from .logger import TradeLogger
+[09:18:38]    stderr:     from .logger import TradeLogger
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:38]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:38]    stderr:     import pytz
+[09:18:38]    stderr:     import pytz
+[09:18:38]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:38]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:38] 📋 Telegram:
+[09:18:38] 📋 Telegram:
+[09:18:38]    running pid=47021
+[09:18:38]    running pid=47021
+[09:18:38] ==================================================
+[09:18:38] ==================================================
+[09:18:38] 🎉 All services started successfully!
+[09:18:38] 🎉 All services started successfully!
+[15:40:25] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:25] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:25] 🌅 Auto Stopping All Services
+[15:40:25] 🌅 Auto Stopping All Services
+[15:40:25] ==================================================
+[15:40:25] ==================================================
+[15:40:25] 🛑 Stopping Data Collectors...
+[15:40:25] 🛑 Stopping Data Collectors...
+[15:40:26] ✅ Collectors stopped: 
+[15:40:26] ✅ Collectors stopped: 
+[15:40:26] 🛑 Stopping Signal Services...
+[15:40:26] 🛑 Stopping Signal Services...
+[15:40:26] ✅ Signals stopped: 
+[15:40:26] ✅ Signals stopped: 
+[15:40:26] 🛑 Stopping Telegram Bot...
+[15:40:26] 🛑 Stopping Telegram Bot...
+[15:40:26] ✅ Telegram Bot stopped
+[15:40:26] ✅ Telegram Bot stopped
+[15:40:26] 🔎 Post-stop Status Snapshot
+[15:40:26] 🔎 Post-stop Status Snapshot
+[15:40:26] 📋 Collectors:
+[15:40:26] 📋 Collectors:
+[15:40:26]    stderr: Traceback (most recent call last):
+[15:40:26]    stderr: Traceback (most recent call last):
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:26]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:26]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:26]    stderr:     from .logger import TradeLogger
+[15:40:26]    stderr:     from .logger import TradeLogger
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:26]    stderr:     import pytz
+[15:40:26]    stderr:     import pytz
+[15:40:26]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:26]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:26] 📋 Signals:
+[15:40:26] 📋 Signals:
+[15:40:26]    stderr: Traceback (most recent call last):
+[15:40:26]    stderr: Traceback (most recent call last):
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:26]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:26]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:26]    stderr:     from .logger import TradeLogger
+[15:40:26]    stderr:     from .logger import TradeLogger
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:26]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:26]    stderr:     import pytz
+[15:40:26]    stderr:     import pytz
+[15:40:26]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:26]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:26] 📋 Telegram:
+[15:40:26] 📋 Telegram:
+[15:40:26]    not running
+[15:40:26]    not running
+[15:40:26] ==================================================
+[15:40:26] ==================================================
+[15:40:26] 🎉 All services stopped successfully!
+[15:40:26] 🎉 All services stopped successfully!
+[09:14:06] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:06] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:06] 🔍 Pre-flight Checks:
+[09:14:06] 🔍 Pre-flight Checks:
+[09:14:06]    ✅ Database connected
+[09:14:06]    ✅ Database connected
+[09:14:06]    ✅ NIFTY future ID: 66688
+[09:14:06]    ✅ NIFTY future ID: 66688
+[09:14:06]    ✅ BANKNIFTY future ID: 66689
+[09:14:06]    ✅ BANKNIFTY future ID: 66689
+[09:14:06]    ✅ SENSEX future ID: 1105863
+[09:14:06]    ✅ SENSEX future ID: 1105863
+[09:14:06] 
+[09:14:06] 
+[09:14:06] 🌅 Auto Starting All Services
+[09:14:06] 🌅 Auto Starting All Services
+[09:14:06] ==================================================
+[09:14:06] ==================================================
+[09:14:06] 🚀 Starting Data Collectors
+[09:14:06] 🚀 Starting Data Collectors
+[09:14:15] ✅ Collectors started: data_collector=78159 | NIFTY=78172, BANKNIFTY=78183, SENSEX=78191 | log=/Users/ishwar/Documents/OptionCoder/logs/20260604/run_collectors.log
+[09:14:15] ✅ Collectors started: data_collector=78159 | NIFTY=78172, BANKNIFTY=78183, SENSEX=78191 | log=/Users/ishwar/Documents/OptionCoder/logs/20260604/run_collectors.log
+[09:14:20] 🚀 Starting Signal Services
+[09:14:20] 🚀 Starting Signal Services
+[09:14:22] ✅ Signal services started: SENSEX=78202, BANKNIFTY=78201, NIFTY=78200 | log=/Users/ishwar/Documents/OptionCoder/logs/20260604/run_signals.log
+[09:14:22] ✅ Signal services started: SENSEX=78202, BANKNIFTY=78201, NIFTY=78200 | log=/Users/ishwar/Documents/OptionCoder/logs/20260604/run_signals.log
+[09:18:22] 🚀 Starting Telegram Bot
+[09:18:22] 🚀 Starting Telegram Bot
+[09:18:22] ✅ Telegram Bot started: pid=78308 | log=/Users/ishwar/Documents/OptionCoder/logs/20260604/telegram_bot_service.log
+[09:18:22] ✅ Telegram Bot started: pid=78308 | log=/Users/ishwar/Documents/OptionCoder/logs/20260604/telegram_bot_service.log
+[09:18:22] 🔎 Startup Status Snapshot
+[09:18:22] 🔎 Startup Status Snapshot
+[09:18:22] 📋 Collectors:
+[09:18:22] 📋 Collectors:
+[09:18:22]    stderr: Traceback (most recent call last):
+[09:18:22]    stderr: Traceback (most recent call last):
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:22]    stderr:     from .logger import TradeLogger
+[09:18:22]    stderr:     from .logger import TradeLogger
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:22]    stderr:     import pytz
+[09:18:22]    stderr:     import pytz
+[09:18:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:22] 📋 Signals:
+[09:18:22] 📋 Signals:
+[09:18:22]    stderr: Traceback (most recent call last):
+[09:18:22]    stderr: Traceback (most recent call last):
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:22]    stderr:     from .logger import TradeLogger
+[09:18:22]    stderr:     from .logger import TradeLogger
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:22]    stderr:     import pytz
+[09:18:22]    stderr:     import pytz
+[09:18:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:22] 📋 Telegram:
+[09:18:22] 📋 Telegram:
+[09:18:22]    not running
+[09:18:22]    not running
+[09:18:22] ==================================================
+[09:18:22] ==================================================
+[09:18:22] 🎉 All services started successfully!
+[09:18:22] 🎉 All services started successfully!
+[09:14:08] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:08] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:08] 🔍 Pre-flight Checks:
+[09:14:08] 🔍 Pre-flight Checks:
+[09:14:08]    ✅ Database connected
+[09:14:08]    ✅ Database connected
+[09:14:08]    ✅ NIFTY future ID: 66688
+[09:14:08]    ✅ NIFTY future ID: 66688
+[09:14:08]    ✅ BANKNIFTY future ID: 66689
+[09:14:08]    ✅ BANKNIFTY future ID: 66689
+[09:14:08]    ✅ SENSEX future ID: 1105863
+[09:14:08]    ✅ SENSEX future ID: 1105863
+[09:14:08] 
+[09:14:08] 
+[09:14:08] 🌅 Auto Starting All Services
+[09:14:08] 🌅 Auto Starting All Services
+[09:14:08] ==================================================
+[09:14:08] ==================================================
+[09:14:08] 🚀 Starting Data Collectors
+[09:14:08] 🚀 Starting Data Collectors
+[09:14:19] ⚠️ Collectors start incomplete. data_collector=missing | OI running: none | Missing OI: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260605/run_collectors.log
+[09:14:19] ⚠️ Collectors start incomplete. data_collector=missing | OI running: none | Missing OI: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260605/run_collectors.log
+[09:14:24] 🚀 Starting Signal Services
+[09:14:24] 🚀 Starting Signal Services
+[09:14:34] ⚠️ Signal start incomplete. Running: none | Missing: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260605/run_signals.log
+[09:14:34] ⚠️ Signal start incomplete. Running: none | Missing: BANKNIFTY, NIFTY, SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260605/run_signals.log
+[09:18:34] 🚀 Starting Telegram Bot
+[09:18:34] 🚀 Starting Telegram Bot
+[09:18:34] ✅ Telegram Bot started: pid=1917 | log=/Users/ishwar/Documents/OptionCoder/logs/20260605/telegram_bot_service.log
+[09:18:34] ✅ Telegram Bot started: pid=1917 | log=/Users/ishwar/Documents/OptionCoder/logs/20260605/telegram_bot_service.log
+[09:18:34] 🔎 Startup Status Snapshot
+[09:18:34] 🔎 Startup Status Snapshot
+[09:18:35] 📋 Collectors:
+[09:18:35] 📋 Collectors:
+[09:18:35]    stderr: Traceback (most recent call last):
+[09:18:35]    stderr: Traceback (most recent call last):
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[09:18:35]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:35]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:35]    stderr:     from .logger import TradeLogger
+[09:18:35]    stderr:     from .logger import TradeLogger
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:35]    stderr:     import pytz
+[09:18:35]    stderr:     import pytz
+[09:18:35]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:35]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:35] 📋 Signals:
+[09:18:35] 📋 Signals:
+[09:18:35]    stderr: Traceback (most recent call last):
+[09:18:35]    stderr: Traceback (most recent call last):
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[09:18:35]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:35]    stderr:     from shared.utils.time_utils import TimeUtils
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[09:18:35]    stderr:     from .logger import TradeLogger
+[09:18:35]    stderr:     from .logger import TradeLogger
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:35]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[09:18:35]    stderr:     import pytz
+[09:18:35]    stderr:     import pytz
+[09:18:35]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:35]    stderr: ModuleNotFoundError: No module named 'pytz'
+[09:18:35] 📋 Telegram:
+[09:18:35] 📋 Telegram:
+[09:18:35]    not running
+[09:18:35]    not running
+[09:18:35] ==================================================
+[09:18:35] ==================================================
+[09:18:35] 🎉 All services started successfully!
+[09:18:35] 🎉 All services started successfully!
+[15:40:21] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:21] 🛑 Trigger: 3:40 PM IST - Stopping services...
+[15:40:21] 🌅 Auto Stopping All Services
+[15:40:21] 🌅 Auto Stopping All Services
+[15:40:21] ==================================================
+[15:40:21] ==================================================
+[15:40:21] 🛑 Stopping Data Collectors...
+[15:40:21] 🛑 Stopping Data Collectors...
+[15:40:22] ✅ Collectors stopped: 
+[15:40:22] ✅ Collectors stopped: 
+[15:40:22] 🛑 Stopping Signal Services...
+[15:40:22] 🛑 Stopping Signal Services...
+[15:40:22] ✅ Signals stopped: 
+[15:40:22] ✅ Signals stopped: 
+[15:40:22] 🛑 Stopping Telegram Bot...
+[15:40:22] 🛑 Stopping Telegram Bot...
+[15:40:22] ✅ Telegram Bot stopped
+[15:40:22] ✅ Telegram Bot stopped
+[15:40:22] 🔎 Post-stop Status Snapshot
+[15:40:22] 🔎 Post-stop Status Snapshot
+[15:40:22] 📋 Collectors:
+[15:40:22] 📋 Collectors:
+[15:40:22]    stderr: Traceback (most recent call last):
+[15:40:22]    stderr: Traceback (most recent call last):
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_collectors.py", line 20, in <module>
+[15:40:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:22]    stderr:     from .logger import TradeLogger
+[15:40:22]    stderr:     from .logger import TradeLogger
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:22]    stderr:     import pytz
+[15:40:22]    stderr:     import pytz
+[15:40:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:22] 📋 Signals:
+[15:40:22] 📋 Signals:
+[15:40:22]    stderr: Traceback (most recent call last):
+[15:40:22]    stderr: Traceback (most recent call last):
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/tools/run_signals.py", line 26, in <module>
+[15:40:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:22]    stderr:     from shared.utils.time_utils import TimeUtils
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/__init__.py", line 5, in <module>
+[15:40:22]    stderr:     from .logger import TradeLogger
+[15:40:22]    stderr:     from .logger import TradeLogger
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:22]    stderr:   File "/Users/ishwar/Documents/OptionCoder/shared/utils/logger.py", line 9, in <module>
+[15:40:22]    stderr:     import pytz
+[15:40:22]    stderr:     import pytz
+[15:40:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:22]    stderr: ModuleNotFoundError: No module named 'pytz'
+[15:40:22] 📋 Telegram:
+[15:40:22] 📋 Telegram:
+[15:40:22]    not running
+[15:40:22]    not running
+[15:40:22] ==================================================
+[15:40:22] ==================================================
+[15:40:22] 🎉 All services stopped successfully!
+[15:40:22] 🎉 All services stopped successfully!
+[14:19:36] 🤖 Auto Scheduler Started
+[14:19:36] 🤖 Auto Scheduler Started
+[14:19:36] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[14:19:36] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[14:19:36]    Current offset: -3600 seconds
+[14:19:36]    Current offset: -3600 seconds
+[14:19:36]    IST offset should be: -19800 seconds (-05:30)
+[14:19:36]    IST offset should be: -19800 seconds (-05:30)
+[14:19:36]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[14:19:36]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[14:19:36]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[14:19:36]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[14:19:36] 
+[14:19:36] 
+[14:19:36] ⏰ Current IST Time: 2026-06-07 14:19:36
+[14:19:36] ⏰ Current IST Time: 2026-06-07 14:19:36
+[14:19:36] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[14:19:36] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[14:19:36] 🛑 Services will auto-stop at 3:31 PM IST on weekdays
+[14:19:36] 🛑 Services will auto-stop at 3:31 PM IST on weekdays
+[14:19:36] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:31 PM IST
+[14:19:36] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:31 PM IST
+[14:19:36] 🛑 Press Ctrl+C to stop scheduler
+[14:19:36] 🛑 Press Ctrl+C to stop scheduler
+[09:14:22] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:22] 🚀 Trigger: 9:14 AM IST - Starting services...
+DB pool initialized successfully
+DB pool initialized successfully
+[09:14:23] 🔍 Pre-flight Checks:
+[09:14:23] 🔍 Pre-flight Checks:
+[09:14:23]    ✅ Database connected
+[09:14:23]    ✅ Database connected
+[09:14:23]    ✅ NIFTY future ID: 66688
+[09:14:23]    ✅ NIFTY future ID: 66688
+[09:14:23]    ✅ BANKNIFTY future ID: 66689
+[09:14:23]    ✅ BANKNIFTY future ID: 66689
+[09:14:23]    ✅ SENSEX future ID: 1105863
+[09:14:23]    ✅ SENSEX future ID: 1105863
+[09:14:23] 
+[09:14:23] 
+[09:14:23] 🌅 Auto Starting All Services
+[09:14:23] 🌅 Auto Starting All Services
+[09:14:23] ==================================================
+[09:14:23] ==================================================
+[09:14:23] 🚀 Starting Data Collectors
+[09:14:23] 🚀 Starting Data Collectors
+[09:14:30] ✅ Collectors started: data_collector=49148 | NIFTY=49164, BANKNIFTY=49183, SENSEX=49196 | log=/Users/ishwar/Documents/OptionCoder/logs/20260608/run_collectors.log
+[09:14:30] ✅ Collectors started: data_collector=49148 | NIFTY=49164, BANKNIFTY=49183, SENSEX=49196 | log=/Users/ishwar/Documents/OptionCoder/logs/20260608/run_collectors.log
+[09:14:35] 🚀 Starting Signal Services
+[09:14:35] 🚀 Starting Signal Services
+[09:14:38] ✅ Signal services started: SENSEX=49209, NIFTY=49207, BANKNIFTY=49208 | log=/Users/ishwar/Documents/OptionCoder/logs/20260608/run_signals.log
+[09:14:38] ✅ Signal services started: SENSEX=49209, NIFTY=49207, BANKNIFTY=49208 | log=/Users/ishwar/Documents/OptionCoder/logs/20260608/run_signals.log
+[09:18:38] 🚀 Starting Telegram Bot
+[09:18:38] 🚀 Starting Telegram Bot
+[09:18:38] ✅ Telegram Bot started: pid=49382 | log=/Users/ishwar/Documents/OptionCoder/logs/20260608/telegram_bot_service.log
+[09:18:38] ✅ Telegram Bot started: pid=49382 | log=/Users/ishwar/Documents/OptionCoder/logs/20260608/telegram_bot_service.log
+[09:18:38] 🔎 Startup Status Snapshot
+[09:18:38] 🔎 Startup Status Snapshot
+[09:18:38] 📋 Collectors:
+[09:18:38] 📋 Collectors:
+[09:18:38]    [Launcher] data_collector:ALL is running (pid=49149)
+[09:18:38]    [Launcher] data_collector:ALL is running (pid=49149)
+[09:18:38]    [Launcher] oi_collector:NIFTY is running (pid=49166)
+[09:18:38]    [Launcher] oi_collector:NIFTY is running (pid=49166)
+[09:18:38]    [Launcher] oi_collector:BANKNIFTY is running (pid=49185)
+[09:18:38]    [Launcher] oi_collector:BANKNIFTY is running (pid=49185)
+[09:18:38]    [Launcher] oi_collector:SENSEX is running (pid=49197)
+[09:18:38]    [Launcher] oi_collector:SENSEX is running (pid=49197)
+[09:18:38] 📋 Signals:
+[09:18:38] 📋 Signals:
+[09:18:38]    [Signal Manager] NIFTY is running (pid=49207)
+[09:18:38]    [Signal Manager] NIFTY is running (pid=49207)
+[09:18:38]    [Signal Manager] BANKNIFTY is running (pid=49208)
+[09:18:38]    [Signal Manager] BANKNIFTY is running (pid=49208)
+[09:18:38]    [Signal Manager] SENSEX is running (pid=49209)
+[09:18:38]    [Signal Manager] SENSEX is running (pid=49209)
+[09:18:38] 📋 Telegram:
+[09:18:38] 📋 Telegram:
+[09:18:38]    running pid=49382
+[09:18:38]    running pid=49382
+[09:18:38] ==================================================
+[09:18:38] ==================================================
+[09:18:38] 🎉 All services started successfully!
+[09:18:38] 🎉 All services started successfully!
+[15:31:19] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:19] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:20] 🌅 Auto Stopping All Services
+[15:31:20] 🌅 Auto Stopping All Services
+[15:31:20] ==================================================
+[15:31:20] ==================================================
+[15:31:20] 🛑 Stopping Data Collectors...
+[15:31:20] 🛑 Stopping Data Collectors...
+[15:31:20] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:20] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:20] 🛑 Stopping Signal Services...
+[15:31:20] 🛑 Stopping Signal Services...
+[15:31:21] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=57766)
+  • BANKNIFTY (pid=57773)
+  • SENSEX (pid=57789)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:21] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=57766)
+  • BANKNIFTY (pid=57773)
+  • SENSEX (pid=57789)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:21] 🛑 Stopping Telegram Bot...
+[15:31:21] 🛑 Stopping Telegram Bot...
+[15:31:21] ✅ Telegram Bot stopped
+[15:31:21] ✅ Telegram Bot stopped
+[15:31:21] 🔎 Post-stop Status Snapshot
+[15:31:21] 🔎 Post-stop Status Snapshot
+[15:31:21] 📋 Collectors:
+[15:31:21] 📋 Collectors:
+[15:31:21]    [Launcher] No collector services running.
+[15:31:21]    [Launcher] No collector services running.
+[15:31:21] 📋 Signals:
+[15:31:21] 📋 Signals:
+[15:31:21]    [Signal Manager] No signal services running
+[15:31:21]    [Signal Manager] No signal services running
+[15:31:21] 📋 Telegram:
+[15:31:21] 📋 Telegram:
+[15:31:21]    not running
+[15:31:21]    not running
+[15:31:21] ==================================================
+[15:31:21] ==================================================
+[15:31:21] 🎉 All services stopped successfully!
+[15:31:21] 🎉 All services stopped successfully!
+[09:14:57] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:57] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:15:01] 🔍 Pre-flight Checks:
+[09:15:01] 🔍 Pre-flight Checks:
+[09:15:02]    ✅ Database connected
+[09:15:02]    ✅ Database connected
+[09:15:02]    ✅ NIFTY future ID: 66688
+[09:15:02]    ✅ NIFTY future ID: 66688
+[09:15:02]    ✅ BANKNIFTY future ID: 66689
+[09:15:02]    ✅ BANKNIFTY future ID: 66689
+[09:15:02]    ✅ SENSEX future ID: 1105863
+[09:15:02]    ✅ SENSEX future ID: 1105863
+[09:15:02] 
+[09:15:02] 
+[09:15:02] 🌅 Auto Starting All Services
+[09:15:02] 🌅 Auto Starting All Services
+[09:15:02] ==================================================
+[09:15:02] ==================================================
+[09:15:02] 🚀 Starting Data Collectors
+[09:15:02] 🚀 Starting Data Collectors
+[09:15:05] ✅ Collectors started: data_collector=49148 | SENSEX=49196, NIFTY=49164, BANKNIFTY=49183 | log=/Users/ishwar/Documents/OptionCoder/logs/20260609/run_collectors.log
+[09:15:05] ✅ Collectors started: data_collector=49148 | SENSEX=49196, NIFTY=49164, BANKNIFTY=49183 | log=/Users/ishwar/Documents/OptionCoder/logs/20260609/run_collectors.log
+[09:15:13] 🚀 Starting Signal Services
+[09:15:13] 🚀 Starting Signal Services
+[09:15:29] ✅ Signal services started: SENSEX=57812, NIFTY=57800, BANKNIFTY=57808 | log=/Users/ishwar/Documents/OptionCoder/logs/20260609/run_signals.log
+[09:15:29] ✅ Signal services started: SENSEX=57812, NIFTY=57800, BANKNIFTY=57808 | log=/Users/ishwar/Documents/OptionCoder/logs/20260609/run_signals.log
+[09:19:38] 🚀 Starting Telegram Bot
+[09:19:38] 🚀 Starting Telegram Bot
+[09:19:38] ✅ Telegram Bot started: pid=94083 | log=/Users/ishwar/Documents/OptionCoder/logs/20260609/telegram_bot_service.log
+[09:19:38] ✅ Telegram Bot started: pid=94083 | log=/Users/ishwar/Documents/OptionCoder/logs/20260609/telegram_bot_service.log
+[09:19:38] 🔎 Startup Status Snapshot
+[09:19:38] 🔎 Startup Status Snapshot
+[09:19:38] 📋 Collectors:
+[09:19:38] 📋 Collectors:
+[09:19:38]    Deleted old log folder: 20260602
+[09:19:38]    Deleted old log folder: 20260602
+[09:19:38]    [Launcher] data_collector:ALL is running (pid=91828)
+[09:19:38]    [Launcher] data_collector:ALL is running (pid=91828)
+[09:19:38]    [Launcher] oi_collector:NIFTY is running (pid=91836)
+[09:19:38]    [Launcher] oi_collector:NIFTY is running (pid=91836)
+[09:19:38]    [Launcher] oi_collector:BANKNIFTY is running (pid=91844)
+[09:19:38]    [Launcher] oi_collector:BANKNIFTY is running (pid=91844)
+[09:19:38]    [Launcher] oi_collector:SENSEX is running (pid=91851)
+[09:19:38]    [Launcher] oi_collector:SENSEX is running (pid=91851)
+[09:19:39] 📋 Signals:
+[09:19:39] 📋 Signals:
+[09:19:39]    [Signal Manager] NIFTY is running (pid=91948)
+[09:19:39]    [Signal Manager] NIFTY is running (pid=91948)
+[09:19:39]    [Signal Manager] BANKNIFTY is running (pid=91949)
+[09:19:39]    [Signal Manager] BANKNIFTY is running (pid=91949)
+[09:19:39]    [Signal Manager] SENSEX is running (pid=91950)
+[09:19:39]    [Signal Manager] SENSEX is running (pid=91950)
+[09:19:39] 📋 Telegram:
+[09:19:39] 📋 Telegram:
+[09:19:39]    running pid=94083
+[09:19:39]    running pid=94083
+[09:19:39] ==================================================
+[09:19:39] ==================================================
+[09:19:39] 🎉 All services started successfully!
+[09:19:39] 🎉 All services started successfully!
+[15:31:24] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:24] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:24] 🌅 Auto Stopping All Services
+[15:31:24] 🌅 Auto Stopping All Services
+[15:31:24] ==================================================
+[15:31:24] ==================================================
+[15:31:24] 🛑 Stopping Data Collectors...
+[15:31:24] 🛑 Stopping Data Collectors...
+[15:31:25] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:25] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:25] 🛑 Stopping Signal Services...
+[15:31:25] 🛑 Stopping Signal Services...
+[15:31:26] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=38652)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:26] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=38652)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:26] 🛑 Stopping Telegram Bot...
+[15:31:26] 🛑 Stopping Telegram Bot...
+[15:31:26] ✅ Telegram Bot stopped
+[15:31:26] ✅ Telegram Bot stopped
+[15:31:26] 🔎 Post-stop Status Snapshot
+[15:31:26] 🔎 Post-stop Status Snapshot
+[15:31:26] 📋 Collectors:
+[15:31:26] 📋 Collectors:
+[15:31:26]    [Launcher] No collector services running.
+[15:31:26]    [Launcher] No collector services running.
+[15:31:26] 📋 Signals:
+[15:31:26] 📋 Signals:
+[15:31:26]    [Signal Manager] No signal services running
+[15:31:26]    [Signal Manager] No signal services running
+[15:31:26] 📋 Telegram:
+[15:31:26] 📋 Telegram:
+[15:31:26]    not running
+[15:31:26]    not running
+[15:31:26] ==================================================
+[15:31:26] ==================================================
+[15:31:26] 🎉 All services stopped successfully!
+[15:31:26] 🎉 All services stopped successfully!
+[09:14:12] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:12] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:12] 🔍 Pre-flight Checks:
+[09:14:12] 🔍 Pre-flight Checks:
+[09:14:12]    ✅ Database connected
+[09:14:12]    ✅ Database connected
+[09:14:12]    ✅ NIFTY future ID: 66688
+[09:14:12]    ✅ NIFTY future ID: 66688
+[09:14:12]    ✅ BANKNIFTY future ID: 66689
+[09:14:12]    ✅ BANKNIFTY future ID: 66689
+[09:14:12]    ✅ SENSEX future ID: 1105863
+[09:14:12]    ✅ SENSEX future ID: 1105863
+[09:14:12] 
+[09:14:12] 
+[09:14:12] 🌅 Auto Starting All Services
+[09:14:12] 🌅 Auto Starting All Services
+[09:14:12] ==================================================
+[09:14:12] ==================================================
+[09:14:12] 🚀 Starting Data Collectors
+[09:14:12] 🚀 Starting Data Collectors
+[09:14:20] ✅ Collectors started: data_collector=71906 | NIFTY=71918, BANKNIFTY=72024, SENSEX=72030 | log=/Users/ishwar/Documents/OptionCoder/logs/20260610/run_collectors.log
+[09:14:20] ✅ Collectors started: data_collector=71906 | NIFTY=71918, BANKNIFTY=72024, SENSEX=72030 | log=/Users/ishwar/Documents/OptionCoder/logs/20260610/run_collectors.log
+[09:14:25] 🚀 Starting Signal Services
+[09:14:25] 🚀 Starting Signal Services
+[09:14:27] ✅ Signal services started: SENSEX=72237, NIFTY=72235, BANKNIFTY=72236 | log=/Users/ishwar/Documents/OptionCoder/logs/20260610/run_signals.log
+[09:14:27] ✅ Signal services started: SENSEX=72237, NIFTY=72235, BANKNIFTY=72236 | log=/Users/ishwar/Documents/OptionCoder/logs/20260610/run_signals.log
+[09:18:27] 🚀 Starting Telegram Bot
+[09:18:27] 🚀 Starting Telegram Bot
+[09:18:27] ✅ Telegram Bot started: pid=73185 | log=/Users/ishwar/Documents/OptionCoder/logs/20260610/telegram_bot_service.log
+[09:18:27] ✅ Telegram Bot started: pid=73185 | log=/Users/ishwar/Documents/OptionCoder/logs/20260610/telegram_bot_service.log
+[09:18:27] 🔎 Startup Status Snapshot
+[09:18:27] 🔎 Startup Status Snapshot
+[09:18:28] 📋 Collectors:
+[09:18:28] 📋 Collectors:
+[09:18:28]    [Launcher] data_collector:ALL is running (pid=71906)
+[09:18:28]    [Launcher] data_collector:ALL is running (pid=71906)
+[09:18:28]    [Launcher] oi_collector:NIFTY is running (pid=71918)
+[09:18:28]    [Launcher] oi_collector:NIFTY is running (pid=71918)
+[09:18:28]    [Launcher] oi_collector:BANKNIFTY is running (pid=72024)
+[09:18:28]    [Launcher] oi_collector:BANKNIFTY is running (pid=72024)
+[09:18:28]    [Launcher] oi_collector:SENSEX is running (pid=72030)
+[09:18:28]    [Launcher] oi_collector:SENSEX is running (pid=72030)
+[09:18:28] 📋 Signals:
+[09:18:28] 📋 Signals:
+[09:18:28]    [Signal Manager] NIFTY is running (pid=72235)
+[09:18:28]    [Signal Manager] NIFTY is running (pid=72235)
+[09:18:28]    [Signal Manager] BANKNIFTY is running (pid=72236)
+[09:18:28]    [Signal Manager] BANKNIFTY is running (pid=72236)
+[09:18:28]    [Signal Manager] SENSEX is running (pid=72237)
+[09:18:28]    [Signal Manager] SENSEX is running (pid=72237)
+[09:18:28] 📋 Telegram:
+[09:18:28] 📋 Telegram:
+[09:18:28]    running pid=73185
+[09:18:28]    running pid=73185
+[09:18:28] ==================================================
+[09:18:28] ==================================================
+[09:18:28] 🎉 All services started successfully!
+[09:18:28] 🎉 All services started successfully!
+[15:31:26] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:26] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:27] 🌅 Auto Stopping All Services
+[15:31:27] 🌅 Auto Stopping All Services
+[15:31:27] ==================================================
+[15:31:27] ==================================================
+[15:31:27] 🛑 Stopping Data Collectors...
+[15:31:27] 🛑 Stopping Data Collectors...
+[15:31:28] ✅ Collectors stopped: [Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=98076)
+[Launcher] Stopping oi_collector:NIFTY (pid=98084)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=98188)
+[Launcher] Stopping oi_collector:SENSEX (pid=98202)
+[Launcher] All collectors stopped.
+
+[15:31:28] ✅ Collectors stopped: [Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=98076)
+[Launcher] Stopping oi_collector:NIFTY (pid=98084)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=98188)
+[Launcher] Stopping oi_collector:SENSEX (pid=98202)
+[Launcher] All collectors stopped.
+
+[15:31:28] 🛑 Stopping Signal Services...
+[15:31:28] 🛑 Stopping Signal Services...
+[15:31:28] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=2750)
+  • BANKNIFTY (pid=2751)
+  • SENSEX (pid=2752)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:28] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=2750)
+  • BANKNIFTY (pid=2751)
+  • SENSEX (pid=2752)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:28] 🛑 Stopping Telegram Bot...
+[15:31:28] 🛑 Stopping Telegram Bot...
+[15:31:29] ✅ Telegram Bot stopped
+[15:31:29] ✅ Telegram Bot stopped
+[15:31:29] 🔎 Post-stop Status Snapshot
+[15:31:29] 🔎 Post-stop Status Snapshot
+[15:31:29] 📋 Collectors:
+[15:31:29] 📋 Collectors:
+[15:31:29]    [Launcher] No collector services running.
+[15:31:29]    [Launcher] No collector services running.
+[15:31:29] 📋 Signals:
+[15:31:29] 📋 Signals:
+[15:31:29]    [Signal Manager] No signal services running
+[15:31:29]    [Signal Manager] No signal services running
+[15:31:29] 📋 Telegram:
+[15:31:29] 📋 Telegram:
+[15:31:29]    not running
+[15:31:29]    not running
+[15:31:29] ==================================================
+[15:31:29] ==================================================
+[15:31:29] 🎉 All services stopped successfully!
+[15:31:29] 🎉 All services stopped successfully!
+[09:14:11] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:11] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:12] 🔍 Pre-flight Checks:
+[09:14:12] 🔍 Pre-flight Checks:
+[09:14:12]    ✅ Database connected
+[09:14:12]    ✅ Database connected
+[09:14:12]    ✅ NIFTY future ID: 66688
+[09:14:12]    ✅ NIFTY future ID: 66688
+[09:14:12]    ✅ BANKNIFTY future ID: 66689
+[09:14:12]    ✅ BANKNIFTY future ID: 66689
+[09:14:12]    ✅ SENSEX future ID: 1105863
+[09:14:12]    ✅ SENSEX future ID: 1105863
+[09:14:12] 
+[09:14:12] 
+[09:14:12] 🌅 Auto Starting All Services
+[09:14:12] 🌅 Auto Starting All Services
+[09:14:12] ==================================================
+[09:14:12] ==================================================
+[09:14:12] 🚀 Starting Data Collectors
+[09:14:12] 🚀 Starting Data Collectors
+[09:14:21] ✅ Collectors started: data_collector=24160 | NIFTY=24172, BANKNIFTY=24179, SENSEX=24186 | log=/Users/ishwar/Documents/OptionCoder/logs/20260611/run_collectors.log
+[09:14:21] ✅ Collectors started: data_collector=24160 | NIFTY=24172, BANKNIFTY=24179, SENSEX=24186 | log=/Users/ishwar/Documents/OptionCoder/logs/20260611/run_collectors.log
+[09:14:26] 🚀 Starting Signal Services
+[09:14:26] 🚀 Starting Signal Services
+[09:14:28] ✅ Signal services started: SENSEX=24207, NIFTY=24205, BANKNIFTY=24206 | log=/Users/ishwar/Documents/OptionCoder/logs/20260611/run_signals.log
+[09:14:28] ✅ Signal services started: SENSEX=24207, NIFTY=24205, BANKNIFTY=24206 | log=/Users/ishwar/Documents/OptionCoder/logs/20260611/run_signals.log
+[09:18:28] 🚀 Starting Telegram Bot
+[09:18:28] 🚀 Starting Telegram Bot
+[09:18:28] ✅ Telegram Bot started: pid=24297 | log=/Users/ishwar/Documents/OptionCoder/logs/20260611/telegram_bot_service.log
+[09:18:28] ✅ Telegram Bot started: pid=24297 | log=/Users/ishwar/Documents/OptionCoder/logs/20260611/telegram_bot_service.log
+[09:18:28] 🔎 Startup Status Snapshot
+[09:18:28] 🔎 Startup Status Snapshot
+[09:18:29] 📋 Collectors:
+[09:18:29] 📋 Collectors:
+[09:18:29]    Deleted old log folder: 20260604
+[09:18:29]    Deleted old log folder: 20260604
+[09:18:29]    [Launcher] data_collector:ALL is running (pid=24160)
+[09:18:29]    [Launcher] data_collector:ALL is running (pid=24160)
+[09:18:29]    [Launcher] oi_collector:NIFTY is running (pid=24172)
+[09:18:29]    [Launcher] oi_collector:NIFTY is running (pid=24172)
+[09:18:29]    [Launcher] oi_collector:BANKNIFTY is running (pid=24179)
+[09:18:29]    [Launcher] oi_collector:BANKNIFTY is running (pid=24179)
+[09:18:29]    [Launcher] oi_collector:SENSEX is running (pid=24186)
+[09:18:29]    [Launcher] oi_collector:SENSEX is running (pid=24186)
+[09:18:29] 📋 Signals:
+[09:18:29] 📋 Signals:
+[09:18:29]    [Signal Manager] NIFTY is running (pid=24205)
+[09:18:29]    [Signal Manager] NIFTY is running (pid=24205)
+[09:18:29]    [Signal Manager] BANKNIFTY is running (pid=24206)
+[09:18:29]    [Signal Manager] BANKNIFTY is running (pid=24206)
+[09:18:29]    [Signal Manager] SENSEX is running (pid=24207)
+[09:18:29]    [Signal Manager] SENSEX is running (pid=24207)
+[09:18:29] 📋 Telegram:
+[09:18:29] 📋 Telegram:
+[09:18:29]    running pid=24297
+[09:18:29]    running pid=24297
+[09:18:29] ==================================================
+[09:18:29] ==================================================
+[09:18:29] 🎉 All services started successfully!
+[09:18:29] 🎉 All services started successfully!
+[09:14:05] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:05] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:05] 🔍 Pre-flight Checks:
+[09:14:05] 🔍 Pre-flight Checks:
+[09:14:05]    ✅ Database connected
+[09:14:05]    ✅ Database connected
+[09:14:05]    ✅ NIFTY future ID: 66688
+[09:14:05]    ✅ NIFTY future ID: 66688
+[09:14:05]    ✅ BANKNIFTY future ID: 66689
+[09:14:05]    ✅ BANKNIFTY future ID: 66689
+[09:14:05]    ✅ SENSEX future ID: 1105863
+[09:14:05]    ✅ SENSEX future ID: 1105863
+[09:14:05] 
+[09:14:05] 
+[09:14:05] 🌅 Auto Starting All Services
+[09:14:05] 🌅 Auto Starting All Services
+[09:14:05] ==================================================
+[09:14:05] ==================================================
+[09:14:05] 🚀 Starting Data Collectors
+[09:14:05] 🚀 Starting Data Collectors
+[09:14:07] ✅ Collectors started: data_collector=24160 | SENSEX=24186, NIFTY=24172, BANKNIFTY=24179 | log=/Users/ishwar/Documents/OptionCoder/logs/20260612/run_collectors.log
+[09:14:07] ✅ Collectors started: data_collector=24160 | SENSEX=24186, NIFTY=24172, BANKNIFTY=24179 | log=/Users/ishwar/Documents/OptionCoder/logs/20260612/run_collectors.log
+[09:14:12] 🚀 Starting Signal Services
+[09:14:12] 🚀 Starting Signal Services
+[09:14:14] ✅ Signal services started: SENSEX=24207, NIFTY=24205, BANKNIFTY=24206 | log=/Users/ishwar/Documents/OptionCoder/logs/20260612/run_signals.log
+[09:14:14] ✅ Signal services started: SENSEX=24207, NIFTY=24205, BANKNIFTY=24206 | log=/Users/ishwar/Documents/OptionCoder/logs/20260612/run_signals.log
+[09:18:14] 🚀 Starting Telegram Bot
+[09:18:14] 🚀 Starting Telegram Bot
+[09:18:14] ✅ Telegram Bot started: pid=24297 | log=/Users/ishwar/Documents/OptionCoder/logs/20260612/telegram_bot_service.log
+[09:18:14] ✅ Telegram Bot started: pid=24297 | log=/Users/ishwar/Documents/OptionCoder/logs/20260612/telegram_bot_service.log
+[09:18:14] 🔎 Startup Status Snapshot
+[09:18:14] 🔎 Startup Status Snapshot
+[09:18:14] 📋 Collectors:
+[09:18:14] 📋 Collectors:
+[09:18:14]    [Launcher] data_collector:ALL is running (pid=24160)
+[09:18:14]    [Launcher] data_collector:ALL is running (pid=24160)
+[09:18:14]    [Launcher] oi_collector:NIFTY is running (pid=24172)
+[09:18:14]    [Launcher] oi_collector:NIFTY is running (pid=24172)
+[09:18:14]    [Launcher] oi_collector:BANKNIFTY is running (pid=24179)
+[09:18:14]    [Launcher] oi_collector:BANKNIFTY is running (pid=24179)
+[09:18:14]    [Launcher] oi_collector:SENSEX is running (pid=24186)
+[09:18:14]    [Launcher] oi_collector:SENSEX is running (pid=24186)
+[09:18:15] 📋 Signals:
+[09:18:15] 📋 Signals:
+[09:18:15]    [Signal Manager] NIFTY is running (pid=24205)
+[09:18:15]    [Signal Manager] NIFTY is running (pid=24205)
+[09:18:15]    [Signal Manager] BANKNIFTY is running (pid=24206)
+[09:18:15]    [Signal Manager] BANKNIFTY is running (pid=24206)
+[09:18:15]    [Signal Manager] SENSEX is running (pid=24207)
+[09:18:15]    [Signal Manager] SENSEX is running (pid=24207)
+[09:18:15] 📋 Telegram:
+[09:18:15] 📋 Telegram:
+[09:18:15]    running pid=24297
+[09:18:15]    running pid=24297
+[09:18:15] ==================================================
+[09:18:15] ==================================================
+[09:18:15] 🎉 All services started successfully!
+[09:18:15] 🎉 All services started successfully!
+[15:31:00] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:00] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:00] 🌅 Auto Stopping All Services
+[15:31:00] 🌅 Auto Stopping All Services
+[15:31:00] ==================================================
+[15:31:00] ==================================================
+[15:31:00] 🛑 Stopping Data Collectors...
+[15:31:00] 🛑 Stopping Data Collectors...
+[15:31:02] ✅ Collectors stopped: [Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=24160)
+[Launcher] Stopping oi_collector:NIFTY (pid=24172)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=24179)
+[Launcher] Stopping oi_collector:SENSEX (pid=24186)
+[Launcher] All collectors stopped.
+
+[15:31:02] ✅ Collectors stopped: [Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=24160)
+[Launcher] Stopping oi_collector:NIFTY (pid=24172)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=24179)
+[Launcher] Stopping oi_collector:SENSEX (pid=24186)
+[Launcher] All collectors stopped.
+
+[15:31:02] 🛑 Stopping Signal Services...
+[15:31:02] 🛑 Stopping Signal Services...
+[15:31:03] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=24205)
+  • BANKNIFTY (pid=24206)
+  • SENSEX (pid=24207)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:03] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=24205)
+  • BANKNIFTY (pid=24206)
+  • SENSEX (pid=24207)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:03] 🛑 Stopping Telegram Bot...
+[15:31:03] 🛑 Stopping Telegram Bot...
+[15:31:03] ✅ Telegram Bot stopped
+[15:31:03] ✅ Telegram Bot stopped
+[15:31:03] 🔎 Post-stop Status Snapshot
+[15:31:03] 🔎 Post-stop Status Snapshot
+[15:31:03] 📋 Collectors:
+[15:31:03] 📋 Collectors:
+[15:31:03]    [Launcher] No collector services running.
+[15:31:03]    [Launcher] No collector services running.
+[15:31:03] 📋 Signals:
+[15:31:03] 📋 Signals:
+[15:31:03]    [Signal Manager] No signal services running
+[15:31:03]    [Signal Manager] No signal services running
+[15:31:03] 📋 Telegram:
+[15:31:03] 📋 Telegram:
+[15:31:03]    not running
+[15:31:03]    not running
+[15:31:03] ==================================================
+[15:31:03] ==================================================
+[15:31:03] 🎉 All services stopped successfully!
+[15:31:03] 🎉 All services stopped successfully!
+[09:14:20] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:20] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:20] 🔍 Pre-flight Checks:
+[09:14:20] 🔍 Pre-flight Checks:
+[09:14:20]    ✅ Database connected
+[09:14:20]    ✅ Database connected
+[09:14:20]    ✅ NIFTY future ID: 66688
+[09:14:20]    ✅ NIFTY future ID: 66688
+[09:14:20]    ✅ BANKNIFTY future ID: 66689
+[09:14:20]    ✅ BANKNIFTY future ID: 66689
+[09:14:20]    ✅ SENSEX future ID: 1105863
+[09:14:20]    ✅ SENSEX future ID: 1105863
+[09:14:20] 
+[09:14:20] 
+[09:14:20] 🌅 Auto Starting All Services
+[09:14:20] 🌅 Auto Starting All Services
+[09:14:20] ==================================================
+[09:14:20] ==================================================
+[09:14:20] 🚀 Starting Data Collectors
+[09:14:20] 🚀 Starting Data Collectors
+[09:14:25] ✅ Collectors started: data_collector=2490 | NIFTY=2502, BANKNIFTY=2517, SENSEX=2531 | log=/Users/ishwar/Documents/OptionCoder/logs/20260615/run_collectors.log
+[09:14:25] ✅ Collectors started: data_collector=2490 | NIFTY=2502, BANKNIFTY=2517, SENSEX=2531 | log=/Users/ishwar/Documents/OptionCoder/logs/20260615/run_collectors.log
+[09:14:30] 🚀 Starting Signal Services
+[09:14:30] 🚀 Starting Signal Services
+[09:14:33] ✅ Signal services started: SENSEX=59588, NIFTY=59576, BANKNIFTY=59584 | log=/Users/ishwar/Documents/OptionCoder/logs/20260615/run_signals.log
+[09:14:33] ✅ Signal services started: SENSEX=59588, NIFTY=59576, BANKNIFTY=59584 | log=/Users/ishwar/Documents/OptionCoder/logs/20260615/run_signals.log
+[09:18:33] 🚀 Starting Telegram Bot
+[09:18:33] 🚀 Starting Telegram Bot
+[09:18:33] ✅ Telegram Bot started: pid=2664 | log=/Users/ishwar/Documents/OptionCoder/logs/20260615/telegram_bot_service.log
+[09:18:33] ✅ Telegram Bot started: pid=2664 | log=/Users/ishwar/Documents/OptionCoder/logs/20260615/telegram_bot_service.log
+[09:18:33] 🔎 Startup Status Snapshot
+[09:18:33] 🔎 Startup Status Snapshot
+[09:18:33] 📋 Collectors:
+[09:18:33] 📋 Collectors:
+[09:18:33]    [Launcher] data_collector:ALL is running (pid=2503)
+[09:18:33]    [Launcher] data_collector:ALL is running (pid=2503)
+[09:18:33]    [Launcher] oi_collector:NIFTY is running (pid=2520)
+[09:18:33]    [Launcher] oi_collector:NIFTY is running (pid=2520)
+[09:18:33]    [Launcher] oi_collector:BANKNIFTY is running (pid=2533)
+[09:18:33]    [Launcher] oi_collector:BANKNIFTY is running (pid=2533)
+[09:18:33]    [Launcher] oi_collector:SENSEX is running (pid=2549)
+[09:18:33]    [Launcher] oi_collector:SENSEX is running (pid=2549)
+[09:18:33] 📋 Signals:
+[09:18:33] 📋 Signals:
+[09:18:33]    [Signal Manager] NIFTY is running (pid=59576)
+[09:18:33]    [Signal Manager] NIFTY is running (pid=59576)
+[09:18:33]    [Signal Manager] BANKNIFTY is running (pid=59584)
+[09:18:33]    [Signal Manager] BANKNIFTY is running (pid=59584)
+[09:18:33]    [Signal Manager] SENSEX is running (pid=59588)
+[09:18:33]    [Signal Manager] SENSEX is running (pid=59588)
+[09:18:33] 📋 Telegram:
+[09:18:33] 📋 Telegram:
+[09:18:33]    running pid=2664
+[09:18:33]    running pid=2664
+[09:18:33] ==================================================
+[09:18:33] ==================================================
+[09:18:33] 🎉 All services started successfully!
+[09:18:33] 🎉 All services started successfully!
+[15:31:06] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:06] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:06] 🌅 Auto Stopping All Services
+[15:31:06] 🌅 Auto Stopping All Services
+[15:31:06] ==================================================
+[15:31:06] ==================================================
+[15:31:06] 🛑 Stopping Data Collectors...
+[15:31:06] 🛑 Stopping Data Collectors...
+[15:31:07] ✅ Collectors stopped: Error cleaning up folder /Users/ishwar/Documents/OptionCoder/logs/20260608: [Errno 2] No such file or directory: '/Users/ishwar/Documents/OptionCoder/logs/20260608'
+[Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=2503)
+[Launcher] Stopping oi_collector:NIFTY (pid=2520)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=2533)
+[Launcher] Stopping oi_collector:SENSEX (pid=2549)
+[Launcher] All collectors stopped.
+
+[15:31:07] ✅ Collectors stopped: Error cleaning up folder /Users/ishwar/Documents/OptionCoder/logs/20260608: [Errno 2] No such file or directory: '/Users/ishwar/Documents/OptionCoder/logs/20260608'
+[Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=2503)
+[Launcher] Stopping oi_collector:NIFTY (pid=2520)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=2533)
+[Launcher] Stopping oi_collector:SENSEX (pid=2549)
+[Launcher] All collectors stopped.
+
+[15:31:07] 🛑 Stopping Signal Services...
+[15:31:07] 🛑 Stopping Signal Services...
+[15:31:08] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=59576)
+  • BANKNIFTY (pid=59584)
+  • SENSEX (pid=59588)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:08] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=59576)
+  • BANKNIFTY (pid=59584)
+  • SENSEX (pid=59588)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:08] 🛑 Stopping Telegram Bot...
+[15:31:08] 🛑 Stopping Telegram Bot...
+[15:31:08] ✅ Telegram Bot stopped
+[15:31:08] ✅ Telegram Bot stopped
+[15:31:08] 🔎 Post-stop Status Snapshot
+[15:31:08] 🔎 Post-stop Status Snapshot
+[15:31:08] 📋 Collectors:
+[15:31:08] 📋 Collectors:
+[15:31:08]    [Launcher] No collector services running.
+[15:31:08]    [Launcher] No collector services running.
+[15:31:08] 📋 Signals:
+[15:31:08] 📋 Signals:
+[15:31:08]    [Signal Manager] No signal services running
+[15:31:08]    [Signal Manager] No signal services running
+[15:31:08] 📋 Telegram:
+[15:31:08] 📋 Telegram:
+[15:31:08]    not running
+[15:31:08]    not running
+[15:31:08] ==================================================
+[15:31:08] ==================================================
+[15:31:08] 🎉 All services stopped successfully!
+[15:31:08] 🎉 All services stopped successfully!
+[09:14:46] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:46] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:46] 🔍 Pre-flight Checks:
+[09:14:46] 🔍 Pre-flight Checks:
+[09:14:47]    ✅ Database connected
+[09:14:47]    ✅ Database connected
+[09:14:47]    ✅ NIFTY future ID: 66688
+[09:14:47]    ✅ NIFTY future ID: 66688
+[09:14:47]    ✅ BANKNIFTY future ID: 66689
+[09:14:47]    ✅ BANKNIFTY future ID: 66689
+[09:14:47]    ✅ SENSEX future ID: 1105863
+[09:14:47]    ✅ SENSEX future ID: 1105863
+[09:14:47] 
+[09:14:47] 
+[09:14:47] 🌅 Auto Starting All Services
+[09:14:47] 🌅 Auto Starting All Services
+[09:14:47] ==================================================
+[09:14:47] ==================================================
+[09:14:47] 🚀 Starting Data Collectors
+[09:14:47] 🚀 Starting Data Collectors
+[09:14:49] ✅ Collectors started: data_collector=2490 | SENSEX=2531, NIFTY=2502, BANKNIFTY=2517 | log=/Users/ishwar/Documents/OptionCoder/logs/20260616/run_collectors.log
+[09:14:49] ✅ Collectors started: data_collector=2490 | SENSEX=2531, NIFTY=2502, BANKNIFTY=2517 | log=/Users/ishwar/Documents/OptionCoder/logs/20260616/run_collectors.log
+[09:14:54] 🚀 Starting Signal Services
+[09:14:54] 🚀 Starting Signal Services
+[09:14:56] ✅ Signal services started: SENSEX=11669, NIFTY=11642, BANKNIFTY=11653 | log=/Users/ishwar/Documents/OptionCoder/logs/20260616/run_signals.log
+[09:14:56] ✅ Signal services started: SENSEX=11669, NIFTY=11642, BANKNIFTY=11653 | log=/Users/ishwar/Documents/OptionCoder/logs/20260616/run_signals.log
+[09:18:56] 🚀 Starting Telegram Bot
+[09:18:56] 🚀 Starting Telegram Bot
+[09:18:56] ✅ Telegram Bot started: pid=22771 | log=/Users/ishwar/Documents/OptionCoder/logs/20260616/telegram_bot_service.log
+[09:18:56] ✅ Telegram Bot started: pid=22771 | log=/Users/ishwar/Documents/OptionCoder/logs/20260616/telegram_bot_service.log
+[09:18:56] 🔎 Startup Status Snapshot
+[09:18:56] 🔎 Startup Status Snapshot
+[09:18:57] 📋 Collectors:
+[09:18:57] 📋 Collectors:
+[09:18:57]    [Launcher] data_collector:ALL is running (pid=22718)
+[09:18:57]    [Launcher] data_collector:ALL is running (pid=22718)
+[09:18:57]    [Launcher] oi_collector:NIFTY is running (pid=22726)
+[09:18:57]    [Launcher] oi_collector:NIFTY is running (pid=22726)
+[09:18:57]    [Launcher] oi_collector:BANKNIFTY is running (pid=22734)
+[09:18:57]    [Launcher] oi_collector:BANKNIFTY is running (pid=22734)
+[09:18:57]    [Launcher] oi_collector:SENSEX is running (pid=22738)
+[09:18:57]    [Launcher] oi_collector:SENSEX is running (pid=22738)
+[09:18:57] 📋 Signals:
+[09:18:57] 📋 Signals:
+[09:18:57]    [Signal Manager] NIFTY is running (pid=11642)
+[09:18:57]    [Signal Manager] NIFTY is running (pid=11642)
+[09:18:57]    [Signal Manager] BANKNIFTY is running (pid=11653)
+[09:18:57]    [Signal Manager] BANKNIFTY is running (pid=11653)
+[09:18:57]    [Signal Manager] SENSEX is running (pid=11669)
+[09:18:57]    [Signal Manager] SENSEX is running (pid=11669)
+[09:18:57] 📋 Telegram:
+[09:18:57] 📋 Telegram:
+[09:18:57]    running pid=22771
+[09:18:57]    running pid=22771
+[09:18:57] ==================================================
+[09:18:57] ==================================================
+[09:18:57] 🎉 All services started successfully!
+[09:18:57] 🎉 All services started successfully!
+[15:31:12] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:12] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:12] 🌅 Auto Stopping All Services
+[15:31:12] 🌅 Auto Stopping All Services
+[15:31:12] ==================================================
+[15:31:12] ==================================================
+[15:31:12] 🛑 Stopping Data Collectors...
+[15:31:12] 🛑 Stopping Data Collectors...
+[15:31:13] ✅ Collectors stopped: [Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=22718)
+[Launcher] Stopping oi_collector:NIFTY (pid=22726)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=22734)
+[Launcher] Stopping oi_collector:SENSEX (pid=22738)
+[Launcher] All collectors stopped.
+
+[15:31:13] ✅ Collectors stopped: [Launcher] Shutting down collector services...
+[Launcher] Stopping data_collector:ALL (pid=22718)
+[Launcher] Stopping oi_collector:NIFTY (pid=22726)
+[Launcher] Stopping oi_collector:BANKNIFTY (pid=22734)
+[Launcher] Stopping oi_collector:SENSEX (pid=22738)
+[Launcher] All collectors stopped.
+
+[15:31:13] 🛑 Stopping Signal Services...
+[15:31:13] 🛑 Stopping Signal Services...
+[15:31:13] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=11642)
+  • BANKNIFTY (pid=11653)
+  • SENSEX (pid=11669)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:13] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=11642)
+  • BANKNIFTY (pid=11653)
+  • SENSEX (pid=11669)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:13] 🛑 Stopping Telegram Bot...
+[15:31:13] 🛑 Stopping Telegram Bot...
+[15:31:14] ✅ Telegram Bot stopped
+[15:31:14] ✅ Telegram Bot stopped
+[15:31:14] 🔎 Post-stop Status Snapshot
+[15:31:14] 🔎 Post-stop Status Snapshot
+[15:31:14] 📋 Collectors:
+[15:31:14] 📋 Collectors:
+[15:31:14]    [Launcher] No collector services running.
+[15:31:14]    [Launcher] No collector services running.
+[15:31:14] 📋 Signals:
+[15:31:14] 📋 Signals:
+[15:31:14]    [Signal Manager] No signal services running
+[15:31:14]    [Signal Manager] No signal services running
+[15:31:14] 📋 Telegram:
+[15:31:14] 📋 Telegram:
+[15:31:14]    not running
+[15:31:14]    not running
+[15:31:14] ==================================================
+[15:31:14] ==================================================
+[15:31:14] 🎉 All services stopped successfully!
+[15:31:14] 🎉 All services stopped successfully!
+[09:14:33] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:33] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:37] 🔍 Pre-flight Checks:
+[09:14:37] 🔍 Pre-flight Checks:
+[09:14:37]    ✅ Database connected
+[09:14:37]    ✅ Database connected
+[09:14:37]    ✅ NIFTY future ID: 66688
+[09:14:37]    ✅ NIFTY future ID: 66688
+[09:14:37]    ✅ BANKNIFTY future ID: 66689
+[09:14:37]    ✅ BANKNIFTY future ID: 66689
+[09:14:37]    ✅ SENSEX future ID: 1105863
+[09:14:37]    ✅ SENSEX future ID: 1105863
+[09:14:37] 
+[09:14:37] 
+[09:14:37] 🌅 Auto Starting All Services
+[09:14:37] 🌅 Auto Starting All Services
+[09:14:37] ==================================================
+[09:14:37] ==================================================
+[09:14:37] 🚀 Starting Data Collectors
+[09:14:37] 🚀 Starting Data Collectors
+[09:14:43] ✅ Collectors started: data_collector=22597 | SENSEX=22639, NIFTY=22617, BANKNIFTY=22624 | log=/Users/ishwar/Documents/OptionCoder/logs/20260617/run_collectors.log
+[09:14:43] ✅ Collectors started: data_collector=22597 | SENSEX=22639, NIFTY=22617, BANKNIFTY=22624 | log=/Users/ishwar/Documents/OptionCoder/logs/20260617/run_collectors.log
+[09:14:48] 🚀 Starting Signal Services
+[09:14:48] 🚀 Starting Signal Services
+[09:14:51] ✅ Signal services started: SENSEX=42132, NIFTY=42130, BANKNIFTY=42131 | log=/Users/ishwar/Documents/OptionCoder/logs/20260617/run_signals.log
+[09:14:51] ✅ Signal services started: SENSEX=42132, NIFTY=42130, BANKNIFTY=42131 | log=/Users/ishwar/Documents/OptionCoder/logs/20260617/run_signals.log
+[09:18:51] 🚀 Starting Telegram Bot
+[09:18:51] 🚀 Starting Telegram Bot
+[09:18:52] ✅ Telegram Bot started: pid=42367 | log=/Users/ishwar/Documents/OptionCoder/logs/20260617/telegram_bot_service.log
+[09:18:52] ✅ Telegram Bot started: pid=42367 | log=/Users/ishwar/Documents/OptionCoder/logs/20260617/telegram_bot_service.log
+[09:18:52] 🔎 Startup Status Snapshot
+[09:18:52] 🔎 Startup Status Snapshot
+[09:18:52] 📋 Collectors:
+[09:18:52] 📋 Collectors:
+[09:18:52]    Deleted old log folder: 20260610
+[09:18:52]    Deleted old log folder: 20260610
+[09:18:52]    [Launcher] data_collector:ALL is running (pid=42263)
+[09:18:52]    [Launcher] data_collector:ALL is running (pid=42263)
+[09:18:52]    [Launcher] oi_collector:NIFTY is running (pid=42271)
+[09:18:52]    [Launcher] oi_collector:NIFTY is running (pid=42271)
+[09:18:52]    [Launcher] oi_collector:BANKNIFTY is running (pid=42275)
+[09:18:52]    [Launcher] oi_collector:BANKNIFTY is running (pid=42275)
+[09:18:52]    [Launcher] oi_collector:SENSEX is running (pid=42279)
+[09:18:52]    [Launcher] oi_collector:SENSEX is running (pid=42279)
+[09:18:52] 📋 Signals:
+[09:18:52] 📋 Signals:
+[09:18:52]    [Signal Manager] NIFTY is running (pid=42130)
+[09:18:52]    [Signal Manager] NIFTY is running (pid=42130)
+[09:18:52]    [Signal Manager] BANKNIFTY is running (pid=42131)
+[09:18:52]    [Signal Manager] BANKNIFTY is running (pid=42131)
+[09:18:52]    [Signal Manager] SENSEX is running (pid=42132)
+[09:18:52]    [Signal Manager] SENSEX is running (pid=42132)
+[09:18:52] 📋 Telegram:
+[09:18:52] 📋 Telegram:
+[09:18:52]    running pid=42367
+[09:18:52]    running pid=42367
+[09:18:52] ==================================================
+[09:18:52] ==================================================
+[09:18:52] 🎉 All services started successfully!
+[09:18:52] 🎉 All services started successfully!
+[15:31:28] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:28] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:28] 🌅 Auto Stopping All Services
+[15:31:28] 🌅 Auto Stopping All Services
+[15:31:28] ==================================================
+[15:31:28] ==================================================
+[15:31:28] 🛑 Stopping Data Collectors...
+[15:31:28] 🛑 Stopping Data Collectors...
+[15:31:28] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:28] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:28] 🛑 Stopping Signal Services...
+[15:31:28] 🛑 Stopping Signal Services...
+[15:31:29] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=62590)
+  • BANKNIFTY (pid=62595)
+  • SENSEX (pid=62606)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:29] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=62590)
+  • BANKNIFTY (pid=62595)
+  • SENSEX (pid=62606)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:29] 🛑 Stopping Telegram Bot...
+[15:31:29] 🛑 Stopping Telegram Bot...
+[15:31:29] ✅ Telegram Bot stopped
+[15:31:29] ✅ Telegram Bot stopped
+[15:31:29] 🔎 Post-stop Status Snapshot
+[15:31:29] 🔎 Post-stop Status Snapshot
+[15:31:30] 📋 Collectors:
+[15:31:30] 📋 Collectors:
+[15:31:30]    [Launcher] No collector services running.
+[15:31:30]    [Launcher] No collector services running.
+[15:31:30] 📋 Signals:
+[15:31:30] 📋 Signals:
+[15:31:30]    [Signal Manager] No signal services running
+[15:31:30]    [Signal Manager] No signal services running
+[15:31:30] 📋 Telegram:
+[15:31:30] 📋 Telegram:
+[15:31:30]    not running
+[15:31:30]    not running
+[15:31:30] ==================================================
+[15:31:30] ==================================================
+[15:31:30] 🎉 All services stopped successfully!
+[15:31:30] 🎉 All services stopped successfully!
+[23:49:06] 🤖 Auto Scheduler Started
+[23:49:06] 🤖 Auto Scheduler Started
+[23:49:06] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[23:49:06] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[23:49:06]    Current offset: -3600 seconds
+[23:49:06]    Current offset: -3600 seconds
+[23:49:06]    IST offset should be: -19800 seconds (-05:30)
+[23:49:06]    IST offset should be: -19800 seconds (-05:30)
+[23:49:06]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[23:49:06]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[23:49:06]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[23:49:06]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[23:49:06] 
+[23:49:06] 
+[23:49:06] ⏰ Current IST Time: 2026-06-21 23:49:06
+[23:49:06] ⏰ Current IST Time: 2026-06-21 23:49:06
+[23:49:06] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[23:49:06] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[23:49:06] 🛑 Services will auto-stop at 3:31 PM IST on weekdays
+[23:49:06] 🛑 Services will auto-stop at 3:31 PM IST on weekdays
+[23:49:06] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:31 PM IST
+[23:49:06] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:31 PM IST
+[23:49:06] 🛑 Press Ctrl+C to stop scheduler
+[23:49:06] 🛑 Press Ctrl+C to stop scheduler
+[00:44:57] 🤖 Auto Scheduler Started
+[00:44:57] 🤖 Auto Scheduler Started
+[00:44:57] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[00:44:57] ⚠️  WARNING: System timezone is NOT set to IST (India Time)!
+[00:44:57]    Current offset: -3600 seconds
+[00:44:57]    Current offset: -3600 seconds
+[00:44:57]    IST offset should be: -19800 seconds (-05:30)
+[00:44:57]    IST offset should be: -19800 seconds (-05:30)
+[00:44:57]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[00:44:57]    Fix: System Preferences → Date & Time → Time Zone → Kolkata
+[00:44:57]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[00:44:57]    OR: Run in terminal: sudo systemsetup -settimezone Asia/Kolkata
+[00:44:57] 
+[00:44:57] 
+[00:44:57] ⏰ Current IST Time: 2026-06-22 00:44:57
+[00:44:57] ⏰ Current IST Time: 2026-06-22 00:44:57
+[00:44:57] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[00:44:57] ⏰ Services will auto-start at 9:14 AM IST on weekdays
+[00:44:57] 🛑 Services will auto-stop at 3:31 PM IST on weekdays
+[00:44:57] 🛑 Services will auto-stop at 3:31 PM IST on weekdays
+[00:44:57] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:31 PM IST
+[00:44:57] 📝 Schedule: Monday-Friday, 9:14 AM IST - 3:31 PM IST
+[00:44:57] 🛑 Press Ctrl+C to stop scheduler
+[00:44:57] 🛑 Press Ctrl+C to stop scheduler
+[09:14:12] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:12] 🚀 Trigger: 9:14 AM IST - Starting services...
+DB pool initialized successfully
+DB pool initialized successfully
+[09:14:14] 🔍 Pre-flight Checks:
+[09:14:14] 🔍 Pre-flight Checks:
+[09:14:14]    ✅ Database connected
+[09:14:14]    ✅ Database connected
+[09:14:14]    ✅ NIFTY future ID: 66688
+[09:14:14]    ✅ NIFTY future ID: 66688
+[09:14:14]    ✅ BANKNIFTY future ID: 66689
+[09:14:14]    ✅ BANKNIFTY future ID: 66689
+[09:14:14]    ✅ SENSEX future ID: 1105863
+[09:14:14]    ✅ SENSEX future ID: 1105863
+[09:14:14] 
+[09:14:14] 
+[09:14:14] 🌅 Auto Starting All Services
+[09:14:14] 🌅 Auto Starting All Services
+[09:14:14] ==================================================
+[09:14:14] ==================================================
+[09:14:14] 🚀 Starting Data Collectors
+[09:14:14] 🚀 Starting Data Collectors
+[09:14:25] ⚠️ Collectors start incomplete. data_collector=58577 | OI running: NIFTY=58764, BANKNIFTY=58932 | Missing OI: SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260622/run_collectors.log
+[09:14:25] ⚠️ Collectors start incomplete. data_collector=58577 | OI running: NIFTY=58764, BANKNIFTY=58932 | Missing OI: SENSEX | log=/Users/ishwar/Documents/OptionCoder/logs/20260622/run_collectors.log
+[09:14:25] 🛑 Collectors failed - not starting signal services
+[09:14:25] 🛑 Collectors failed - not starting signal services
+[09:14:26] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:26] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:26] 🔍 Pre-flight Checks:
+[09:14:26] 🔍 Pre-flight Checks:
+[09:14:26]    ✅ Database connected
+[09:14:26]    ✅ Database connected
+[09:14:26]    ✅ NIFTY future ID: 66688
+[09:14:26]    ✅ NIFTY future ID: 66688
+[09:14:26]    ✅ BANKNIFTY future ID: 66689
+[09:14:26]    ✅ BANKNIFTY future ID: 66689
+[09:14:26]    ✅ SENSEX future ID: 1105863
+[09:14:26]    ✅ SENSEX future ID: 1105863
+[09:14:26] 
+[09:14:26] 
+[09:14:26] 🌅 Auto Starting All Services
+[09:14:26] 🌅 Auto Starting All Services
+[09:14:26] ==================================================
+[09:14:26] ==================================================
+[09:14:26] 🚀 Starting Data Collectors
+[09:14:26] 🚀 Starting Data Collectors
+[09:14:34] ✅ Collectors started: data_collector=13204 | NIFTY=13213, BANKNIFTY=13229, SENSEX=13242 | log=/Users/ishwar/Documents/OptionCoder/logs/20260623/run_collectors.log
+[09:14:34] ✅ Collectors started: data_collector=13204 | NIFTY=13213, BANKNIFTY=13229, SENSEX=13242 | log=/Users/ishwar/Documents/OptionCoder/logs/20260623/run_collectors.log
+[09:14:39] 🚀 Starting Signal Services
+[09:14:39] 🚀 Starting Signal Services
+[09:14:42] ✅ Signal services started: NIFTY=13260, SENSEX=13262, BANKNIFTY=13261 | log=/Users/ishwar/Documents/OptionCoder/logs/20260623/run_signals.log
+[09:14:42] ✅ Signal services started: NIFTY=13260, SENSEX=13262, BANKNIFTY=13261 | log=/Users/ishwar/Documents/OptionCoder/logs/20260623/run_signals.log
+[09:18:42] 🚀 Starting Telegram Bot
+[09:18:42] 🚀 Starting Telegram Bot
+[09:18:42] ✅ Telegram Bot started: pid=13375 | log=/Users/ishwar/Documents/OptionCoder/logs/20260623/telegram_bot_service.log
+[09:18:42] ✅ Telegram Bot started: pid=13375 | log=/Users/ishwar/Documents/OptionCoder/logs/20260623/telegram_bot_service.log
+[09:18:42] 🔎 Startup Status Snapshot
+[09:18:42] 🔎 Startup Status Snapshot
+[09:18:42] 📋 Collectors:
+[09:18:42] 📋 Collectors:
+[09:18:42]    [Launcher] data_collector:ALL is running (pid=13295)
+[09:18:42]    [Launcher] data_collector:ALL is running (pid=13295)
+[09:18:42]    [Launcher] oi_collector:NIFTY is running (pid=13303)
+[09:18:42]    [Launcher] oi_collector:NIFTY is running (pid=13303)
+[09:18:42]    [Launcher] oi_collector:BANKNIFTY is running (pid=13307)
+[09:18:42]    [Launcher] oi_collector:BANKNIFTY is running (pid=13307)
+[09:18:42]    [Launcher] oi_collector:SENSEX is running (pid=13311)
+[09:18:42]    [Launcher] oi_collector:SENSEX is running (pid=13311)
+[09:18:42] 📋 Signals:
+[09:18:42] 📋 Signals:
+[09:18:42]    [Signal Manager] NIFTY is running (pid=13316)
+[09:18:42]    [Signal Manager] NIFTY is running (pid=13316)
+[09:18:42]    [Signal Manager] BANKNIFTY is running (pid=13317)
+[09:18:42]    [Signal Manager] BANKNIFTY is running (pid=13317)
+[09:18:42]    [Signal Manager] SENSEX is running (pid=13318)
+[09:18:42]    [Signal Manager] SENSEX is running (pid=13318)
+[09:18:42] 📋 Telegram:
+[09:18:42] 📋 Telegram:
+[09:18:42]    running pid=13375
+[09:18:42]    running pid=13375
+[09:18:42] ==================================================
+[09:18:42] ==================================================
+[09:18:42] 🎉 All services started successfully!
+[09:18:42] 🎉 All services started successfully!
+[15:31:20] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:20] 🛑 Trigger: 3:31 PM IST - Stopping services...
+[15:31:20] 🌅 Auto Stopping All Services
+[15:31:20] 🌅 Auto Stopping All Services
+[15:31:20] ==================================================
+[15:31:20] ==================================================
+[15:31:20] 🛑 Stopping Data Collectors...
+[15:31:20] 🛑 Stopping Data Collectors...
+[15:31:20] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:20] ✅ Collectors stopped: [Launcher] No collector services running.
+
+[15:31:20] 🛑 Stopping Signal Services...
+[15:31:20] 🛑 Stopping Signal Services...
+[15:31:22] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=20144)
+  • BANKNIFTY (pid=20151)
+  • SENSEX (pid=20160)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:22] ✅ Signals stopped: 🛑 [Signal Manager] Stopping signal service(s)...
+  • NIFTY (pid=20144)
+  • BANKNIFTY (pid=20151)
+  • SENSEX (pid=20160)
+✅ [Signal Manager] All signal services stopped
+
+[15:31:22] 🛑 Stopping Telegram Bot...
+[15:31:22] 🛑 Stopping Telegram Bot...
+[15:31:22] ✅ Telegram Bot stopped
+[15:31:22] ✅ Telegram Bot stopped
+[15:31:22] 🔎 Post-stop Status Snapshot
+[15:31:22] 🔎 Post-stop Status Snapshot
+[15:31:22] 📋 Collectors:
+[15:31:22] 📋 Collectors:
+[15:31:22]    [Launcher] No collector services running.
+[15:31:22]    [Launcher] No collector services running.
+[15:31:22] 📋 Signals:
+[15:31:22] 📋 Signals:
+[15:31:22]    [Signal Manager] No signal services running
+[15:31:22]    [Signal Manager] No signal services running
+[15:31:22] 📋 Telegram:
+[15:31:22] 📋 Telegram:
+[15:31:22]    not running
+[15:31:22]    not running
+[15:31:22] ==================================================
+[15:31:22] ==================================================
+[15:31:22] 🎉 All services stopped successfully!
+[15:31:22] 🎉 All services stopped successfully!
+[09:14:23] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:23] 🚀 Trigger: 9:14 AM IST - Starting services...
+[09:14:23] 🔍 Pre-flight Checks:
+[09:14:23] 🔍 Pre-flight Checks:
+[09:14:23]    ✅ Database connected
+[09:14:23]    ✅ Database connected
+[09:14:23]    ✅ NIFTY future ID: 66688
+[09:14:23]    ✅ NIFTY future ID: 66688
+[09:14:23]    ✅ BANKNIFTY future ID: 66689
+[09:14:23]    ✅ BANKNIFTY future ID: 66689
+[09:14:23]    ✅ SENSEX future ID: 1105863
+[09:14:23]    ✅ SENSEX future ID: 1105863
+[09:14:23] 
+[09:14:23] 
+[09:14:23] 🌅 Auto Starting All Services
+[09:14:23] 🌅 Auto Starting All Services
+[09:14:23] ==================================================
+[09:14:23] ==================================================
+[09:14:23] 🚀 Starting Data Collectors
+[09:14:23] 🚀 Starting Data Collectors
+[09:14:26] ✅ Collectors started: data_collector=13204 | NIFTY=13213, SENSEX=13242, BANKNIFTY=13229 | log=/Users/ishwar/Documents/OptionCoder/logs/20260624/run_collectors.log
+[09:14:26] ✅ Collectors started: data_collector=13204 | NIFTY=13213, SENSEX=13242, BANKNIFTY=13229 | log=/Users/ishwar/Documents/OptionCoder/logs/20260624/run_collectors.log
+[09:14:31] 🚀 Starting Signal Services
+[09:14:31] 🚀 Starting Signal Services
+[09:14:33] ✅ Signal services started: NIFTY=36437, SENSEX=36439, BANKNIFTY=36438 | log=/Users/ishwar/Documents/OptionCoder/logs/20260624/run_signals.log
+[09:14:33] ✅ Signal services started: NIFTY=36437, SENSEX=36439, BANKNIFTY=36438 | log=/Users/ishwar/Documents/OptionCoder/logs/20260624/run_signals.log
+[09:31:22] 🚀 Starting Telegram Bot
+[09:31:22] 🚀 Starting Telegram Bot
+[09:31:25] ✅ Telegram Bot started: pid=36635 | log=/Users/ishwar/Documents/OptionCoder/logs/20260624/telegram_bot_service.log
+[09:31:25] ✅ Telegram Bot started: pid=36635 | log=/Users/ishwar/Documents/OptionCoder/logs/20260624/telegram_bot_service.log
+[09:31:25] 🔎 Startup Status Snapshot
+[09:31:25] 🔎 Startup Status Snapshot
+[09:31:26] 📋 Collectors:
+[09:31:26] 📋 Collectors:
+[09:31:26]    Deleted old log folder: 20260617
+[09:31:26]    Deleted old log folder: 20260617
+[09:31:26]    [Launcher] data_collector:ALL is running (pid=36406)
+[09:31:26]    [Launcher] data_collector:ALL is running (pid=36406)
+[09:31:26]    [Launcher] oi_collector:NIFTY is running (pid=36414)
+[09:31:26]    [Launcher] oi_collector:NIFTY is running (pid=36414)
+[09:31:26]    [Launcher] oi_collector:BANKNIFTY is running (pid=36423)
+[09:31:26]    [Launcher] oi_collector:BANKNIFTY is running (pid=36423)
+[09:31:26]    [Launcher] oi_collector:SENSEX is running (pid=36428)
+[09:31:26]    [Launcher] oi_collector:SENSEX is running (pid=36428)
+[09:31:26] 📋 Signals:
+[09:31:26] 📋 Signals:
+[09:31:26]    [Signal Manager] NIFTY is running (pid=36437)
+[09:31:26]    [Signal Manager] NIFTY is running (pid=36437)
+[09:31:26]    [Signal Manager] BANKNIFTY is running (pid=36438)
+[09:31:26]    [Signal Manager] BANKNIFTY is running (pid=36438)
+[09:31:26]    [Signal Manager] SENSEX is running (pid=36439)
+[09:31:26]    [Signal Manager] SENSEX is running (pid=36439)
+[09:31:26] 📋 Telegram:
+[09:31:26] 📋 Telegram:
+[09:31:26]    running pid=36635
+[09:31:26]    running pid=36635
+[09:31:26] ==================================================
+[09:31:26] ==================================================
+[09:31:26] 🎉 All services started successfully!
+[09:31:26] 🎉 All services started successfully!
